@@ -27,21 +27,37 @@
     .bg-gradient-main { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); }
     .text-gradient { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     
+    /* CSS สำหรับจัดหน้าเอกสาร A4 ปริ้นต์เป็น PDF */
     @media print {
+      @page { size: A4 portrait; margin: 10mm; }
+      body { background-color: #fff; }
       body * { visibility: hidden; }
       .print-area, .print-area * { visibility: visible; }
-      .print-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; }
+      .print-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; font-family: 'Sarabun', sans-serif; }
       .no-print { display: none !important; }
-      table { width: 100%; border-collapse: collapse; font-size: 10px !important; }
-      th, td { padding: 2px 4px !important; white-space: nowrap !important; border: 1px solid #000 !important; }
-      h1 { font-size: 16px !important; margin-bottom: 2px !important; }
-      p { font-size: 12px !important; margin: 0 !important; }
+      
+      table.official-table { width: 100%; border-collapse: collapse; font-size: 11px !important; margin-bottom: 10px; }
+      table.official-table th, table.official-table td { padding: 4px !important; white-space: nowrap !important; border: 1px solid #000 !important; }
+      table.official-table th { background-color: #f0f0f0 !important; -webkit-print-color-adjust: exact; text-align: center; }
+      
+      .print-header { text-align: center; margin-bottom: 15px; }
+      .print-header h1 { font-size: 18px !important; font-weight: bold; margin-bottom: 5px; }
+      .print-header p { font-size: 14px !important; margin-bottom: 2px; }
+      
+      .type-header { background-color: #e0e0e0 !important; -webkit-print-color-adjust: exact; font-weight: bold; font-size: 12px !important; text-align: left !important; }
+      
+      .signature-box { display: flex; justify-content: space-between; margin-top: 30px; font-size: 13px !important; }
+      .signature-item { text-align: center; width: 30%; }
+      .signature-line { border-bottom: 1px dotted #000; display: inline-block; width: 120px; margin-bottom: 5px; }
+      
+      /* บังคับขึ้นหน้าใหม่ถ้าตารางยาว */
+      .page-break { page-break-before: always; }
     }
     
     .loader { border: 4px solid #f3f3f3; border-top: 4px solid #0d9488; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
-    @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     .scrollbar-hide::-webkit-scrollbar { display: none; }
     .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
@@ -75,11 +91,14 @@
     const db = firebase.firestore();
     const auth = firebase.auth();
 
-    const DRUG_TYPES = {
-      '1': 'ยา',
-      '3': 'สมุนไพร',
-      '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)',
-      '32': 'เวชภัณฑ์ทางการแพทย์'
+    const DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
+    const THAI_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+    // Helper: หางบประมาณปี และ งวดที่
+    const getFiscalInfo = (month, year) => {
+      let fiscalYear = month >= 10 ? year + 1 + 543 : year + 543;
+      let term = month >= 10 ? month - 9 : month + 3;
+      return { fiscalYear, term };
     };
 
     const Toast = ({ message, type, onClose }) => {
@@ -128,6 +147,9 @@
       const [toast, setToast] = useState(null);
       const [currentReqId, setCurrentReqId] = useState(null);
       const [editReqId, setEditReqId] = useState(null); 
+
+      // Universal Confirm Modal State
+      const [confirmDialog, setConfirmDialog] = useState(null);
 
       const showToast = (message, type = 'success') => setToast({ message, type });
 
@@ -230,6 +252,27 @@
         );
       };
 
+      const UniversalConfirmModal = () => {
+        if (!confirmDialog) return null;
+        return (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[200] px-4 animate-fade-in">
+            <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+              <div className="flex items-center text-slate-800 mb-4">
+                <i className={`fa-solid ${confirmDialog.icon || 'fa-circle-question'} text-3xl mr-3 ${confirmDialog.iconColor || 'text-indigo-500'}`}></i>
+                <h3 className="text-xl font-bold">{confirmDialog.title}</h3>
+              </div>
+              <p className="text-slate-500 mb-6">{confirmDialog.message}</p>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setConfirmDialog(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-semibold hover:bg-slate-200 transition">ยกเลิก</button>
+                <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className={`px-4 py-2 text-white rounded-xl font-semibold shadow-lg transition ${confirmDialog.confirmBtnClass || 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                  {confirmDialog.confirmText || 'ยืนยัน'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
       // ==========================================
       // VIEWS
       // ==========================================
@@ -302,17 +345,18 @@
       };
 
       const RegisterView = () => {
-        const [formData, setFormData] = useState({ email: '', password: '', name: '', hospitalId: '' });
+        const [formData, setFormData] = useState({ email: '', password: '', name: '', position: '', hospitalId: '' });
         const [isSubmitting, setIsSubmitting] = useState(false);
 
         const handleRegister = async () => {
           if(!formData.hospitalId) return showToast('กรุณาระบุ รพ.สต.', 'error');
           if(!formData.name.trim()) return showToast('กรุณาระบุชื่อ-นามสกุล', 'error');
+          if(!formData.position.trim()) return showToast('กรุณาระบุตำแหน่ง', 'error');
           setIsSubmitting(true);
           try {
             const userCredential = await auth.createUserWithEmailAndPassword(formData.email, formData.password);
             await db.collection('users').doc(userCredential.user.uid).set({
-              name: formData.name, hospital_id: formData.hospitalId, role: 'hospital', created_at: firebase.firestore.FieldValue.serverTimestamp()
+              name: formData.name, position: formData.position, hospital_id: formData.hospitalId, role: 'hospital', created_at: firebase.firestore.FieldValue.serverTimestamp()
             });
             showToast('ลงทะเบียนสำเร็จ');
           } catch (error) {
@@ -326,6 +370,7 @@
               <h2 className="text-2xl font-bold mb-6 text-center text-slate-800">ลงทะเบียนเข้าใช้งาน</h2>
               <div className="space-y-4">
                 <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="คำนำหน้า ชื่อ-นามสกุล (เต็ม)" onChange={e => setFormData({...formData, name: e.target.value})} />
+                <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="ตำแหน่ง (เช่น พยาบาลวิชาชีพ)" onChange={e => setFormData({...formData, position: e.target.value})} />
                 <select className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" onChange={e => setFormData({...formData, hospitalId: e.target.value})}>
                   <option value="">-- เลือก รพ.สต. ที่สังกัด --</option>
                   {appDb?.hospitals?.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
@@ -372,9 +417,11 @@
                 {isHospital && <p className="text-sm text-slate-400 mt-1"><i className="fa-solid fa-location-dot"></i> {appDb.hospitals.find(h=>h.hospital_id === currentUser.hospital_id)?.hospital_name}</p>}
               </div>
               <div className="space-x-3 flex flex-wrap gap-y-2">
-                <button onClick={() => setCurrentView('upload_csv')} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition">
-                  <i className="fa-solid fa-file-csv mr-2"></i> Initial Stock (CSV)
-                </button>
+                {currentUser.role === 'admin' && (
+                   <button onClick={() => setCurrentView('upload_csv')} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition">
+                     <i className="fa-solid fa-file-csv mr-2"></i> Initial Stock (CSV)
+                   </button>
+                )}
                 {isHospital && (
                   <button onClick={() => setCurrentView('adjust_stock')} className="bg-white border-2 border-emerald-500 text-emerald-600 px-6 py-3 rounded-xl font-bold hover:bg-emerald-50 transition">
                     <i className="fa-solid fa-boxes-stacked mr-2"></i> ขอปรับสต๊อก
@@ -456,311 +503,13 @@
                         </div>
                         <div>
                           <div className="font-semibold text-slate-700 text-sm">{c.name}</div>
-                          <div className="text-xs text-slate-500">{c.role}</div>
+                          <div className="text-xs text-slate-500">{c.position || c.role}</div>
                         </div>
                       </div>
                     )) : <div className="text-center text-slate-400 text-sm py-4">ไม่มีเจ้าหน้าที่คนอื่น</div>}
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        );
-      };
-
-      const UploadCSVView = () => {
-        const [parsedData, setParsedData] = useState([]);
-        const [isProcessing, setIsProcessing] = useState(false);
-
-        const handleFileUpload = (e) => {
-          const file = e.target.files[0];
-          if(!file) return;
-
-          Papa.parse(file, {
-            header: true,
-            skipEmptyLines: true,
-            complete: function(results) {
-              const rawData = results.data;
-              const processed = rawData.map(row => {
-                const m = [
-                  Number(row.usage_m1)||0, Number(row.usage_m2)||0, Number(row.usage_m3)||0,
-                  Number(row.usage_m4)||0, Number(row.usage_m5)||0, Number(row.usage_m6)||0, Number(row.usage_m7)||0
-                ];
-                const total = m.reduce((a,b)=>a+b, 0);
-                const mean = total / 7;
-                
-                // Sample Standard Deviation (n-1)
-                const variance = m.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / 6;
-                const sd = Math.sqrt(variance || 0);
-
-                const ADU = total / 210;
-                // Formula: SS = 1.645 * (sd / 30) * Math.sqrt(7) 
-                const SS = 1.645 * (sd / 30) * Math.sqrt(7);
-                const rawInitial = (ADU * 60) + SS; // ⭐️ เปลี่ยนเป็น 60 วัน (2 เดือน)
-                const ceilInitial = Math.ceil(rawInitial);
-
-                const drug = appDb.drugs.find(d => d.drug_id === row.drug_id);
-                const hosp = appDb.hospitals.find(h => h.hospital_id === row.hospital_id);
-                const packSize = drug ? (Number(drug.pack_size) || 1) : 1;
-                const isUnpacked = drug ? !!drug.unpacked : false;
-
-                let finalQty, finalPack;
-                if (isUnpacked) {
-                  finalQty = ceilInitial; 
-                  finalPack = Math.ceil(ceilInitial / packSize);
-                } else {
-                  finalPack = Math.ceil(ceilInitial / packSize);
-                  finalQty = finalPack * packSize;
-                }
-
-                return {
-                  hospital_id: row.hospital_id,
-                  drug_id: row.drug_id,
-                  m1: m[0], m2: m[1], m3: m[2], m4: m[3], m5: m[4], m6: m[5], m7: m[6],
-                  total, adu: ADU.toFixed(3), sd: sd.toFixed(3), ss: SS.toFixed(3),
-                  ceilInitial, packSize, finalPack, finalQty, isUnpacked,
-                  isNewDrug: !drug,
-                  isNewHosp: !hosp,
-                  drugName: drug ? drug.drug_name : 'ไม่พบชื่อยาในระบบ',
-                  unit: drug ? drug.unit_display_name : '-'
-                };
-              });
-
-              setParsedData(processed);
-            }
-          });
-        };
-
-        const handleSubmitRequest = async () => {
-          if (parsedData.length === 0) return showToast('ไม่มีข้อมูล', 'error');
-          setIsProcessing(true);
-          try {
-            const grouped = {};
-            parsedData.forEach(item => {
-              if(!grouped[item.hospital_id]) grouped[item.hospital_id] = [];
-              grouped[item.hospital_id].push(item);
-            });
-
-            const operations = [];
-            for (const hospId in grouped) {
-              const newReqRef = db.collection('csv_initial_requests').doc();
-              operations.push({
-                type: 'set', ref: newReqRef, 
-                data: { hospital_id: hospId, items: grouped[hospId], status: 'Pending', created_at: firebase.firestore.FieldValue.serverTimestamp(), user_name: currentUser.name }
-              });
-            }
-            await executeBatchChunks(operations);
-            showToast('ส่งข้อมูลคำขอ Initial Stock (CSV) สำเร็จ');
-            setParsedData([]);
-            refreshData();
-            setCurrentView('dashboard');
-          } catch(e) {
-            showToast(e.message, 'error');
-          } finally {
-            setIsProcessing(false);
-          }
-        };
-
-        return (
-          <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 animate-fade-in max-w-6xl mx-auto">
-            <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
-              <div>
-                <h2 className="text-2xl font-bold text-slate-800">นำเข้าข้อมูล CSV เพื่อตั้งค่า Initial Stock</h2>
-                <p className="text-slate-500 mt-1">คอลัมน์ที่ต้องการ: hospital_id, drug_id, usage_m1 ถึง usage_m7</p>
-              </div>
-              <button onClick={() => setCurrentView('dashboard')} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">กลับหน้าหลัก</button>
-            </div>
-
-            <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 mb-8">
-              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-indigo-300 border-dashed rounded-xl cursor-pointer bg-white hover:bg-indigo-50/50 transition">
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  <i className="fa-solid fa-cloud-arrow-up text-4xl text-indigo-400 mb-3"></i>
-                  <p className="text-sm text-slate-600 font-bold">คลิกเพื่อเลือกไฟล์ CSV (7 เดือนย้อนหลัง)</p>
-                </div>
-                <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-              </label>
-            </div>
-
-            {parsedData.length > 0 && (
-              <div className="animate-fade-in">
-                <div className="overflow-x-auto border border-slate-200 rounded-xl mb-6 max-h-[500px] overflow-y-auto">
-                  <table className="w-full text-left whitespace-nowrap text-sm">
-                    <thead className="bg-slate-800 text-white sticky top-0 z-10">
-                      <tr>
-                        <th className="p-3">รพ.สต.</th>
-                        <th className="p-3">รหัสยา</th>
-                        <th className="p-3 text-center">ยอดใช้<br/>(M1-M7)</th>
-                        <th className="p-3 text-center bg-slate-700">ADU</th>
-                        <th className="p-3 text-center bg-slate-700">SD</th>
-                        <th className="p-3 text-center bg-slate-700">Safety<br/>Stock</th>
-                        <th className="p-3 text-center text-amber-300 bg-slate-900">คำนวณ<br/>(60 วัน)</th>
-                        <th className="p-3 text-center">Pack<br/>Size</th>
-                        <th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(แพ็ค)</th>
-                        <th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(หน่วยย่อย)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {parsedData.map((row, idx) => (
-                        <tr key={idx} className="border-b hover:bg-slate-50">
-                          <td className="p-3">
-                            <span className="font-bold">{row.hospital_id}</span>
-                            {row.isNewHosp && <span className="ml-2 bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold">รหัสใหม่</span>}
-                          </td>
-                          <td className="p-3">
-                            <div className="font-bold">{row.drug_id} {row.isUnpacked && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded ml-1">แตกหน่วย</span>}</div>
-                            <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{row.drugName}</div>
-                            {row.isNewDrug && <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold mt-1 inline-block">ยาใหม่</span>}
-                          </td>
-                          <td className="p-3 text-center text-slate-500">{row.total}</td>
-                          <td className="p-3 text-center font-mono">{row.adu}</td>
-                          <td className="p-3 text-center font-mono">{row.sd}</td>
-                          <td className="p-3 text-center font-mono text-amber-600">{row.ss}</td>
-                          <td className="p-3 text-center font-bold text-amber-600 bg-amber-50/50">{row.ceilInitial}</td>
-                          <td className="p-3 text-center">{row.packSize}</td>
-                          <td className="p-3 text-center font-bold text-emerald-600">{row.finalPack}</td>
-                          <td className="p-3 text-center font-extrabold text-emerald-700 bg-emerald-50/50">{row.finalQty}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="flex justify-end gap-3">
-                  <button onClick={() => setParsedData([])} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200">เคลียร์ข้อมูล</button>
-                  <button onClick={handleSubmitRequest} disabled={isProcessing} className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition disabled:opacity-50">
-                    {isProcessing ? 'กำลังส่งข้อมูล...' : 'ส่งเรื่องให้ Admin อนุมัติ'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      };
-
-      const AdjustStockView = () => {
-        const hospId = currentUser.hospital_id;
-        const isAdmin = currentUser.role === 'admin';
-        const [searchTerm, setSearchTerm] = useState('');
-        const [showMyStockOnly, setShowMyStockOnly] = useState(true);
-        const [selectedDrug, setSelectedDrug] = useState(null);
-        const [newBalance, setNewBalance] = useState('');
-        const [reason, setReason] = useState('');
-        const [isSaving, setIsSaving] = useState(false);
-
-        const drugList = useMemo(() => {
-          if (!appDb) return [];
-          const myPars = appDb.parLevels.filter(p => String(p.hospital_id) === String(hospId));
-          const myParDrugIds = myPars.map(p => String(p.drug_id));
-
-          let listToProcess = appDb.drugs;
-          if (showMyStockOnly) {
-             listToProcess = appDb.drugs.filter(d => myParDrugIds.includes(String(d.drug_id)));
-          }
-
-          let list = listToProcess.map(drug => {
-            const bal = appDb.balances.find(b => String(b.hospital_id) === String(hospId) && String(b.drug_id) === String(drug.drug_id));
-            return {
-              drugId: drug.drug_id, name: drug.drug_name || 'N/A', unit: drug.unit_display_name || '', currentBal: bal ? Number(bal.excess_balance) : 0
-            };
-          });
-          return list.sort(sortDrugs);
-        }, [appDb, hospId, showMyStockOnly]);
-
-        const filteredList = drugList.filter(d => d.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(d.drugId).includes(searchTerm.toLowerCase()));
-
-        const handleSaveAdjust = async () => {
-          if(!selectedDrug) return showToast('กรุณาเลือกรายการยา', 'error');
-          if(newBalance === '') return showToast('กรุณาระบุยอดยกมาใหม่', 'error');
-          if(!reason.trim()) return showToast('บังคับต้องระบุเหตุผลในการปรับ', 'error');
-          
-          setIsSaving(true);
-          try {
-            const batch = db.batch();
-            const adjStatus = isAdmin ? 'Approved' : 'Pending';
-
-            batch.set(db.collection('stock_adjustments').doc(), {
-              hospital_id: hospId, drug_id: selectedDrug.drugId, old_balance: selectedDrug.currentBal, new_balance: Number(newBalance), 
-              reason: reason, user_name: currentUser.name, status: adjStatus, date: firebase.firestore.FieldValue.serverTimestamp()
-            });
-
-            if (isAdmin) {
-              const docId = `${hospId}_${selectedDrug.drugId}`;
-              batch.set(db.collection('current_excess').doc(docId), {
-                hospital_id: hospId, drug_id: selectedDrug.drugId, excess_balance: Number(newBalance), last_updated: firebase.firestore.FieldValue.serverTimestamp()
-              }, { merge: true });
-            }
-
-            await batch.commit();
-            showToast(isAdmin ? 'ปรับสต๊อกเรียบร้อยแล้ว' : 'ส่งคำขอปรับสต๊อกแล้ว กรุณารอแอดมินอนุมัติ');
-            setNewBalance(''); setReason(''); setSelectedDrug(null);
-            await refreshData();
-            if(!isAdmin) setCurrentView('dashboard');
-          } catch(e) { showToast(e.message, 'error'); } finally { setIsSaving(false); }
-        };
-
-        return (
-          <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 animate-fade-in max-w-4xl mx-auto">
-            <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
-              <div>
-                <h2 className="text-2xl font-bold text-slate-800">ขอปรับปรุงยอดยกมา (Adjust Stock)</h2>
-                <p className="text-slate-500 mt-1">กรณีที่สต๊อกในระบบไม่ตรงกับความจริง ต้องส่งเรื่องให้แอดมินอนุมัติ</p>
-              </div>
-              <button onClick={() => setCurrentView('dashboard')} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">กลับหน้าหลัก</button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div>
-                <div className="mb-4 relative">
-                  <i className="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400"></i>
-                  <input type="text" placeholder="ค้นหารายยา..." className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 transition" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer mb-4 text-emerald-700 font-semibold bg-emerald-50 p-2 rounded-lg border border-emerald-200">
-                  <input type="checkbox" className="w-5 h-5 accent-emerald-600" checked={showMyStockOnly} onChange={e=>setShowMyStockOnly(e.target.checked)} /> 
-                  แสดงเฉพาะยาที่มีในคลังย่อย (ตั้ง Target ไว้)
-                </label>
-                <div className="border border-slate-200 rounded-xl max-h-[400px] overflow-y-auto">
-                  {filteredList.map(d => (
-                    <div key={d.drugId} onClick={() => { setSelectedDrug(d); setNewBalance(''); setReason(''); }} className={`p-4 border-b cursor-pointer transition ${selectedDrug?.drugId === d.drugId ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : 'hover:bg-slate-50 border-l-4 border-l-transparent'}`}>
-                      <div className="font-bold text-slate-800">{d.name} <span className="text-xs font-normal text-slate-500 ml-1">[{d.drugId}]</span></div>
-                      <div className="text-sm text-slate-500 mt-1">ยอดปัจจุบันในระบบ: <span className="font-bold text-blue-600">{d.currentBal}</span> {d.unit}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 h-fit">
-                {selectedDrug ? (
-                  <div className="space-y-4 animate-fade-in">
-                    <h3 className="font-bold text-lg text-slate-800 border-b pb-2">รายละเอียดการปรับแก้</h3>
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-600 mb-1">รายการยา</label>
-                      <div className="font-bold text-emerald-700 bg-emerald-100/50 p-3 rounded-lg border border-emerald-200">{selectedDrug.name} <span className="text-xs font-normal">[{selectedDrug.drugId}]</span></div>
-                    </div>
-                    <div className="flex gap-4">
-                      <div className="flex-1">
-                        <label className="block text-sm font-semibold text-slate-600 mb-1">ยอดเดิม</label>
-                        <input type="text" disabled value={selectedDrug.currentBal} className="w-full bg-slate-200 border-none rounded-lg p-3 text-slate-500 font-bold" />
-                      </div>
-                      <div className="flex-1">
-                        <label className="block text-sm font-semibold text-red-600 mb-1">ยอดใหม่ที่ถูกต้อง <span className="text-xs font-normal">({selectedDrug.unit})</span></label>
-                        <input type="number" min="0" value={newBalance} onChange={e=>setNewBalance(e.target.value)} className="w-full border-2 border-red-300 rounded-lg p-3 font-bold text-red-700 outline-none focus:border-red-500" placeholder="0" />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-600 mb-1">เหตุผลในการปรับยอด (บังคับ) <span className="text-red-500">*</span></label>
-                      <textarea rows="3" value={reason} onChange={e=>setReason(e.target.value)} className="w-full border border-slate-300 rounded-lg p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="เช่น ยาเสื่อมสภาพ, นับสต๊อกสิ้นเดือน, คีย์เบิกผิดรอบที่แล้ว..."></textarea>
-                    </div>
-                    <button onClick={handleSaveAdjust} disabled={isSaving} className="w-full bg-emerald-600 text-white rounded-lg p-4 font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition disabled:opacity-50 mt-4">
-                      {isSaving ? 'กำลังบันทึก...' : 'ส่งคำขอปรับสต๊อก'}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="text-center text-slate-400 py-20">
-                    <i className="fa-solid fa-hand-pointer text-4xl mb-3 opacity-50"></i>
-                    <p>คลิกเลือกรายการยาจากตารางด้านซ้าย<br/>เพื่อทำการขอปรับยอด</p>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         );
@@ -778,13 +527,16 @@
         const [searchTerm, setSearchTerm] = useState(''); 
         const [filterType, setFilterType] = useState('all'); 
         const [showUsedOnly, setShowUsedOnly] = useState(false); 
-        const [multiplier, setMultiplier] = useState(1.25);
-        const [proofFile, setProofFile] = useState(null);
+        
+        const [excelFile, setExcelFile] = useState(null);
         const [isSubmitting, setIsSubmitting] = useState(false);
 
-        // ⭐️ State สำหรับจัดการ Modal ตรวจสอบข้อมูลจาก JHCIS
         const [showImportModal, setShowImportModal] = useState(false);
-        const [importData, setImportData] = useState({ hospInfo: '', periodInfo: '', items: [] });
+        const [importData, setImportData] = useState({ hospInfo: '', periodInfo: '', isDateValid: true, items: [] });
+        
+        const [manualAddSearch, setManualAddSearch] = useState('');
+
+        const VMI_MULTIPLIER = 1.25; // ค่าคงที่ตามกติกาใหม่
 
         const [items, setItems] = useState(() => {
           if (!appDb || !appDb.parLevels) return [];
@@ -803,6 +555,8 @@
             const existingItem = existingReqItems.find(ex => ex.drugId === par.drug_id);
             const prevExcess = bal ? Number(bal.excess_balance) : 0;
             const isUnpacked = drug ? !!drug.unpacked : false;
+            const type = drug ? drug.type : '1';
+            const price = drug ? drug.price : 0;
             
             let m_usages = [];
             for(let i=1; i<=6; i++) {
@@ -825,27 +579,39 @@
             
             const targetVMI = Math.ceil((ADU * 30) + (1.645 * SD));
 
-            if (existingItem) return { ...existingItem, targetVMI, isUnpacked, avgUsage: ADU.toFixed(2) };
+            if (existingItem) {
+               // ถ้าเป็นการ Edit เอาของเดิมมาแต่ให้แน่ใจว่า field พื้นฐานครบ
+               return { ...existingItem, targetVMI, isUnpacked, avgUsage: ADU.toFixed(2), type, price };
+            }
 
             return {
               drugId: par.drug_id, name: drug ? drug.drug_name : 'N/A', unit: drug ? drug.unit_display_name : '',
-              packSize: drug ? Number(drug.pack_size) : 1, isUnpacked: isUnpacked,
+              packSize: drug ? Number(drug.pack_size) : 1, isUnpacked: isUnpacked, type, price,
               avgUsage: ADU.toFixed(2), prevExcess: prevExcess, 
-              usage: 0, targetVMI: targetVMI, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess
+              usage: 0, targetVMI: targetVMI, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess, isSpecial: false
             };
+          });
+
+          // ดึง Special Items จาก existingReqItems ที่ไม่ได้อยู่ใน Par
+          existingReqItems.forEach(ex => {
+             if(!generatedList.find(g => g.drugId === ex.drugId)) {
+                generatedList.push(ex);
+             }
           });
 
           return generatedList.sort(sortDrugs);
         });
 
-        // ⭐️ ฟังก์ชันดึงยอดใช้จากไฟล์ JHCIS รบ.301
+        // ⭐️ ตรวจสอบไฟล์ Excel .xlsx
         const handleJHCISUpload = (e) => {
           const file = e.target.files[0];
           if(!file) return;
+          setExcelFile(file); // เก็บไฟล์ไว้เพื่อ Upload เข้า Drive ตอนกดส่ง
 
           const processData = (dataRows) => {
             let hospInfo = "";
             let periodInfo = "";
+            let isDateValid = true;
             let extracted = [];
 
             dataRows.forEach(row => {
@@ -856,15 +622,28 @@
               if (compacted.some(c => c.includes('สถานบริการ'))) {
                  hospInfo = compacted.find(c => c.includes('สถานบริการ'));
               }
+              // หาช่องที่มีคำว่า ระหว่างวันที่ เพื่อดึง Date
               if (compacted.some(c => c.includes('ระหว่างวันที่'))) {
                  periodInfo = compacted.find(c => c.includes('ระหว่างวันที่')) || compacted.join(' ');
+                 // Regex หาวันที่แบบคร่าวๆ: (1 พ.ค. 2569-31 พ.ค. 2569)
+                 const dateRegex = /(\d{1,2})\s*([ก-๙\.]+)\s*(\d{4})\s*-\s*(\d{1,2})\s*([ก-๙\.]+)\s*(\d{4})/;
+                 const match = periodInfo.match(dateRegex);
+                 if (match) {
+                    const startDay = parseInt(match[1]);
+                    const startMonthStr = match[2];
+                    const startYearThai = parseInt(match[3]);
+                    const endDay = parseInt(match[4]);
+                    // เช็คกรอบเวลาคร่าวๆ: ควรเริ่มแถวๆ 25 หรือจบแถวๆ 25
+                    if (startDay < 20 && endDay < 20) {
+                       isDateValid = false; // นอกช่วงเวลา หรือไม่ใช่รอบที่ถูกต้อง
+                    }
+                 }
               }
 
               if (compacted.length >= 6 && /^\d+\.?$/.test(compacted[0])) {
                  const rawName = compacted[1];
                  const usageStr = compacted[6]; 
                  const usageNum = parseFloat(usageStr?.replace(/,/g, ''));
-                 // ⭐️ กรองเฉพาะยาที่มียอดใช้ > 0
                  if (!isNaN(usageNum) && usageNum > 0 && rawName && !rawName.includes('รวม')) {
                      extracted.push({ id: Math.random().toString(), rawName, usage: usageNum, mappedDrugId: '' });
                  }
@@ -876,7 +655,6 @@
               const normRaw = normalize(item.rawName);
               let mappedId = '';
               
-              // ⭐️ ค้นหาจาก drug_name และ fuzzy
               let matched = appDb.drugs.find(d => {
                  const normSys = normalize(d.drug_name);
                  const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize) : [];
@@ -894,15 +672,12 @@
               return { ...item, mappedDrugId: mappedId };
             });
 
-            setImportData({ hospInfo, periodInfo, items: extracted });
+            setImportData({ hospInfo, periodInfo, isDateValid, items: extracted });
             setShowImportModal(true);
           };
 
           if (file.name.endsWith('.csv')) {
-            Papa.parse(file, {
-              header: false, skipEmptyLines: true,
-              complete: function(results) { processData(results.data); e.target.value = null; }
-            });
+            Papa.parse(file, { header: false, skipEmptyLines: true, complete: function(results) { processData(results.data); } });
           } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
             const reader = new FileReader();
             reader.onload = (evt) => {
@@ -912,7 +687,6 @@
               const ws = wb.Sheets[wsname];
               const data = XLSX.utils.sheet_to_json(ws, {header:1});
               processData(data);
-              e.target.value = null;
             };
             reader.readAsBinaryString(file);
           } else {
@@ -949,58 +723,91 @@
           setItems(newItems);
         };
 
-        const handleMultiplierChange = (e) => {
-          const m = parseFloat(e.target.value);
-          setMultiplier(m);
-          setItems(items.map(item => {
-            const row = { ...item };
-            row.vmiTarget = Math.ceil(row.avgUsage * m);
-            let netNeed = row.vmiTarget - row.prevExcess;
-            if (netNeed <= 0) {
-               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; 
-               row.newExcess = row.prevExcess - row.usage; 
-            } else {
-               row.netNeed = netNeed; 
-               row.dispensePack = Math.ceil(netNeed / row.packSize);
-               row.dispenseQty = row.dispensePack * row.packSize; 
-               row.newExcess = (row.prevExcess - row.usage) + row.dispenseQty;
-            }
-            return row;
-          }));
-        };
+        // ⭐️ ฟังก์ชันเพิ่มยาด้วยตนเองจากกล่องค้นหา
+        const handleManualAdd = () => {
+           if(!manualAddSearch) return;
+           const drug = appDb.drugs.find(d => d.drug_id === manualAddSearch);
+           if(!drug) return showToast('ไม่พบรหัสยานี้ในระบบ', 'error');
+           if(items.find(i => i.drugId === drug.drug_id)) return showToast('มีรายการนี้ในใบเบิกอยู่แล้ว', 'error');
 
-        const handleFileChange = (e) => {
-          const file = e.target.files[0];
-          if(file && file.type !== "application/pdf") {
-            showToast("กรุณาแนบไฟล์ PDF เท่านั้น", "error"); e.target.value = null; return;
-          }
-          setProofFile(file);
+           const isMed = drug.type === '32'; // เวชภัณฑ์
+           const newItem = {
+              drugId: drug.drug_id, name: drug.drug_name, unit: drug.unit_display_name,
+              packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type, price: drug.price,
+              avgUsage: 0, prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0,
+              isSpecial: !isMed // ถ้าไม่ใช่เวชภัณฑ์ ให้ติดป้ายแดงว่า "กรณีพิเศษ"
+           };
+           
+           setItems([newItem, ...items].sort(sortDrugs));
+           setManualAddSearch('');
+           showToast(`เพิ่ม ${drug.drug_name} ลงในใบเบิกแล้ว`);
         };
 
         const handleSubmit = async () => {
-          if(!proofFile && !editReqId) return showToast('กรุณาแนบไฟล์ใบรายการใช้ยาจาก JHCIS (PDF)', 'error');
+          if(!excelFile && !editReqId) return showToast('กรุณาแนบไฟล์ รบ.301 (.xlsx) เพื่อใช้เป็นหลักฐานประกอบการเบิก', 'error');
           setIsSubmitting(true);
           
           try {
             const processSave = async (fileUrl) => {
+               // หา Item ที่ข้าม (Skipped) ไปให้แอดมิน
+               const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: i.rawName, usage: i.usage }));
+
                const sanitizedItems = items.map(item => ({
                   drugId: item.drugId || "", name: item.name || "N/A", unit: item.unit || "",
-                  packSize: item.packSize || 1, isUnpacked: !!item.isUnpacked, avgUsage: item.avgUsage || 0, prevExcess: item.prevExcess || 0,
+                  packSize: item.packSize || 1, isUnpacked: !!item.isUnpacked, type: item.type || '1', price: item.price || 0,
+                  avgUsage: item.avgUsage || 0, prevExcess: item.prevExcess || 0,
                   usage: item.usage || 0, vmiTarget: item.vmiTarget || 0, netNeed: item.netNeed || 0,
-                  dispensePack: item.dispensePack || 0, dispenseQty: item.dispenseQty || 0, newExcess: item.newExcess || 0
+                  dispensePack: item.dispensePack || 0, dispenseQty: item.dispenseQty || 0, newExcess: item.newExcess || 0,
+                  isSpecial: !!item.isSpecial
                }));
 
                if (editReqId) {
-                  const payload = { items: sanitizedItems, updated_at: firebase.firestore.FieldValue.serverTimestamp() };
-                  if (fileUrl) payload.pdf_url = fileUrl; 
+                  const payload = { items: sanitizedItems, skipped_items: skipped, updated_at: firebase.firestore.FieldValue.serverTimestamp() };
+                  if (fileUrl) payload.excel_url = fileUrl; 
                   await db.collection('requisitions').doc(editReqId).update(payload);
+                  
+                  // อัปเดต Fuzzy ให้อัตโนมัติ (กรณี User จับคู่มือ)
+                  const batch = db.batch();
+                  importData.items.filter(i => i.mappedDrugId !== '').forEach(item => {
+                     const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
+                     const drugObj = appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
+                     if(drugObj) {
+                        const existingFuzzy = drugObj.fuzzy ? drugObj.fuzzy.split(',').map(s=>s.trim().toLowerCase()) : [];
+                        const rawLower = item.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
+                        if(!existingFuzzy.includes(rawLower)) {
+                           const newFuzzy = drugObj.fuzzy ? `${drugObj.fuzzy},${item.rawName}` : item.rawName;
+                           batch.update(drugRef, { fuzzy: newFuzzy });
+                        }
+                     }
+                  });
+                  await batch.commit();
+
                   showToast('อัปเดตใบเบิกสำเร็จ');
                } else {
                   const newId = `REQ-${currentYear}-${String(currentMonth).padStart(2, '0')}-${Math.floor(Math.random()*1000).toString().padStart(3, '0')}`;
-                  await db.collection('requisitions').doc(newId).set({
+                  
+                  const batch = db.batch();
+                  const reqRef = db.collection('requisitions').doc(newId);
+                  batch.set(reqRef, {
                     hospitalId: hospId, month: currentMonth, year: currentYear, status: 'Pending',
-                    pdf_url: fileUrl || "", items: sanitizedItems, created_by_name: currentUser.name, created_at: firebase.firestore.FieldValue.serverTimestamp() 
+                    excel_url: fileUrl || "", items: sanitizedItems, skipped_items: skipped, created_by_name: currentUser.name, created_at: firebase.firestore.FieldValue.serverTimestamp() 
                   });
+
+                  // อัปเดต Fuzzy
+                  importData.items.filter(i => i.mappedDrugId !== '').forEach(item => {
+                     const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
+                     const drugObj = appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
+                     if(drugObj) {
+                        const existingFuzzy = drugObj.fuzzy ? drugObj.fuzzy.split(',').map(s=>s.trim().toLowerCase()) : [];
+                        const rawLower = item.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
+                        if(!existingFuzzy.includes(rawLower)) {
+                           const newFuzzy = drugObj.fuzzy ? `${drugObj.fuzzy},${item.rawName}` : item.rawName;
+                           batch.update(drugRef, { fuzzy: newFuzzy });
+                        }
+                     }
+                  });
+
+                  await batch.commit();
                   showToast('ส่งเรื่องเติมยาสำเร็จ');
                }
                await refreshData();
@@ -1008,7 +815,7 @@
                setCurrentView('dashboard');
             };
 
-            if (proofFile) {
+            if (excelFile) {
               const reader = new FileReader();
               reader.onload = async (event) => {
                 const base64Str = event.target.result.split(',')[1];
@@ -1016,23 +823,21 @@
                 if(GAS_DRIVE_URL.includes('/exec')) {
                   const uploadRes = await fetch(GAS_DRIVE_URL, {
                     method: 'POST',
-                    body: JSON.stringify({ filename: `Rxfill_${hospId}_${currentMonth}_${currentYear}.pdf`, mimeType: 'application/pdf', base64: base64Str })
+                    body: JSON.stringify({ filename: `Rxfill_${hospId}_${currentMonth}_${currentYear}.xlsx`, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', base64: base64Str })
                   });
                   const uploadData = await uploadRes.json();
                   if(uploadData.status === 'success') fileUrl = uploadData.url || "";
                 }
                 processSave(fileUrl);
               };
-              reader.readAsDataURL(proofFile);
+              reader.readAsDataURL(excelFile);
             } else { processSave(""); }
           } catch (e) { showToast('เกิดข้อผิดพลาด: ' + e.message, 'error'); setIsSubmitting(false); }
         };
 
         const filteredItems = items.filter(item => {
           const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(item.drugId).includes(searchTerm.toLowerCase());
-          const drugDoc = appDb.drugs.find(d => d.drug_id === item.drugId);
-          const type = drugDoc ? drugDoc.type : '1';
-          const matchType = filterType === 'all' ? true : filterType === type;
+          const matchType = filterType === 'all' ? true : filterType === item.type;
           const matchUsage = showUsedOnly ? item.usage > 0 : true;
           return matchSearch && matchType && matchUsage;
         });
@@ -1058,51 +863,51 @@
                 <h2 className="text-2xl font-bold text-slate-800">
                   {editReqId ? `แก้ไขใบเบิกยารอบ ${currentMonth}/${currentYear}` : `ทำเรื่องเติมยารอบใหม่ (${currentMonth}/${currentYear})`}
                 </h2>
-                <p className="text-slate-500 mt-1">สูตร VMI (6 เดือนย้อนหลัง): Target = (ADU x 30) + (1.645 x SD)</p>
+                <p className="text-slate-500 mt-1">อัปโหลดไฟล์ Excel รบ.301 เพื่อดึงยอดจ่ายอัตโนมัติ</p>
               </div>
               <button onClick={() => {setEditReqId(null); setCurrentView('dashboard');}} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">ยกเลิก</button>
             </div>
 
             <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-200 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
               <div>
-                <h3 className="font-bold text-indigo-800 text-lg flex items-center"><i className="fa-solid fa-file-excel mr-2"></i> ดึงยอดใช้จากไฟล์ รบ.301 (Excel/CSV)</h3>
-                <p className="text-sm text-indigo-600 mt-1">อัปโหลดไฟล์สรุปรวมรายเดือน ระบบจะดึงยอดจ่ายมาคีย์ลงตารางให้อัตโนมัติ</p>
+                <h3 className="font-bold text-indigo-800 text-lg flex items-center"><i className="fa-solid fa-file-excel mr-2"></i> ดึงยอดใช้จากไฟล์ รบ.301 (Excel)</h3>
+                <p className="text-sm text-indigo-600 mt-1">อัปโหลดไฟล์สรุปรวมรายเดือน ระบบจะดึงยอดจ่ายมาคีย์ลงตารางให้อัตโนมัติ (และแนบไฟล์ให้พร้อม)</p>
+                {excelFile && <p className="text-sm font-bold text-emerald-600 mt-2"><i className="fa-solid fa-check"></i> พร้อมแนบ: {excelFile.name}</p>}
               </div>
               <label className="bg-white border-2 border-indigo-600 text-indigo-700 px-6 py-3 rounded-xl cursor-pointer hover:bg-indigo-100 transition flex items-center font-bold shrink-0 shadow-lg shadow-indigo-100">
-                <i className="fa-solid fa-upload mr-2"></i> อัปโหลด รบ.301 (.xlsx / .csv)
+                <i className="fa-solid fa-upload mr-2"></i> เลือกไฟล์ .xlsx / .csv
                 <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" className="hidden" onChange={handleJHCISUpload} />
               </label>
             </div>
 
-            <div className="flex flex-col sm:flex-row bg-emerald-50 p-4 rounded-xl mb-6 items-start sm:items-center border border-emerald-100 gap-4">
-              <div className="flex items-center flex-grow">
-                <i className="fa-solid fa-calculator text-emerald-500 text-2xl mr-4"></i>
-                <div>
-                  <div className="font-bold text-emerald-800">ตั้งค่าตัวคูณ (Safety Stock)</div>
-                  <div className="text-sm text-emerald-600">เป้าหมาย VMI = ค่าเฉลี่ย 3 เดือน x ตัวคูณ</div>
-                </div>
-              </div>
-              <select disabled={!isAdmin} value={multiplier} onChange={handleMultiplierChange} className="bg-white border border-emerald-200 text-emerald-800 rounded-lg p-3 font-bold outline-none shadow-sm min-w-[200px] disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed">
-                <option value={1.25}>รอบ 7 วัน (x1.25)</option>
-                <option value={1.5}>รอบ 14 วัน (x1.5)</option>
-                <option value={2.0}>รอบ 1 เดือน (x2.0)</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col md:flex-row gap-4 mb-6">
-              <div className="relative flex-grow">
+            <div className="flex flex-col md:flex-row gap-4 mb-6 items-center">
+              <div className="relative flex-grow w-full">
                 <i className="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400"></i>
                 <input type="text" placeholder="ค้นหารายการ (ชื่อ หรือ รหัส)..." className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 transition font-medium" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
               </div>
-              <div className="flex gap-2 shrink-0 bg-slate-100 p-1 rounded-xl overflow-x-auto">
+              <div className="flex gap-2 shrink-0 bg-slate-100 p-1 rounded-xl overflow-x-auto w-full md:w-auto">
                 <button onClick={()=>setFilterType('all')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='all'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>ทั้งหมด</button>
                 <button onClick={()=>setFilterType('1')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='1'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>ยา</button>
                 <button onClick={()=>setFilterType('25')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='25'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>NCDs</button>
                 <button onClick={()=>setFilterType('3')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='3'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>สมุนไพร</button>
                 <button onClick={()=>setFilterType('32')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='32'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>เวชภัณฑ์</button>
               </div>
-              <label className="flex items-center gap-2 cursor-pointer bg-amber-50 px-4 rounded-xl border border-amber-200 text-amber-800 font-bold shrink-0">
-                <input type="checkbox" className="w-5 h-5 accent-amber-500" checked={showUsedOnly} onChange={e=>setShowUsedOnly(e.target.checked)} /> แสดงเฉพาะที่ระบุยอด
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-4 mb-6 items-center bg-slate-50 p-4 rounded-xl border border-slate-200">
+               <div className="font-bold text-slate-700"><i className="fa-solid fa-plus-circle text-blue-500 mr-2"></i> ค้นหาเพื่อเพิ่มรายการเบิก (ที่ไม่ได้ตั้ง Par)</div>
+               <div className="flex flex-grow w-full md:w-auto gap-2">
+                 <input list="all-drugs" className="border border-slate-300 rounded-lg p-2 flex-grow outline-none focus:border-blue-500" placeholder="พิมพ์ชื่อหรือรหัส..." value={manualAddSearch} onChange={e=>setManualAddSearch(e.target.value)} />
+                 <datalist id="all-drugs">
+                    {appDb.drugs.map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{DRUG_TYPES[d.type]}]</option>)}
+                 </datalist>
+                 <button onClick={handleManualAdd} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700">เพิ่ม</button>
+               </div>
+            </div>
+
+            <div className="mb-2">
+              <label className="flex items-center gap-2 cursor-pointer bg-amber-50 px-4 py-2 rounded-xl border border-amber-200 text-amber-800 font-bold w-fit">
+                <input type="checkbox" className="w-5 h-5 accent-amber-500" checked={showUsedOnly} onChange={e=>setShowUsedOnly(e.target.checked)} /> แสดงเฉพาะรายการที่มียอดใช้ > 0
               </label>
             </div>
 
@@ -1113,9 +918,9 @@
                     <th className="p-4 font-bold">รายการยา <span className="font-normal text-xs text-slate-400 ml-1">[รหัส]</span></th>
                     <th className="p-4 text-center">Pack</th>
                     <th className="p-4 text-center bg-blue-50/80 border-x border-blue-100">ยอดยกมา<br/><span className="font-normal text-xs">(A)</span></th>
-                    <th className="p-4 text-center bg-amber-100 text-amber-800 border-r border-amber-200">ยอดใช้ 1 เดือน (หน่วยย่อย)<br/><span className="font-normal text-xs">(กรอกข้อมูล - B)</span></th>
+                    <th className="p-4 text-center bg-amber-100 text-amber-800 border-r border-amber-200">ยอดใช้ (หน่วยย่อย)<br/><span className="font-normal text-xs">(กรอกข้อมูล - B)</span></th>
                     <th className="p-4 text-center bg-slate-50/80">เฉลี่ย 3ด.<br/><span className="font-normal text-xs">(Hist)</span></th>
-                    <th className="p-4 text-center text-emerald-700 bg-emerald-50/80 border-l border-emerald-100">เป้าหมาย<br/><span className="font-normal text-xs">(VMI 6 ด.)</span></th>
+                    <th className="p-4 text-center text-emerald-700 bg-emerald-50/80 border-l border-emerald-100">เป้าหมาย<br/><span className="font-normal text-xs">(VMI)</span></th>
                     <th className="p-4 text-center text-red-600 bg-slate-50/80">คาดว่าจัดให้<br/><span className="font-normal text-xs">(หน่วยย่อย)</span></th>
                     <th className="p-4 text-center bg-purple-50/80 border-l border-purple-100">คาดการณ์ยกไป</th>
                   </tr>
@@ -1124,8 +929,8 @@
                   {filteredItems.map((item) => (
                     <tr key={item.drugId} className="border-b border-slate-200 hover:bg-slate-50 transition">
                       <td className="p-4">
-                        <div className="font-bold text-slate-800">{item.name} <span className="text-xs font-normal text-slate-400 ml-1">[{item.drugId}]</span> {item.isUnpacked && <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1 rounded">แตกหน่วย</span>}</div>
-                        <div className="text-xs text-slate-500 mt-1">หน่วย: <span className="font-semibold">{item.unit}</span></div>
+                        <div className="font-bold text-slate-800">{item.name} <span className="text-xs font-normal text-slate-400 ml-1">[{item.drugId}]</span> {item.isUnpacked && <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1 rounded">แตกหน่วย</span>} {item.isSpecial && <span className="ml-1 text-[10px] bg-red-100 text-red-700 px-1 rounded">กรณีพิเศษ</span>}</div>
+                        <div className="text-xs text-slate-500 mt-1">หน่วย: <span className="font-semibold">{item.unit}</span> | หมวด: {DRUG_TYPES[item.type]}</div>
                       </td>
                       <td className="p-4 text-center font-medium text-slate-500">{item.packSize}</td>
                       <td className="p-4 text-center text-blue-600 font-bold bg-blue-50/20 border-x border-blue-50">{item.prevExcess}</td>
@@ -1145,22 +950,10 @@
               </table>
             </div>
 
-            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 mb-8 flex flex-col md:flex-row items-center justify-between">
-              <div className="mb-4 md:mb-0">
-                <h3 className="font-bold text-slate-800 text-lg flex items-center"><i className="fa-solid fa-file-pdf text-red-500 mr-2"></i> แนบไฟล์อ้างอิงจาก JHCIS {!editReqId && <span className="text-red-500 ml-1">*</span>}</h3>
-                <p className="text-sm text-slate-500 mt-1">บังคับแนบไฟล์สรุปยอดจ่ายยา (.pdf) เพื่อใช้เป็นหลักฐานประกอบการเบิก {editReqId && "(ไม่ต้องแนบใหม่ถ้าใช้ไฟล์เดิม)"}</p>
-                {proofFile && <p className="text-sm text-emerald-600 font-bold mt-2"><i className="fa-solid fa-check mr-1"></i> เลือกไฟล์ใหม่แล้ว: {proofFile.name}</p>}
-              </div>
-              <label className="bg-white border-2 border-dashed border-slate-300 text-slate-700 px-6 py-4 rounded-xl cursor-pointer hover:bg-slate-100 transition flex items-center font-bold shrink-0">
-                <i className="fa-solid fa-upload mr-2"></i> {proofFile ? 'เปลี่ยนไฟล์' : 'เลือกไฟล์ PDF'}
-                <input type="file" accept=".pdf" className="hidden" onChange={handleFileChange} />
-              </label>
-            </div>
-
             <div className="flex justify-end">
               <button onClick={handleSubmit} disabled={isSubmitting} className="bg-gradient-main text-white px-8 py-4 rounded-xl font-bold shadow-xl shadow-emerald-200 hover:scale-105 transition disabled:opacity-50 text-lg flex items-center">
                 {isSubmitting ? <i className="fa-solid fa-circle-notch fa-spin mr-2"></i> : <i className="fa-solid fa-paper-plane mr-2"></i>}
-                {isSubmitting ? 'กำลังอัปโหลดและบันทึก...' : editReqId ? 'อัปเดตใบเบิก' : 'ส่งเอกสารเติมยา'}
+                {isSubmitting ? 'กำลังอัปโหลดและบันทึก...' : editReqId ? 'อัปเดตใบเบิก' : 'ยืนยันส่งเอกสารเบิก'}
               </button>
             </div>
 
@@ -1175,9 +968,10 @@
                          <p className="text-xs text-amber-600 mt-1"><i className="fa-solid fa-triangle-exclamation"></i> ชื่ออาจไม่ตรงกับต้นสังกัด โปรดตรวจสอบ</p>
                        )}
                     </div>
-                    <div className="bg-white p-4 rounded-xl border border-slate-200">
+                    <div className={`bg-white p-4 rounded-xl border ${importData.isDateValid ? 'border-slate-200' : 'border-red-400 bg-red-50'}`}>
                        <p className="text-xs text-slate-500 font-bold mb-1">ช่วงเวลาในไฟล์</p>
                        <p className="font-semibold text-slate-800 text-sm">{importData.periodInfo || 'ไม่พบข้อมูล'}</p>
+                       {!importData.isDateValid && <p className="text-xs text-red-600 mt-1"><i className="fa-solid fa-calendar-xmark"></i> วันที่อาจไม่ถูกต้องตามรอบ (ปกติควรเริ่มและจบแถวๆ วันที่ 25)</p>}
                     </div>
                  </div>
 
@@ -1186,7 +980,7 @@
                      <thead className="bg-slate-100 border-b">
                        <tr>
                           <th className="p-3">ชื่อยาจากระบบ JHCIS (ข้อมูลดิบ)</th>
-                          <th className="p-3">จับคู่กับยาในระบบ</th>
+                          <th className="p-3">จับคู่กับยาในระบบ <span className="font-normal text-xs text-slate-500">(พิมพ์ค้นหาได้)</span></th>
                           <th className="p-3 text-center w-24">ยอดใช้</th>
                           <th className="p-3 text-center w-12">ข้าม</th>
                        </tr>
@@ -1196,16 +990,16 @@
                           <tr key={item.id} className="border-b hover:bg-slate-50">
                              <td className="p-3 font-medium text-slate-700">{item.rawName}</td>
                              <td className="p-3">
-                                <select 
-                                   className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800'}`}
-                                   value={item.mappedDrugId}
-                                   onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
-                                >
-                                   <option value="">-- ไม่ทำการจับคู่ (ข้าม) --</option>
-                                   {appDb.drugs.sort(sortDrugs).map(d => (
-                                      <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>
-                                   ))}
-                                </select>
+                                <input 
+                                  list="drug-list" 
+                                  className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800'}`}
+                                  value={item.mappedDrugId}
+                                  onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
+                                  placeholder="-- ไม่ทำการจับคู่ (ข้าม) --"
+                                />
+                                <datalist id="drug-list">
+                                   {appDb.drugs.sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>)}
+                                </datalist>
                              </td>
                              <td className="p-3">
                                 <input type="number" className="w-20 p-2 border rounded-lg text-center font-bold text-slate-700 outline-none focus:border-indigo-500" value={item.usage} onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, usage: Number(e.target.value) } : i)}))} />
@@ -1221,12 +1015,29 @@
                  <div className="mt-6 flex justify-end gap-3 shrink-0">
                      <button onClick={() => setShowImportModal(false)} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">ยกเลิก</button>
                      <button onClick={() => {
+                        let newAdded = false;
                         items.forEach(mainItem => {
                            const importItem = importData.items.find(i => i.mappedDrugId === mainItem.drugId);
                            if (importItem && importItem.usage > 0) {
                                updateRow(mainItem.drugId, importItem.usage);
                            }
                         });
+                        // Add mapped items that are not in the current list
+                        importData.items.forEach(importItem => {
+                           if(importItem.mappedDrugId && importItem.usage > 0 && !items.find(i => i.drugId === importItem.mappedDrugId)) {
+                              const d = appDb.drugs.find(x => x.drug_id === importItem.mappedDrugId);
+                              if(d) {
+                                 const isMed = d.type === '32';
+                                 items.push({
+                                    drugId: d.drug_id, name: d.drug_name, unit: d.unit_display_name, packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
+                                    avgUsage: 0, prevExcess: 0, usage: importItem.usage, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: !isMed
+                                 });
+                                 updateRow(d.drug_id, importItem.usage); // calc immediately
+                                 newAdded = true;
+                              }
+                           }
+                        });
+                        
                         setShowImportModal(false);
                         showToast('ดึงข้อมูลยอดใช้เข้าสู่ตารางเรียบร้อยแล้ว');
                      }} className="px-8 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 flex items-center transition">
@@ -1239,66 +1050,211 @@
         );
       };
 
+      // ⭐️ ระบบดูใบเบิก และพิมพ์เอกสารราชการ
       const ViewReqView = () => {
         const req = appDb.requisitions.find(r => r.id === currentReqId);
-        const [showPdf, setShowPdf] = useState(true);
         const [isApproving, setIsApproving] = useState(false);
         const [editableItems, setEditableItems] = useState(req?.items || []);
+        
         useEffect(() => { if(req) setEditableItems(req.items); }, [req]);
         if(!req) return null;
+        
         const isAdmin = currentUser.role === 'admin';
         const isPending = req.status === 'Pending';
         const hosp = appDb.hospitals.find(h => h.hospital_id === req.hospitalId);
+        const userInfo = appDb.usersList.find(u => u.name === req.created_by_name) || { position: 'เจ้าหน้าที่' };
+
+        const { fiscalYear, term } = getFiscalInfo(req.month, req.year);
 
         const handleAdjust = (idx, val) => {
           const qty = parseInt(val) || 0; const newItems = [...editableItems];
           newItems[idx] = { ...newItems[idx], dispenseQty: qty, dispensePack: Math.ceil(qty / newItems[idx].packSize), newExcess: (newItems[idx].prevExcess - newItems[idx].usage) + qty, isAdjusted: true };
           setEditableItems(newItems);
         };
+
         const handleApprove = async () => {
           setIsApproving(true);
           try {
             const batch = db.batch(); batch.update(db.collection('requisitions').doc(req.id), { status: 'Completed', items: editableItems });
             editableItems.forEach(it => batch.set(db.collection('current_excess').doc(`${req.hospitalId}_${it.drugId}`), { hospital_id: req.hospitalId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+            
+            // Map skipped items to fuzzy if admin mapped them
+            if(req.skipped_items) {
+               req.skipped_items.filter(s => s.mappedDrugId).forEach(s => {
+                  const d = appDb.drugs.find(x => x.drug_id === s.mappedDrugId);
+                  if(d) {
+                     const existingFuzzy = d.fuzzy ? d.fuzzy.split(',').map(f=>f.trim().toLowerCase()) : [];
+                     const rawLower = s.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
+                     if(!existingFuzzy.includes(rawLower)) {
+                        batch.update(db.collection('master_drugs').doc(d.drug_id), { fuzzy: d.fuzzy ? `${d.fuzzy},${s.rawName}` : s.rawName });
+                     }
+                  }
+               });
+            }
+
             await batch.commit(); showToast('อนุมัติแล้ว'); await refreshData(); setCurrentView('dashboard');
           } catch(e) { showToast(e.message, 'error'); } finally { setIsApproving(false); }
         };
+
+        // การสร้างกลุ่มสำหรับ Print
+        const groupedItems = { '1': [], '3': [], '25': [], '32': [] };
+        editableItems.forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
+        
+        let grandTotalItems = 0;
+        let grandTotalPrice = 0;
+
         return (
-          <div className="bg-white rounded-2xl shadow-sm p-8 animate-fade-in border border-slate-100">
-            <div className="flex justify-between items-center mb-6 no-print">
-              <button onClick={() => setCurrentView('dashboard')} className="text-slate-500 font-bold"><i className="fa-solid fa-arrow-left mr-1"></i> กลับ</button>
+          <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print:p-0 print:border-none print:shadow-none">
+            <div className="flex justify-between items-center mb-6 no-print pb-4 border-b">
+              <button onClick={() => setCurrentView('dashboard')} className="text-slate-500 font-bold hover:text-slate-800"><i className="fa-solid fa-arrow-left mr-1"></i> กลับ</button>
               <div className="flex gap-2">
-                {req.pdf_url && <button onClick={() => setShowPdf(!showPdf)} className="bg-slate-100 px-4 py-2 rounded-xl font-bold">{showPdf ? 'ซ่อน PDF' : 'ดู PDF'}</button>}
-                <button onClick={() => window.print()} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold shadow-lg"><i className="fa-solid fa-print mr-1"></i> พิมพ์</button>
-                {isAdmin && isPending && <button onClick={handleApprove} disabled={isApproving} className="bg-gradient-main text-white px-6 py-2 rounded-xl font-bold shadow-lg">{isApproving ? '...' : 'อนุมัติจัดยา'}</button>}
+                {req.excel_url && <a href={req.excel_url} target="_blank" className="bg-slate-100 px-4 py-2 rounded-xl font-bold flex items-center hover:bg-slate-200"><i className="fa-solid fa-file-excel text-emerald-600 mr-2"></i> โหลด รบ.301</a>}
+                <button onClick={() => window.print()} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold shadow-lg flex items-center hover:bg-blue-700"><i className="fa-solid fa-print mr-2"></i> พิมพ์เอกสารเบิก</button>
+                {isAdmin && isPending && <button onClick={() => setConfirmDialog({ title: 'ยืนยันอนุมัติ', message: 'คุณตรวจสอบยอดและต้องการอนุมัติการจ่ายยานี้ใช่หรือไม่?', icon: 'fa-check-double', confirmText: 'ยืนยันอนุมัติ', onConfirm: handleApprove })} disabled={isApproving} className="bg-gradient-main text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center hover:scale-105">{isApproving ? '...' : <span><i className="fa-solid fa-check-double mr-2"></i> อนุมัติจัดยา</span>}</button>}
               </div>
             </div>
-            <div className={`flex flex-col ${showPdf ? 'xl:flex-row' : ''} gap-8`}>
-              <div className="flex-1 print-area">
-                <div className="text-center mb-6 border-b-2 border-slate-800 pb-4">
-                  <h1 className="text-2xl font-extrabold mb-1">ใบเบิกและจัดยา รพ.สต.</h1>
-                  <p className="text-sm">รหัสเอกสาร: {req.id} | รอบ {req.month}/{req.year} | หน่วยงาน: {hosp?.hospital_name}</p>
-                </div>
-                {isAdmin && isPending && <p className="text-amber-600 text-sm mb-2 font-bold bg-amber-50 p-2 rounded no-print"><i className="fa-solid fa-pen-to-square mr-1"></i> แอดมินสามารถคลิกแก้ตัวเลขในช่อง "จัดให้ (หน่วยย่อย)" ได้</p>}
-                <table className="w-full text-left text-[11px] border-collapse border-2 border-slate-800">
-                  <thead><tr className="bg-slate-200 border-b-2 border-slate-800">
-                    <th className="p-1 border-r border-slate-800 text-center w-8">#</th><th className="p-1 border-r border-slate-800">รายการยา [รหัส]</th><th className="p-1 border-r border-slate-800 text-center">แจ้งใช้</th><th className="p-1 border-r border-slate-800 text-center">ยกมา</th><th className="p-1 border-r border-slate-800 text-center">แพ็ค</th><th className="p-1 text-center bg-slate-300">จัดให้(หน่วยย่อย)</th>
-                  </tr></thead>
-                  <tbody>{editableItems.map((it,i)=>(
-                    <tr key={i} className="border border-slate-400 hover:bg-slate-50">
-                      <td className="p-1 border-r border-slate-400 text-center">{i+1}</td>
-                      <td className="p-1 border-r border-slate-400 font-bold">{it.name} [{it.drugId}] <span className="text-[10px] font-normal text-slate-500">(Pack {it.packSize})</span></td>
-                      <td className="p-1 border-r border-slate-400 text-center text-slate-600">{it.usage}</td>
-                      <td className="p-1 border-r border-slate-400 text-center text-slate-500">{it.prevExcess}</td>
-                      <td className="p-1 border-r border-slate-400 text-center text-blue-600 font-bold">{it.dispensePack}</td>
-                      <td className="p-1 text-center font-extrabold text-sm bg-emerald-50/50">
-                        {isAdmin && isPending ? <input type="number" className="w-16 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white" value={it.dispenseQty} onChange={e=>handleAdjust(i, e.target.value)} /> : <span>{it.dispenseQty} {it.isAdjusted && <span className="text-[9px] text-amber-600 ml-1">*(ปรับ)*</span>}</span>}
-                      </td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-              {showPdf && req.pdf_url && <div className="xl:w-1/2 h-[600px] border-2 border-slate-800 rounded-xl overflow-hidden no-print"><iframe src={req.pdf_url.replace(/\/view.*/, '/preview')} className="w-full h-full" /></div>}
+
+            {/* แสดง Skipped Items สำหรับ Admin */}
+            {isAdmin && isPending && req.skipped_items && req.skipped_items.length > 0 && (
+               <div className="mb-6 bg-amber-50 p-4 rounded-xl border border-amber-200 no-print">
+                  <h3 className="font-bold text-amber-800 mb-2"><i className="fa-solid fa-triangle-exclamation mr-2"></i> รายการยาที่ รพ.สต. ข้ามไป (หาไม่เจอ)</h3>
+                  <table className="w-full text-sm text-left">
+                     <thead><tr className="border-b border-amber-200"><th>ชื่อยา (ข้อมูลดิบ)</th><th>ยอดใช้</th></tr></thead>
+                     <tbody>
+                        {req.skipped_items.map((s, idx) => (
+                           <tr key={idx} className="border-b border-amber-100">
+                              <td className="py-2 text-amber-900">{s.rawName}</td>
+                              <td className="py-2 font-bold text-amber-700">{s.usage}</td>
+                           </tr>
+                        ))}
+                     </tbody>
+                  </table>
+               </div>
+            )}
+
+            {isAdmin && isPending && <p className="text-amber-600 text-sm mb-4 font-bold bg-amber-50 p-2 rounded no-print"><i className="fa-solid fa-pen-to-square mr-1"></i> แอดมินสามารถคลิกแก้ตัวเลขในช่อง "จำนวนจ่าย" (สีเขียว) ได้</p>}
+
+            {/* ⭐️ เค้าโครงเอกสารสำหรับพิมพ์ (Print Area) */}
+            <div className="print-area font-sarabun w-full">
+               
+               {['32', '1', '25', '3'].map((typeKey, typeIdx) => {
+                  const typeItems = groupedItems[typeKey];
+                  if(typeItems.length === 0) return null;
+                  
+                  let subTotalItems = typeItems.length;
+                  let subTotalPrice = 0;
+                  grandTotalItems += subTotalItems;
+
+                  return (
+                     <div key={typeKey} className="mb-10 page-break-auto">
+                        <div className="print-header mb-6">
+                           <h1 className="text-lg font-bold mb-1">แบบเบิกเวชภัณฑ์สำหรับโรงพยาบาลส่งเสริมสุขภาพระดับตำบล (รพ.สต)</h1>
+                           <div className="text-left text-[14px] leading-relaxed mt-4">
+                              <p>ข้าพเจ้า <span className="font-semibold underline underline-offset-4 decoration-dotted">{req.created_by_name}</span> ตำแหน่ง <span className="font-semibold underline underline-offset-4 decoration-dotted">{userInfo.position}</span></p>
+                              <p>หน่วยงาน (รพ.สต.) <span className="font-semibold underline underline-offset-4 decoration-dotted">{hosp?.hospital_name}</span> อ.สวี จ.ชุมพร</p>
+                              <p>งบที่ได้รับจัดสรรปี <span className="font-semibold underline underline-offset-4 decoration-dotted">{fiscalYear}</span> เป็นเงิน ............................................ บาท ได้เบิกเวชภัณฑ์ ปีนี้ ไปแล้วมูลค่า ............................................ บาท </p>
+                              <p>มีความประสงค์เบิกเวชภัณฑ์ปี <span className="font-semibold underline underline-offset-4 decoration-dotted">{fiscalYear}</span> ครั้งที่ <span className="font-semibold underline underline-offset-4 decoration-dotted">{term}</span> ดังนี้</p>
+                           </div>
+                        </div>
+
+                        <h3 className="font-bold text-md mb-2">{DRUG_TYPES[typeKey]}</h3>
+                        <table className="official-table w-full text-[11px] border-collapse border border-black mb-2">
+                           <thead>
+                              <tr className="bg-gray-200">
+                                 <th className="w-8">ที่</th>
+                                 <th className="w-16">รหัส</th>
+                                 <th>ชื่อยา/เวชภัณฑ์</th>
+                                 <th className="w-16">ขนาดบรรจุ</th>
+                                 <th className="w-12">สำรอง<br/>(VMI)</th>
+                                 <th className="w-12">ยอดใช้</th>
+                                 <th className="w-12">ยอดเหลือ</th>
+                                 <th className="w-16">จำนวนจ่าย</th>
+                                 <th className="w-16">ราคา/หน่วย</th>
+                                 <th className="w-20">มูลค่า (บาท)</th>
+                                 <th className="w-16">คงเหลือ</th>
+                              </tr>
+                           </thead>
+                           <tbody>
+                              {typeItems.map((it, i) => {
+                                 const itemValue = it.dispenseQty * (it.price || 0);
+                                 subTotalPrice += itemValue;
+                                 grandTotalPrice += itemValue;
+                                 return (
+                                    <tr key={i}>
+                                       <td className="text-center">{i+1}</td>
+                                       <td className="text-center font-mono">{it.drugId}</td>
+                                       <td className="font-semibold">
+                                          {it.name} {it.isSpecial && <span className="text-[9px] text-red-600 no-print ml-1">(พิเศษ)</span>}
+                                       </td>
+                                       <td className="text-center">{it.packSize} {it.unit}</td>
+                                       <td className="text-center text-gray-600">{it.targetVMI}</td>
+                                       <td className="text-center">{it.usage}</td>
+                                       <td className="text-center text-blue-700">{it.prevExcess - it.usage}</td>
+                                       <td className="text-center font-bold bg-emerald-50/50 no-print">
+                                          {isAdmin && isPending ? <input type="number" className="w-16 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white text-emerald-700" value={it.dispenseQty} onChange={e=>handleAdjust(editableItems.findIndex(x=>x.drugId===it.drugId), e.target.value)} /> : <span>{it.dispenseQty}</span>}
+                                       </td>
+                                       <td className="text-center font-bold hidden print:table-cell">{it.dispenseQty}</td>
+                                       <td className="text-right text-slate-500">{(it.price || 0).toFixed(2)}</td>
+                                       <td className="text-right font-semibold">{itemValue.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                       <td></td>
+                                    </tr>
+                                 )
+                              })}
+                           </tbody>
+                           <tfoot>
+                              <tr>
+                                 <td colSpan="9" className="text-right font-bold">รวมมูลค่าหมวด {DRUG_TYPES[typeKey]}</td>
+                                 <td className="text-right font-bold text-indigo-700">{subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                 <td></td>
+                              </tr>
+                           </tfoot>
+                        </table>
+                     </div>
+                  );
+               })}
+
+               {/* Grand Total */}
+               <div className="flex justify-end mb-12">
+                  <table className="official-table w-[300px]">
+                     <tbody>
+                        <tr><th className="text-right">รวมจำนวนรายการทั้งหมด:</th><td className="text-center font-bold">{grandTotalItems} รายการ</td></tr>
+                        <tr><th className="text-right bg-gray-200">รวมเป็นเงินทั้งสิ้น:</th><td className="text-right font-bold text-lg bg-gray-200">{grandTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})} บาท</td></tr>
+                     </tbody>
+                  </table>
+               </div>
+
+               {/* Signatures */}
+               <div className="flex justify-between text-[13px] px-8 mb-16 break-inside-avoid">
+                  <div className="text-center w-1/3">
+                     <p>ลงชื่อ ..................................................... ผู้เบิก</p>
+                     <p className="mt-2">( {req.created_by_name} )</p>
+                     <p className="mt-1">วันที่ ........./........./.........</p>
+                  </div>
+                  <div className="text-center w-1/3">
+                     <p>ลงชื่อ ..................................................... ผอ.รพ.สต.</p>
+                     <p className="mt-2">( ..................................................... )</p>
+                     <p className="mt-1">วันที่ ........./........./.........</p>
+                  </div>
+               </div>
+
+               <div className="flex justify-between text-[13px] px-8 break-inside-avoid">
+                  <div className="text-center w-1/3">
+                     <p>ลงชื่อ ..................................................... ผู้อนุมัติ</p>
+                     <p className="mt-2">( ..................................................... )</p>
+                     <p className="mt-1">วันที่ ........./........./.........</p>
+                  </div>
+                  <div className="text-center w-1/3">
+                     <p>ลงชื่อ ..................................................... ผู้จ่าย</p>
+                     <p className="mt-2">( ..................................................... )</p>
+                     <p className="mt-1">วันที่ ........./........./.........</p>
+                  </div>
+                  <div className="text-center w-1/3">
+                     <p>ลงชื่อ ..................................................... ผู้รับ</p>
+                     <p className="mt-2">( ..................................................... )</p>
+                     <p className="mt-1">วันที่ ........./........./.........</p>
+                  </div>
+               </div>
+
             </div>
           </div>
         );
@@ -1306,21 +1262,16 @@
 
       const AdminConfigView = () => {
         const [activeTab, setActiveTab] = useState('stock');
-        const [deleteTarget, setDeleteTarget] = useState(null);
         const [editTarget, setEditTarget] = useState(null); 
         const [isSaving, setIsSaving] = useState(false);
         const [showFormula, setShowFormula] = useState(null); 
 
-        const requestDelete = (col, id) => setDeleteTarget({ col, id });
-
-        const executeDelete = async () => {
-          if(!deleteTarget) return;
+        const executeDelete = async (col, id) => {
           try {
-            await db.collection(deleteTarget.col).doc(deleteTarget.id).delete();
+            await db.collection(col).doc(id).delete();
             showToast('ลบข้อมูลสำเร็จ');
             await refreshData(); 
           } catch(e) { showToast(e.message, 'error'); }
-          setDeleteTarget(null);
         };
 
         const handleSave = async (col, id, data) => {
@@ -1351,7 +1302,7 @@
           } else if (editTarget.col === 'master_hospitals') {
              docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name };
           } else if (editTarget.col === 'users') {
-             docId = editTarget.data.id; payload = { name: data.name, hospital_id: data.hospital_id, role: data.role };
+             docId = editTarget.data.id; payload = { name: data.name, position: data.position, hospital_id: data.hospital_id, role: data.role };
           }
           await handleSave(editTarget.col, docId, payload);
         };
@@ -1365,9 +1316,9 @@
           const [searchTerm, setSearchTerm] = useState('');
           const activeCSV = appDb.csvRequests?.find(r => r.hospital_id === selHosp && r.status === 'Approved');
           
-          // ⭐️ ตัวแปรปรับสูตรสด
           const [zScore, setZScore] = useState(1.645);
           const [reviewPeriod, setReviewPeriod] = useState(30);
+          const [leadTime, setLeadTime] = useState(7);
 
           const stockList = useMemo(() => {
             return appDb.drugs.map(d => {
@@ -1382,12 +1333,13 @@
                   }
               });
 
-              // ⭐️ ถ้ามี csvData ให้ Re-calculate ตาม Z-score และ Review Period ใหม่
               let dynamicTarget = par?.par_qty || 0;
               let dynamicCSV = csvData;
               if (csvData) {
-                  const SS = zScore * (csvData.sd / reviewPeriod) * Math.sqrt(7);
-                  const rawInitial = (csvData.adu * 60) + SS;
+                  // SS = Z * (SD/30) * SQRT(LT)
+                  const SDMonth = csvData.sd * Math.sqrt(30); // Convert back roughly if stored as daily SD. Actually in CSV processing we calculated it per month based on 7 elements. Let's assume csvData.sd is the monthly SD. 
+                  const SS = zScore * (csvData.sd / reviewPeriod) * Math.sqrt(leadTime);
+                  const rawInitial = (csvData.adu * 60) + SS; // 60 days
                   const ceilInitial = Math.ceil(rawInitial);
                   let finalQty, finalPack;
                   if (d.unpacked) {
@@ -1406,7 +1358,7 @@
               (item.targetStock > 0 || item.currentBal > 0 || item.csvData || item.hasReqHistory) && 
               ((item.drug_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || (item.drug_id || '').includes(searchTerm))
             );
-          }, [appDb, selHosp, searchTerm, activeCSV, zScore, reviewPeriod]);
+          }, [appDb, selHosp, searchTerm, activeCSV, zScore, reviewPeriod, leadTime]);
 
           return (
             <div className="p-6">
@@ -1417,13 +1369,16 @@
                   </select>
                 </div>
                 
-                <div className="flex gap-4 items-center bg-white p-2 rounded-lg border border-slate-200 w-full lg:w-auto">
-                   <div className="text-sm font-bold text-slate-600">ตัวแปรสูตร:</div>
-                   <label className="text-xs text-slate-500 flex flex-col">Z-Score
+                <div className="flex gap-3 items-center bg-white p-2 rounded-lg border border-slate-200 w-full lg:w-auto overflow-x-auto">
+                   <div className="text-sm font-bold text-slate-600 whitespace-nowrap">ตัวแปรสูตร:</div>
+                   <label className="text-xs text-slate-500 flex flex-col whitespace-nowrap">Z-Score
                      <input type="number" step="0.001" className="w-16 border rounded p-1 text-center font-bold text-slate-800" value={zScore} onChange={e=>setZScore(Number(e.target.value) || 0)} />
                    </label>
-                   <label className="text-xs text-slate-500 flex flex-col">Review Period
+                   <label className="text-xs text-slate-500 flex flex-col whitespace-nowrap">Review Period
                      <input type="number" className="w-16 border rounded p-1 text-center font-bold text-slate-800" value={reviewPeriod} onChange={e=>setReviewPeriod(Number(e.target.value) || 1)} />
+                   </label>
+                   <label className="text-xs text-slate-500 flex flex-col whitespace-nowrap">Lead Time
+                     <input type="number" className="w-16 border rounded p-1 text-center font-bold text-slate-800" value={leadTime} onChange={e=>setLeadTime(Number(e.target.value) || 1)} />
                    </label>
                 </div>
 
@@ -1438,10 +1393,10 @@
                   <thead className="bg-slate-100 border-b sticky top-0 z-10">
                     <tr>
                       <th className="p-3" rowSpan="2">รายการยา [รหัส]</th>
-                      <th className="p-3 text-center bg-blue-50/80 border-x border-blue-200" colSpan="7">ประวัติการใช้ 7 เดือน (Initial CSV)</th>
+                      <th className="p-3 text-center bg-blue-50/80 border-x border-blue-200" colSpan="7">ประวัติยอดใช้รายเดือน (Initial CSV)</th>
                       <th className="p-3 text-center bg-indigo-50/80 border-r border-indigo-200" colSpan="2">คำนวณ (ADU/SD)</th>
                       <th className="p-3 text-center text-blue-800 bg-blue-100/80 font-bold border-r border-blue-200" rowSpan="2">Target Stock</th>
-                      <th className="p-3 text-center text-amber-800 bg-amber-100/80 font-bold" rowSpan="2">ยอดยกมาปัจจุบัน<br/><span className="text-xs font-normal">(Credit)</span></th>
+                      <th className="p-3 text-center text-amber-800 bg-amber-100/80 font-bold" rowSpan="2">ยอดยกมา<br/><span className="text-xs font-normal">(Credit)</span></th>
                       <th className="p-3 text-center bg-slate-100/80" rowSpan="2">สูตร</th>
                     </tr>
                     <tr className="bg-slate-50 text-[11px] text-slate-500 text-center border-b">
@@ -1450,7 +1405,7 @@
                       <th className="p-1 border-r border-blue-100">ก.พ. 69</th><th className="p-1 border-r border-blue-100">มี.ค. 69</th>
                       <th className="p-1 border-r border-blue-200">เม.ย. 69</th>
                       <th className="p-1 bg-indigo-50/50 border-r border-indigo-100">Avg. Daily Use</th>
-                      <th className="p-1 bg-indigo-50/50 border-r border-indigo-200">SD daily</th>
+                      <th className="p-1 bg-indigo-50/50 border-r border-indigo-200">SD (เดือน)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1469,7 +1424,7 @@
                         <td className="p-2 text-center text-slate-600 border-r border-blue-200">{d.csvData ? d.csvData.m7 : '-'}</td>
                         
                         <td className="p-2 text-center font-bold text-indigo-700 bg-indigo-50/30 border-r border-indigo-100">{d.csvData ? d.csvData.adu : '-'}</td>
-                        <td className="p-2 text-center font-bold text-indigo-700 bg-indigo-50/30 border-r border-indigo-200">{d.csvData ? (d.csvData.sd/reviewPeriod).toFixed(3) : '-'}</td>
+                        <td className="p-2 text-center font-bold text-indigo-700 bg-indigo-50/30 border-r border-indigo-200">{d.csvData ? d.csvData.sd : '-'}</td>
 
                         <td className="p-3 text-center bg-blue-50 border-r border-blue-100">
                           <input type="number" className="w-20 text-center border-b-2 border-blue-400 bg-transparent font-extrabold text-blue-700 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 rounded p-1" value={d.targetStock} onChange={e=>handleSave('config_par', `${selHosp}_${d.drug_id}`, {hospital_id: selHosp, drug_id: d.drug_id, par_qty: Number(e.target.value)})} />
@@ -1505,13 +1460,13 @@
                         <p className="text-[10px] text-blue-400 mt-1">ΣM / 210 วัน</p>
                       </div>
                       <div className="bg-amber-50 p-4 rounded-xl border border-amber-200">
-                        <p className="text-xs text-amber-600 font-bold mb-1">Standard Deviation (SD daily)</p>
-                        <p className="text-2xl font-black text-amber-700">{(showFormula.sd/reviewPeriod).toFixed(3)}</p>
+                        <p className="text-xs text-amber-600 font-bold mb-1">Standard Deviation (SD รายเดือน)</p>
+                        <p className="text-2xl font-black text-amber-700">{showFormula.sd}</p>
                       </div>
                       <div className="bg-purple-50 p-4 rounded-xl border border-purple-200">
                         <p className="text-xs text-purple-600 font-bold mb-1">Safety Stock (SS)</p>
                         <p className="text-2xl font-black text-purple-700">{showFormula.ss}</p>
-                        <p className="text-[10px] text-purple-400 mt-1">{zScore} * ({showFormula.sd}/{reviewPeriod}) * √7</p>
+                        <p className="text-[10px] text-purple-400 mt-1">{zScore} * ({showFormula.sd}/{reviewPeriod}) * √{leadTime}</p>
                       </div>
                     </div>
                     <div className="p-6 bg-emerald-50 rounded-2xl border-2 border-emerald-200 text-center mt-6">
@@ -1599,7 +1554,7 @@
                         <td className="p-4 text-right text-emerald-600 font-bold">{d.price || 0}</td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'master_drugs', data: d, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                          <button onClick={()=>requestDelete('master_drugs', d.drug_id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={()=>setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบยา ${d.drug_name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('master_drugs', d.drug_id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1658,7 +1613,7 @@
                         <td className="p-4 font-bold text-slate-800">{u.unit_name}</td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'master_unit', data: u, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                          <button onClick={()=>requestDelete('master_unit', u.unit_id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={()=>setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบหน่วย ${u.unit_name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('master_unit', u.unit_id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1696,7 +1651,7 @@
                         <td className="p-4 font-bold text-slate-800">{h.hospital_name}</td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'master_hospitals', data: h, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                          <button onClick={()=>requestDelete('master_hospitals', h.hospital_id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={()=>setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบ ${h.hospital_name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('master_hospitals', h.hospital_id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1712,19 +1667,20 @@
             <div className="p-6">
               <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                 <table className="w-full text-left text-sm border-collapse">
-                  <thead className="bg-slate-50 border-b"><tr><th className="p-4">ชื่อผู้ใช้งาน</th><th className="p-4">อีเมล</th><th className="p-4">รพ.สต. ที่สังกัด</th><th className="p-4">ระดับสิทธิ์ (Role)</th><th className="p-4 text-center">จัดการ</th></tr></thead>
+                  <thead className="bg-slate-50 border-b"><tr><th className="p-4">ชื่อผู้ใช้งาน</th><th className="p-4">อีเมล</th><th className="p-4">ตำแหน่ง</th><th className="p-4">รพ.สต. ที่สังกัด</th><th className="p-4">ระดับสิทธิ์</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                   <tbody>
                     {appDb.usersList.map(u=>(
                       <tr key={u.id} className="border-b hover:bg-slate-50">
                         <td className="p-4 font-bold text-slate-800">{u.name}</td>
                         <td className="p-4 text-slate-500">{u.email}</td>
+                        <td className="p-4 text-slate-600">{u.position || '-'}</td>
                         <td className="p-4 text-slate-600 font-medium">{appDb.hospitals.find(h=>h.hospital_id === u.hospital_id)?.hospital_name || u.hospital_id}</td>
                         <td className="p-4">
                           <span className={`px-2 py-1 rounded text-xs font-bold ${u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{u.role === 'admin' ? 'แอดมิน' : 'รพ.สต.'}</span>
                         </td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'users', data: u, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                          <button onClick={()=>requestDelete('users', u.id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={()=>setConfirmDialog({title:'ยืนยันลบผู้ใช้งาน', message:`คุณต้องการลบผู้ใช้งาน ${u.name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('users', u.id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1739,7 +1695,6 @@
           const pendingAdjustments = appDb.stockAdjustments ? appDb.stockAdjustments.filter(a => a.status === 'Pending') : [];
 
           const handleApprove = async (adj) => {
-            if(!confirm('ยืนยันการอนุมัติปรับสต๊อกรายการนี้?')) return;
             setIsSaving(true);
             try {
               const batch = db.batch();
@@ -1755,7 +1710,6 @@
           };
 
           const handleReject = async (adj) => {
-            if(!confirm('ต้องการปฏิเสธการขอปรับสต๊อกนี้?')) return;
             setIsSaving(true);
             try {
               await db.collection('stock_adjustments').doc(adj.id).update({ status: 'Rejected', rejected_at: firebase.firestore.FieldValue.serverTimestamp() });
@@ -1794,8 +1748,8 @@
                           </td>
                           <td className="p-4 text-amber-700 bg-amber-50/50 italic leading-snug">"{adj.reason}"</td>
                           <td className="p-4 text-center space-x-2 whitespace-nowrap">
-                            <button onClick={()=>handleApprove(adj)} className="bg-emerald-500 text-white px-3 py-2 rounded-lg shadow hover:bg-emerald-600"><i className="fa-solid fa-check mr-1"></i> อนุมัติ</button>
-                            <button onClick={()=>handleReject(adj)} className="bg-red-500 text-white px-3 py-2 rounded-lg shadow hover:bg-red-600"><i className="fa-solid fa-xmark mr-1"></i> ปฏิเสธ</button>
+                            <button onClick={()=>setConfirmDialog({title:'ยืนยันอนุมัติ', message:'คุณต้องการอนุมัติปรับสต๊อกนี้ใช่หรือไม่?', onConfirm: ()=>handleApprove(adj), icon:'fa-check', confirmText:'อนุมัติ'})} className="bg-emerald-500 text-white px-3 py-2 rounded-lg shadow hover:bg-emerald-600"><i className="fa-solid fa-check mr-1"></i> อนุมัติ</button>
+                            <button onClick={()=>setConfirmDialog({title:'ปฏิเสธคำขอ', message:'คุณต้องการปฏิเสธการขอปรับสต๊อกนี้ใช่หรือไม่?', onConfirm: ()=>handleReject(adj), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="bg-red-500 text-white px-3 py-2 rounded-lg shadow hover:bg-red-600"><i className="fa-solid fa-xmark mr-1"></i> ปฏิเสธ</button>
                           </td>
                         </tr>
                       )
@@ -1812,7 +1766,6 @@
           const pendingRequests = appDb.csvRequests ? appDb.csvRequests.filter(r => r.status === 'Pending') : [];
 
           const handleApproveCSV = async (reqDoc) => {
-            if(!confirm('ยืนยันการอนุมัติ Initial Stock และสร้างใบเบิก พ.ค. 69 อัตโนมัติ?')) return;
             setIsSaving(true);
             try {
               const batches = [];
@@ -1849,16 +1802,16 @@
                 currentBatch.set(db.collection('config_par').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, par_qty: item.finalQty }, { merge: true }); addOp();
                 currentBatch.set(db.collection('current_excess').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, excess_balance: item.finalQty, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); addOp();
 
-                // นำไปใส่ในบิลเดือน พ.ค. 69
+                // นำไปใส่ในบิลเดือน พ.ค. 69 โดยให้ dispenseQty = finalQty
                 newReqItems.push({
                    drugId: item.drug_id, name: item.drugName || item.drug_id, 
-                   usage: 0, 
+                   usage: 0, prevExcess: 0, netNeed: item.finalQty, targetVMI: item.finalQty,
                    dispensePack: item.finalPack, dispenseQty: item.finalQty, 
-                   newExcess: item.finalQty, packSize: item.packSize 
+                   newExcess: item.finalQty, packSize: item.packSize, type: item.type || '1', price: item.price || 0 
                 });
               });
 
-              // ⭐️ เซฟบิล พ.ค. 69
+              // ⭐️ เซฟบิล พ.ค. 69 อัตโนมัติ เพื่อตั้งต้นระบบ
               currentBatch.set(db.collection('requisitions').doc(newReqId), {
                  hospitalId: hospId, month: 5, year: 2026, status: 'Completed', 
                  created_by_name: 'System (CSV Setup)', items: newReqItems
@@ -1867,13 +1820,12 @@
 
               if (opCount > 0) batches.push(currentBatch.commit());
               await Promise.all(batches);
-              showToast('อนุมัติ Initial Stock และสร้างบิล พ.ค. 69 สำเร็จ');
+              showToast('อนุมัติ Initial Stock และสร้างบิลตั้งต้น พ.ค. 69 สำเร็จ');
               await refreshData();
             } catch (e) { showToast(e.message, 'error'); } finally { setIsSaving(false); }
           };
 
           const handleRejectCSV = async (reqDoc) => {
-            if(!confirm('ต้องการลบคำขอ Initial Stock นี้ทิ้ง?')) return;
             setIsSaving(true);
             try {
               await db.collection('csv_initial_requests').doc(reqDoc.id).delete();
@@ -1903,8 +1855,8 @@
                           <td className="p-4 font-semibold text-slate-800">{hospName} <div className="text-xs font-normal text-slate-500 mt-1">ผู้ทำรายการ: {req.user_name}</div></td>
                           <td className="p-4 text-center font-bold text-indigo-600 bg-indigo-50/50">{req.items?.length || 0} รายการ</td>
                           <td className="p-4 text-center space-x-2">
-                            <button onClick={()=>handleApproveCSV(req)} className="bg-indigo-500 text-white px-3 py-2 rounded-lg shadow hover:bg-indigo-600"><i className="fa-solid fa-cloud-arrow-down mr-1"></i> อนุมัติเข้าฐานข้อมูล</button>
-                            <button onClick={()=>handleRejectCSV(req)} className="bg-red-500 text-white px-3 py-2 rounded-lg shadow hover:bg-red-600"><i className="fa-solid fa-trash"></i> ลบทิ้ง</button>
+                            <button onClick={()=>setConfirmDialog({title:'ยืนยันอนุมัติ Initial Stock', message:'ยืนยันการอนุมัติ Initial Stock และสร้างบิลเดือน พ.ค. 69 อัตโนมัติ?', onConfirm: ()=>handleApproveCSV(req), icon:'fa-cloud-arrow-down', confirmText:'นำเข้า'})} className="bg-indigo-500 text-white px-3 py-2 rounded-lg shadow hover:bg-indigo-600"><i className="fa-solid fa-cloud-arrow-down mr-1"></i> นำเข้าฐานข้อมูล</button>
+                            <button onClick={()=>setConfirmDialog({title:'ยืนยันลบคำขอ', message:'ต้องการลบคำขอ Initial Stock นี้ทิ้ง?', onConfirm: ()=>handleRejectCSV(req), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="bg-red-500 text-white px-3 py-2 rounded-lg shadow hover:bg-red-600"><i className="fa-solid fa-trash"></i> ลบทิ้ง</button>
                           </td>
                         </tr>
                       )
@@ -1912,25 +1864,6 @@
                     {pendingRequests.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-slate-400">ไม่มีคำขอ Initial Stock แบบ CSV ที่รออนุมัติ</td></tr>}
                   </tbody>
                 </table>
-              </div>
-            </div>
-          );
-        };
-
-        const DeleteConfirmModal = () => {
-          if (!deleteTarget) return null;
-          return (
-            <div className="fixed inset-0 z-[200] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center animate-fade-in px-4">
-              <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl">
-                <div className="flex items-center text-red-500 mb-4">
-                  <i className="fa-solid fa-triangle-exclamation text-3xl mr-3"></i>
-                  <h3 className="text-xl font-bold text-slate-800">ยืนยันการลบข้อมูล</h3>
-                </div>
-                <p className="text-slate-500 mb-6">คุณไม่สามารถกู้คืนข้อมูลได้หลังจากกดยืนยันการลบแล้ว</p>
-                <div className="flex justify-end gap-3">
-                  <button onClick={()=>setDeleteTarget(null)} className="px-6 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200">ยกเลิก</button>
-                  <button onClick={executeDelete} className="px-6 py-2 bg-red-500 text-white rounded-xl font-bold shadow-lg shadow-red-200 hover:bg-red-600">ยืนยันลบ</button>
-                </div>
               </div>
             </div>
           );
@@ -2043,6 +1976,10 @@
                           <input name="name" defaultValue={editTarget.data.name} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                         </div>
                         <div>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">ตำแหน่ง</label>
+                          <input name="position" defaultValue={editTarget.data.position} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                        </div>
+                        <div>
                           <label className="text-sm font-bold text-slate-600 block mb-1">รพ.สต. ต้นสังกัด</label>
                           <select name="hospital_id" defaultValue={editTarget.data.hospital_id} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required>
                             <option value="">- เลือก รพ.สต. -</option>
@@ -2069,8 +2006,6 @@
                 </form>
               </Modal>
             )}
-            
-            <DeleteConfirmModal />
           </div>
         );
       };
@@ -2108,6 +2043,7 @@
               {currentView === 'config' && <AdminConfigView />}
             </div>
           </div>
+          <UniversalConfirmModal />
           {toast && <Toast {...toast} onClose={() => setToast(null)} />}
         </div>
       );

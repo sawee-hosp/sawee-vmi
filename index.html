@@ -13,7 +13,6 @@
   <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
-  <!-- Libraries สำหรับอ่าน CSV และ Excel -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
@@ -25,9 +24,7 @@
     @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap');
     body { font-family: 'Sarabun', sans-serif; background-color: #f1f5f9; }
     .bg-gradient-main { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); }
-    .text-gradient { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     
-    /* CSS สำหรับจัดหน้าเอกสาร A4 ปริ้นต์เป็น PDF */
     @media print {
       @page { size: A4 portrait; margin: 10mm; }
       body { background-color: #fff; }
@@ -37,20 +34,13 @@
       .no-print { display: none !important; }
       
       table.official-table { width: 100%; border-collapse: collapse; font-size: 11px !important; margin-bottom: 10px; }
-      table.official-table th, table.official-table td { padding: 4px !important; white-space: nowrap !important; border: 1px solid #000 !important; }
+      table.official-table th, table.official-table td { padding: 4px !important; white-space: normal !important; border: 1px solid #000 !important; }
       table.official-table th { background-color: #f0f0f0 !important; -webkit-print-color-adjust: exact; text-align: center; }
       
       .print-header { text-align: center; margin-bottom: 15px; }
-      .print-header h1 { font-size: 18px !important; font-weight: bold; margin-bottom: 5px; }
-      .print-header p { font-size: 14px !important; margin-bottom: 2px; }
+      .print-header h1 { font-size: 16px !important; font-weight: bold; margin-bottom: 5px; }
+      .print-header p { font-size: 13px !important; margin-bottom: 2px; }
       
-      .type-header { background-color: #e0e0e0 !important; -webkit-print-color-adjust: exact; font-weight: bold; font-size: 12px !important; text-align: left !important; }
-      
-      .signature-box { display: flex; justify-content: space-between; margin-top: 30px; font-size: 13px !important; }
-      .signature-item { text-align: center; width: 30%; }
-      .signature-line { border-bottom: 1px dotted #000; display: inline-block; width: 120px; margin-bottom: 5px; }
-      
-      /* บังคับขึ้นหน้าใหม่ถ้าตารางยาว */
       .page-break { page-break-before: always; }
     }
     
@@ -59,7 +49,6 @@
     .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     .scrollbar-hide::-webkit-scrollbar { display: none; }
-    .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
 </head>
 <body class="text-slate-800 flex flex-col min-h-screen">
@@ -71,7 +60,7 @@
   </footer>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useEffect, useMemo, useRef } = React;
+    const { useState, useEffect, useMemo } = React;
 
     const firebaseConfig = {
       apiKey: "AIzaSyAnzXAEkH8Zz0Ur4lCQ00qa4UqYATTikAs",
@@ -79,22 +68,17 @@
       projectId: "sawee-rxfill",
       storageBucket: "sawee-rxfill.firebasestorage.app",
       messagingSenderId: "186506077335",
-      appId: "1:186506077335:web:71c5f6f90bb26e767df5d2",
-      measurementId: "G-XFL0L1L213"
+      appId: "1:186506077335:web:71c5f6f90bb26e767df5d2"
     };
 
     const GAS_DRIVE_URL = "https://script.google.com/macros/s/AKfycbyxqnZlYJKW22S_DO9PnYFQYsxs6SMbUVI5ckB7yZCDC6KhlqKpE8incdkzmuyVILCd/exec"; 
 
-    if (!firebase.apps.length) {
-      firebase.initializeApp(firebaseConfig);
-    }
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
     const auth = firebase.auth();
 
     const DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
-    const THAI_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
-    // Helper: หางบประมาณปี และ งวดที่
     const getFiscalInfo = (month, year) => {
       let fiscalYear = month >= 10 ? year + 1 + 543 : year + 543;
       let term = month >= 10 ? month - 9 : month + 3;
@@ -129,8 +113,7 @@
       const BATCH_SIZE = 450;
       for (let i = 0; i < operations.length; i += BATCH_SIZE) {
         const batch = db.batch();
-        const chunk = operations.slice(i, i + BATCH_SIZE);
-        chunk.forEach(op => {
+        operations.slice(i, i + BATCH_SIZE).forEach(op => {
           if (op.type === 'set') batch.set(op.ref, op.data, { merge: true });
           if (op.type === 'update') batch.update(op.ref, op.data);
           if (op.type === 'delete') batch.delete(op.ref);
@@ -147,15 +130,13 @@
       const [toast, setToast] = useState(null);
       const [currentReqId, setCurrentReqId] = useState(null);
       const [editReqId, setEditReqId] = useState(null); 
-
-      // Universal Confirm Modal State
       const [confirmDialog, setConfirmDialog] = useState(null);
 
       const showToast = (message, type = 'success') => setToast({ message, type });
 
       const refreshData = async () => {
         try {
-          const [hospSnap, unitSnap, drugSnap, parSnap, balSnap, reqSnap, userSnap, adjustSnap, csvReqSnap] = await Promise.all([
+          const [hospSnap, unitSnap, drugSnap, parSnap, balSnap, reqSnap, userSnap, adjustSnap, csvReqSnap, drugTypeSnap] = await Promise.all([
             db.collection('master_hospitals').get(),
             db.collection('master_unit').get(),
             db.collection('master_drugs').get(),
@@ -164,7 +145,8 @@
             db.collection('requisitions').orderBy('created_at', 'desc').get(),
             db.collection('users').get(),
             db.collection('stock_adjustments').orderBy('date', 'desc').get(),
-            db.collection('csv_initial_requests').orderBy('created_at', 'desc').get()
+            db.collection('csv_initial_requests').orderBy('created_at', 'desc').get(),
+            db.collection('master_drug_types').get()
           ]);
 
           const units = unitSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -173,6 +155,12 @@
             const matchedUnit = units.find(u => u.unit_id === data.unit_id);
             return { ...data, unit_display_name: matchedUnit ? matchedUnit.unit_name : data.unit_id };
           });
+          
+          let fetchedDrugTypes = DRUG_TYPES;
+          if(!drugTypeSnap.empty) {
+             fetchedDrugTypes = {};
+             drugTypeSnap.docs.forEach(d => { fetchedDrugTypes[d.data().type_id] = d.data().type_name; });
+          }
           
           setAppDb({
             hospitals: hospSnap.docs.map(d => ({ id: d.id, ...d.data() })),
@@ -183,18 +171,10 @@
             requisitions: reqSnap.docs.map(d => ({ id: d.id, ...d.data() })),
             usersList: userSnap.docs.map(d => ({ id: d.id, ...d.data() })),
             stockAdjustments: adjustSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-            csvRequests: csvReqSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+            csvRequests: csvReqSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+            drugTypes: fetchedDrugTypes
           });
-        } catch (error) {
-          console.error(error);
-          showToast('เชื่อมต่อฐานข้อมูลล้มเหลว', 'error');
-        }
-      };
-
-      const fetchData = async () => {
-        setLoading(true);
-        await refreshData();
-        setLoading(false);
+        } catch (error) { showToast('เชื่อมต่อฐานข้อมูลล้มเหลว', 'error'); }
       };
 
       useEffect(() => {
@@ -205,11 +185,8 @@
               setCurrentUser({ uid: user.uid, email: user.email, ...userDoc.data() });
               setCurrentView('dashboard');
             }
-          } else {
-            setCurrentUser(null);
-            setCurrentView('login');
-          }
-          fetchData(); 
+          } else { setCurrentUser(null); setCurrentView('login'); }
+          setLoading(true); await refreshData(); setLoading(false);
         });
         return () => unsubscribe();
       }, []);
@@ -219,21 +196,10 @@
         try {
           await auth.setPersistence(rememberMe ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION);
           await auth.signInWithEmailAndPassword(email, password);
-          showToast('เข้าสู่ระบบสำเร็จ');
-        } catch (error) {
-          showToast('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 'error');
-          setLoading(false);
-        }
+        } catch (error) { showToast('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 'error'); setLoading(false); }
       };
 
-      if (loading) {
-        return (
-          <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
-            <div className="loader mb-4"></div>
-            <p className="text-emerald-600 font-semibold animate-pulse">กำลังโหลดข้อมูล...</p>
-          </div>
-        );
-      }
+      if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="loader"></div></div>;
 
       const Modal = ({ title, children, onClose, isOpen, maxWidth }) => {
         if (!isOpen) return null;
@@ -243,7 +209,7 @@
               <div className="p-5 border-b flex justify-between items-center bg-slate-50">
                 <h3 className="text-xl font-bold text-slate-800">{title}</h3>
                 <button onClick={onClose} className="text-slate-400 hover:text-red-500 transition bg-white border border-slate-200 rounded-full w-8 h-8 flex items-center justify-center shadow-sm">
-                  <i className="fa-solid fa-xmark text-lg"></i>
+                  <i className="fa-solid fa-xmark"></i>
                 </button>
               </div>
               <div className="p-6 overflow-y-auto">{children}</div>
@@ -263,8 +229,8 @@
               </div>
               <p className="text-slate-500 mb-6">{confirmDialog.message}</p>
               <div className="flex justify-end gap-3">
-                <button onClick={() => setConfirmDialog(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-semibold hover:bg-slate-200 transition">ยกเลิก</button>
-                <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className={`px-4 py-2 text-white rounded-xl font-semibold shadow-lg transition ${confirmDialog.confirmBtnClass || 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                <button onClick={() => setConfirmDialog(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200">ยกเลิก</button>
+                <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className={`px-4 py-2 text-white rounded-xl font-bold shadow-lg ${confirmDialog.confirmBtnClass || 'bg-indigo-600 hover:bg-indigo-700'}`}>
                   {confirmDialog.confirmText || 'ยืนยัน'}
                 </button>
               </div>
@@ -278,64 +244,40 @@
       // ==========================================
 
       const LoginView = () => {
-        const [email, setEmail] = useState('');
-        const [password, setPassword] = useState('');
-        const [rememberMe, setRememberMe] = useState(true);
-        const [showForgot, setShowForgot] = useState(false);
+        const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
+        const [rememberMe, setRememberMe] = useState(true); const [showForgot, setShowForgot] = useState(false);
         const [forgotEmail, setForgotEmail] = useState('');
-
         const handleForgot = async () => {
           if(!forgotEmail) return showToast('กรุณากรอกอีเมล', 'error');
-          try {
-            await auth.sendPasswordResetEmail(forgotEmail);
-            showToast('ส่งลิงก์รีเซ็ตรหัสผ่านไปที่อีเมลแล้ว');
-            setShowForgot(false);
-            setForgotEmail('');
-          } catch(e) { showToast(e.message, 'error'); }
+          try { await auth.sendPasswordResetEmail(forgotEmail); showToast('ส่งลิงก์ไปที่อีเมลแล้ว'); setShowForgot(false); } catch(e) { showToast(e.message, 'error'); }
         };
-
         return (
           <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100">
             <div className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md border border-slate-100">
               <div className="flex flex-col items-center mb-8">
-                <div className="bg-gradient-main p-4 rounded-2xl text-white mb-4 shadow-lg shadow-emerald-200">
-                  <i className="fa-solid fa-truck-medical text-3xl"></i>
-                </div>
-                <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight">Sawee Rxfill</h1>
+                <div className="bg-gradient-main p-4 rounded-2xl text-white mb-4 shadow-lg"><i className="fa-solid fa-truck-medical text-3xl"></i></div>
+                <h1 className="text-3xl font-extrabold text-slate-800">Sawee Rxfill</h1>
                 <p className="text-slate-500 text-sm mt-1">ระบบเติมยาและเวชภัณฑ์ VMI</p>
               </div>
               <div className="space-y-5">
-                <div>
-                  <label className="text-sm font-semibold text-slate-600 ml-1 mb-1 block">อีเมลเข้าสู่ระบบ</label>
-                  <input type="email" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500 transition" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-sm font-semibold text-slate-600 ml-1 mb-1 block">รหัสผ่าน</label>
-                  <input type="password" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500 transition" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin(email, password, rememberMe)} />
-                </div>
-                <label className="flex items-center text-sm text-slate-600 cursor-pointer">
-                  <input type="checkbox" className="mr-2 w-4 h-4 text-emerald-600 rounded" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
-                  จดจำการเข้าสู่ระบบ
-                </label>
-                <button onClick={() => handleLogin(email, password, rememberMe)} className="w-full bg-gradient-main text-white rounded-xl p-4 font-bold hover:opacity-90 transition shadow-lg shadow-emerald-200">
-                  เข้าสู่ระบบ
-                </button>
+                <input type="email" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
+                <input type="password" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin(email, password, rememberMe)} />
+                <label className="flex items-center text-sm text-slate-600 cursor-pointer"><input type="checkbox" className="mr-2 w-4 h-4 text-emerald-600 rounded" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />จดจำการเข้าสู่ระบบ</label>
+                <button onClick={() => handleLogin(email, password, rememberMe)} className="w-full bg-gradient-main text-white rounded-xl p-4 font-bold hover:opacity-90 shadow-lg">เข้าสู่ระบบ</button>
               </div>
               <div className="mt-6 flex justify-between text-sm">
                 <button onClick={() => setCurrentView('register')} className="text-emerald-600 font-semibold hover:underline">ลงทะเบียนผู้ใช้ใหม่</button>
                 <button onClick={() => setShowForgot(true)} className="text-slate-500 font-semibold hover:underline">ลืมรหัสผ่าน?</button>
               </div>
             </div>
-
             {showForgot && (
-              <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 px-4 animate-fade-in">
+              <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 px-4">
                 <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
                   <h3 className="text-xl font-bold text-slate-800 mb-2">รีเซ็ตรหัสผ่าน</h3>
-                  <p className="text-sm text-slate-500 mb-4">กรุณากรอกอีเมลของคุณเพื่อรับลิงก์สำหรับตั้งรหัสผ่านใหม่</p>
-                  <input type="email" className="w-full border border-slate-300 rounded-lg p-3 mb-4 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="อีเมล" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)} />
+                  <input type="email" className="w-full border p-3 mb-4 rounded-lg outline-none" placeholder="อีเมล" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)} />
                   <div className="flex justify-end gap-3">
-                    <button onClick={() => setShowForgot(false)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold hover:bg-slate-200">ยกเลิก</button>
-                    <button onClick={handleForgot} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700">ส่งลิงก์</button>
+                    <button onClick={() => setShowForgot(false)} className="px-4 py-2 bg-slate-100 rounded-lg">ยกเลิก</button>
+                    <button onClick={handleForgot} className="px-4 py-2 bg-emerald-600 text-white rounded-lg">ส่งลิงก์</button>
                   </div>
                 </div>
               </div>
@@ -347,40 +289,29 @@
       const RegisterView = () => {
         const [formData, setFormData] = useState({ email: '', password: '', name: '', position: '', hospitalId: '' });
         const [isSubmitting, setIsSubmitting] = useState(false);
-
         const handleRegister = async () => {
-          if(!formData.hospitalId) return showToast('กรุณาระบุ รพ.สต.', 'error');
-          if(!formData.name.trim()) return showToast('กรุณาระบุชื่อ-นามสกุล', 'error');
-          if(!formData.position.trim()) return showToast('กรุณาระบุตำแหน่ง', 'error');
+          if(!formData.hospitalId || !formData.name.trim() || !formData.position.trim()) return showToast('กรุณากรอกข้อมูลให้ครบ', 'error');
           setIsSubmitting(true);
           try {
             const userCredential = await auth.createUserWithEmailAndPassword(formData.email, formData.password);
-            await db.collection('users').doc(userCredential.user.uid).set({
-              name: formData.name, position: formData.position, hospital_id: formData.hospitalId, role: 'hospital', created_at: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            await db.collection('users').doc(userCredential.user.uid).set({ name: formData.name, position: formData.position, hospital_id: formData.hospitalId, role: 'hospital', created_at: firebase.firestore.FieldValue.serverTimestamp() });
             showToast('ลงทะเบียนสำเร็จ');
-          } catch (error) {
-            showToast(error.message, 'error');
-          } finally { setIsSubmitting(false); }
+          } catch (error) { showToast(error.message, 'error'); } finally { setIsSubmitting(false); }
         };
-
         return (
           <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100">
             <div className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md">
               <h2 className="text-2xl font-bold mb-6 text-center text-slate-800">ลงทะเบียนเข้าใช้งาน</h2>
               <div className="space-y-4">
                 <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="คำนำหน้า ชื่อ-นามสกุล (เต็ม)" onChange={e => setFormData({...formData, name: e.target.value})} />
-                <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="ตำแหน่ง (เช่น พยาบาลวิชาชีพ)" onChange={e => setFormData({...formData, position: e.target.value})} />
+                <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="ตำแหน่ง (บังคับ)" onChange={e => setFormData({...formData, position: e.target.value})} />
                 <select className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" onChange={e => setFormData({...formData, hospitalId: e.target.value})}>
                   <option value="">-- เลือก รพ.สต. ที่สังกัด --</option>
                   {appDb?.hospitals?.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
                 </select>
                 <input type="email" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="อีเมล (ใช้ล็อกอิน)" onChange={e => setFormData({...formData, email: e.target.value})} />
                 <input type="password" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="รหัสผ่าน" onChange={e => setFormData({...formData, password: e.target.value})} />
-                
-                <button onClick={handleRegister} disabled={isSubmitting} className="w-full bg-gradient-main text-white rounded-xl p-4 font-bold shadow-lg shadow-emerald-200 mt-4 hover:opacity-90">
-                  {isSubmitting ? 'กำลังบันทึก...' : 'ยืนยันลงทะเบียน'}
-                </button>
+                <button onClick={handleRegister} disabled={isSubmitting} className="w-full bg-gradient-main text-white rounded-xl p-4 font-bold shadow-lg mt-4">{isSubmitting ? 'กำลังบันทึก...' : 'ยืนยันลงทะเบียน'}</button>
                 <button onClick={() => setCurrentView('login')} className="w-full text-slate-500 mt-2 hover:underline">กลับหน้าล็อกอิน</button>
               </div>
             </div>
@@ -388,28 +319,75 @@
         );
       };
 
+      const ProfileEditView = () => {
+        const [formData, setFormData] = useState({ name: currentUser.name || '', position: currentUser.position || '' });
+        const [isSaving, setIsSaving] = useState(false);
+        const handleSave = async () => {
+          if(!formData.name || !formData.position) return showToast('กรุณากรอกข้อมูลให้ครบ', 'error');
+          setIsSaving(true);
+          try {
+            await db.collection('users').doc(currentUser.uid).update(formData);
+            const userDoc = await db.collection('users').doc(currentUser.uid).get();
+            setCurrentUser({ uid: currentUser.uid, email: currentUser.email, ...userDoc.data() });
+            showToast('อัปเดตข้อมูลส่วนตัวแล้ว'); setCurrentView('dashboard');
+          } catch(e) { showToast(e.message, 'error'); } finally { setIsSaving(false); }
+        };
+        return (
+          <div className="bg-white rounded-2xl shadow-sm p-8 border max-w-lg mx-auto mt-10">
+            <h2 className="text-2xl font-bold mb-6">แก้ไขข้อมูลส่วนตัว</h2>
+            <div className="space-y-4">
+               <div><label className="text-sm font-bold text-slate-600">ชื่อ-นามสกุล</label><input type="text" className="w-full border p-3 rounded-lg outline-none mt-1" value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} /></div>
+               <div><label className="text-sm font-bold text-slate-600">ตำแหน่ง</label><input type="text" className="w-full border p-3 rounded-lg outline-none mt-1" value={formData.position} onChange={e=>setFormData({...formData, position: e.target.value})} /></div>
+               <div><label className="text-sm font-bold text-slate-600">รพ.สต. (แก้ไขผ่าน Admin)</label><input type="text" disabled className="w-full border p-3 rounded-lg bg-slate-100 text-slate-500 mt-1" value={appDb.hospitals.find(h=>h.hospital_id===currentUser.hospital_id)?.hospital_name || currentUser.hospital_id} /></div>
+            </div>
+            <div className="flex justify-end gap-3 mt-8">
+               <button onClick={()=>setCurrentView('dashboard')} className="px-6 py-2 bg-slate-100 rounded-xl font-bold text-slate-600">ยกเลิก</button>
+               <button onClick={handleSave} disabled={isSaving} className="px-8 py-2 bg-emerald-600 text-white rounded-xl font-bold">{isSaving ? 'กำลังบันทึก...' : 'บันทึก'}</button>
+            </div>
+          </div>
+        )
+      };
+
       const DashboardView = () => {
         const isHospital = currentUser?.role === 'hospital';
+        const isAdmin = currentUser?.role === 'admin';
         const myReqs = isHospital ? appDb.requisitions.filter(r => r.hospitalId === currentUser.hospital_id) : appDb.requisitions;
-        const colleagues = isHospital ? appDb.usersList.filter(u => u.hospital_id === currentUser.hospital_id && u.id !== currentUser.uid) : [];
         
         const today = new Date();
         const currentMonth = today.getMonth() + 1;
         const currentYear = today.getFullYear();
-        const currentMonthReq = isHospital ? myReqs.find(r => r.month === currentMonth && r.year === currentYear) : null;
+        const currentMonthReq = isHospital ? myReqs.find(r => r.month === currentMonth && r.year === currentYear && r.created_by_name !== 'System (CSV Setup)') : null;
+        
+        // ค้นหาบิล Initial Stock (พิมพ์ใบเบิกตั้งต้น)
+        const initReq = isHospital ? appDb.requisitions.find(r => r.hospitalId === currentUser.hospital_id && r.created_by_name === 'System (CSV Setup)') : null;
 
         const handleReqAction = () => {
-          if (!currentMonthReq) {
-            setEditReqId(null);
-            setCurrentView('create_req');
-          } else if (currentMonthReq.status === 'Pending') {
-            setEditReqId(currentMonthReq.id);
-            setCurrentView('create_req');
-          }
+          if (!currentMonthReq) { setEditReqId(null); setCurrentView('create_req'); } 
+          else if (currentMonthReq.status === 'Pending') { setEditReqId(currentMonthReq.id); setCurrentView('create_req'); }
         };
 
         return (
           <div className="space-y-8 animate-fade-in">
+            {/* ⭐️ โปสเตอร์ต้อนรับ เดือนแรก */}
+            <div className="bg-gradient-to-r from-blue-900 to-indigo-900 rounded-2xl shadow-lg p-8 text-white relative overflow-hidden">
+               <div className="absolute top-[-50px] right-[-50px] opacity-10"><i className="fa-solid fa-boxes-packing text-[200px]"></i></div>
+               <h2 className="text-3xl font-black mb-2 text-amber-300">ขั้นตอนการเริ่มต้นระบบ VMI รพ.สต. ใน อ.สวี</h2>
+               <p className="text-lg font-medium text-indigo-200 mb-6 border-b border-indigo-700/50 pb-4 inline-block">เดือนแห่งการเริ่มต้น (พฤษภาคม - มิถุนายน 2569)</p>
+               <ol className="space-y-3 font-medium text-[15px] max-w-4xl relative z-10">
+                  <li className="flex items-start"><span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center shrink-0 mr-3 mt-0.5 shadow">1</span> เข้าเว็บ เลือกปุ่ม "Initial Stock (CSV)" เพื่อส่งข้อมูลอดีตตั้งต้น (ทำครั้งเดียว)</li>
+                  <li className="flex items-start"><span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center shrink-0 mr-3 mt-0.5 shadow">2</span> กรอกรายละเอียดยาที่คงเหลือ ระบบจะคำนวณยอดที่ควรมีจากสถิติย้อนหลัง 7 เดือน</li>
+                  <li className="flex items-start"><span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center shrink-0 mr-3 mt-0.5 shadow">3</span> แอดมินอนุมัติแล้ว สามารถกด <span className="text-amber-300 mx-1 font-bold">"พิมพ์ใบเบิกสต๊อกตั้งต้น"</span> เพื่อเตรียมจัดยาตามระบบ</li>
+                  <li className="flex items-start"><span className="bg-indigo-700 w-6 h-6 rounded-full flex items-center justify-center shrink-0 mr-3 mt-0.5 shadow">4</span> สำหรับเดือนต่อๆ ไป (ตั้งแต่วันที่ 25 เป็นต้นไป) ให้กด "ทำเรื่องเติมยา" และอัปโหลดไฟล์ รบ.301 (.xlsx) ได้เลย</li>
+               </ol>
+            </div>
+
+            {/* ⭐️ TODO: Remove this button after initial month */}
+            {initReq && (
+               <button onClick={() => { setCurrentReqId(initReq.id); setCurrentView('view_req'); }} className="w-full py-5 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-black text-2xl rounded-2xl shadow-xl hover:scale-[1.01] hover:shadow-2xl transition animate-pulse border-4 border-white/20">
+                  <i className="fa-solid fa-print mr-3"></i> พิมพ์ใบเบิกสต๊อกตั้งต้น (Initial Stock เดือนแรก)
+               </button>
+            )}
+
             <div className="flex flex-col md:flex-row justify-between items-start md:items-end bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4">
               <div>
                 <h2 className="text-3xl font-extrabold text-slate-800">ภาพรวมระบบเติมยา</h2>
@@ -417,29 +395,51 @@
                 {isHospital && <p className="text-sm text-slate-400 mt-1"><i className="fa-solid fa-location-dot"></i> {appDb.hospitals.find(h=>h.hospital_id === currentUser.hospital_id)?.hospital_name}</p>}
               </div>
               <div className="space-x-3 flex flex-wrap gap-y-2">
-                {currentUser.role === 'admin' && (
-                   <button onClick={() => setCurrentView('upload_csv')} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition">
-                     <i className="fa-solid fa-file-csv mr-2"></i> Initial Stock (CSV)
-                   </button>
-                )}
+                {isAdmin && <button onClick={() => setCurrentView('upload_csv')} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition"><i className="fa-solid fa-file-csv mr-2"></i> Initial CSV</button>}
+                {isHospital && <button onClick={() => setCurrentView('adjust_stock')} className="bg-white border-2 border-emerald-500 text-emerald-600 px-6 py-3 rounded-xl font-bold hover:bg-emerald-50"><i className="fa-solid fa-boxes-stacked mr-2"></i> ขอปรับสต๊อก</button>}
                 {isHospital && (
-                  <button onClick={() => setCurrentView('adjust_stock')} className="bg-white border-2 border-emerald-500 text-emerald-600 px-6 py-3 rounded-xl font-bold hover:bg-emerald-50 transition">
-                    <i className="fa-solid fa-boxes-stacked mr-2"></i> ขอปรับสต๊อก
-                  </button>
-                )}
-                {isHospital && (
-                  <button 
-                    onClick={handleReqAction} 
-                    disabled={currentMonthReq && currentMonthReq.status === 'Completed'}
-                    className={`px-6 py-3 rounded-xl font-bold shadow-lg transition flex items-center ${currentMonthReq && currentMonthReq.status === 'Completed' ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : currentMonthReq && currentMonthReq.status === 'Pending' ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-amber-200' : 'bg-gradient-main text-white hover:scale-105 shadow-emerald-200'}`}
-                  >
-                    {currentMonthReq && currentMonthReq.status === 'Completed' ? <><i className="fa-solid fa-lock mr-2"></i> เบิกแล้ว (รอรอบหน้า)</> :
-                     currentMonthReq && currentMonthReq.status === 'Pending' ? <><i className="fa-solid fa-pen mr-2"></i> แก้ไขใบเบิกรอบนี้</> : 
-                     <><i className="fa-solid fa-boxes-packing mr-2"></i> ทำเรื่องเติมยา</>}
+                  <button onClick={handleReqAction} disabled={currentMonthReq && currentMonthReq.status === 'Completed'} className={`px-6 py-3 rounded-xl font-bold shadow-lg transition flex items-center ${currentMonthReq && currentMonthReq.status === 'Completed' ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : currentMonthReq && currentMonthReq.status === 'Pending' ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-amber-200' : 'bg-gradient-main text-white hover:scale-105 shadow-emerald-200'}`}>
+                    {currentMonthReq && currentMonthReq.status === 'Completed' ? <><i className="fa-solid fa-lock mr-2"></i> เบิกแล้ว (รอรอบหน้า)</> : currentMonthReq && currentMonthReq.status === 'Pending' ? <><i className="fa-solid fa-pen mr-2"></i> แก้ไขใบเบิกรอบนี้</> : <><i className="fa-solid fa-boxes-packing mr-2"></i> ทำเรื่องเติมยา</>}
                   </button>
                 )}
               </div>
             </div>
+
+            {isAdmin && (
+               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                  <div className="p-5 border-b font-bold text-slate-800 bg-slate-50"><i className="fa-solid fa-chart-pie text-indigo-500 mr-2"></i> สรุปสถานะการส่งบิลประจำเดือน ({currentMonth}/{currentYear})</div>
+                  <div className="overflow-x-auto">
+                     <table className="w-full text-left text-sm whitespace-nowrap">
+                        <thead className="bg-slate-100 border-b">
+                           <tr><th className="p-3">รพ.สต.</th><th className="p-3 text-center">สถานะการเบิก</th><th className="p-3 text-center">พิมพ์ใบเบิก?</th><th className="p-3 text-center">จัดการ</th></tr>
+                        </thead>
+                        <tbody>
+                           {appDb.hospitals.map(h => {
+                              const req = appDb.requisitions.find(r => r.hospitalId === h.hospital_id && r.month === currentMonth && r.year === currentYear && r.created_by_name !== 'System (CSV Setup)');
+                              return (
+                                 <tr key={h.id} className="border-b hover:bg-slate-50">
+                                    <td className="p-3 font-bold">{h.hospital_name}</td>
+                                    <td className="p-3 text-center">
+                                       {req ? (req.status === 'Completed' ? <span className="text-emerald-600 font-bold"><i className="fa-solid fa-check-circle"></i> อนุมัติแล้ว</span> : <span className="text-amber-500 font-bold"><i className="fa-solid fa-clock"></i> รอตรวจสอบ</span>) : <span className="text-slate-400">- ยังไม่ส่ง -</span>}
+                                    </td>
+                                    <td className="p-3 text-center">
+                                       {req?.is_printed ? <span className="text-blue-600 font-bold"><i className="fa-solid fa-print"></i> พิมพ์แล้ว</span> : <span className="text-slate-300">-</span>}
+                                    </td>
+                                    <td className="p-3 text-center">
+                                       {req ? (
+                                          <button onClick={() => { setCurrentReqId(req.id); setCurrentView('view_req'); }} className="bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg font-bold hover:bg-emerald-200">เปิดดู</button>
+                                       ) : (
+                                          <button className="bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg font-bold hover:bg-indigo-200 opacity-50 cursor-not-allowed" title="(โหมด Upload แทน รพ.สต. อยู่ระหว่างพัฒนา)"><i className="fa-solid fa-upload mr-1"></i>อัปโหลดแทน</button>
+                                       )}
+                                    </td>
+                                 </tr>
+                              )
+                           })}
+                        </tbody>
+                     </table>
+                  </div>
+               </div>
+            )}
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-white rounded-2xl shadow-sm p-6 border border-slate-100 flex items-center">
@@ -472,7 +472,7 @@
                   <tbody>
                     {myReqs.map(req => (
                       <tr key={req.id} className="border-b hover:bg-slate-50 transition cursor-pointer" onClick={() => { setCurrentReqId(req.id); setCurrentView('view_req'); }}>
-                        <td className="p-4 font-semibold text-slate-700">{req.id}</td>
+                        <td className="p-4 font-semibold text-slate-700">{req.id} {req.created_by_name === 'System (CSV Setup)' && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded ml-1">Initial</span>}</td>
                         <td className="p-4 text-slate-600">{req.created_by_name || '-'}</td>
                         <td className="p-4 text-slate-600">{req.month}/{req.year}</td>
                         <td className="p-4">
@@ -511,6 +511,344 @@
                 </div>
               )}
             </div>
+            
+            {/* ⭐️ ประวัติยอดย้อนหลังต่อเดือน (User View) */}
+            {isHospital && (
+               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mt-6">
+                  <div className="p-5 border-b font-bold text-slate-800 bg-slate-50"><i className="fa-solid fa-chart-line text-amber-500 mr-2"></i> สรุปมูลค่าการเบิกย้อนหลัง</div>
+                  <div className="overflow-x-auto">
+                     <table className="w-full text-left text-sm whitespace-nowrap">
+                        <thead className="bg-slate-100 border-b">
+                           <tr>
+                              <th className="p-3">รอบเดือน</th>
+                              {Object.values(appDb.drugTypes).map((t,i)=><th key={i} className="p-3 text-right">{t}</th>)}
+                              <th className="p-3 text-right bg-slate-200">รวมทั้งหมด (บาท)</th>
+                           </tr>
+                        </thead>
+                        <tbody>
+                           {myReqs.filter(r => r.status === 'Completed').slice(0, 6).map(req => {
+                              const typeSums = {};
+                              let total = 0;
+                              Object.keys(appDb.drugTypes).forEach(k => typeSums[k] = 0);
+                              
+                              req.items.forEach(it => {
+                                 const val = it.isUnpacked ? (it.dispenseQty / (it.packSize||1)) * (it.price||0) : it.dispensePack * (it.price||0);
+                                 if(typeSums[it.type] !== undefined) typeSums[it.type] += val;
+                                 else typeSums['1'] += val; // default to drug
+                                 total += val;
+                              });
+
+                              return (
+                                 <tr key={req.id} className="border-b hover:bg-slate-50">
+                                    <td className="p-3 font-bold text-slate-700">{THAI_MONTHS[req.month-1]} {req.year + 543}</td>
+                                    {Object.keys(appDb.drugTypes).map((k,i)=><td key={i} className="p-3 text-right text-slate-600">{typeSums[k].toLocaleString(undefined, {minimumFractionDigits:2})}</td>)}
+                                    <td className="p-3 text-right font-bold text-indigo-700 bg-slate-50">{total.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                 </tr>
+                              )
+                           })}
+                           {myReqs.filter(r => r.status === 'Completed').length === 0 && <tr><td colSpan={Object.keys(appDb.drugTypes).length + 2} className="p-6 text-center text-slate-400">ยังไม่มีข้อมูลอนุมัติ</td></tr>}
+                        </tbody>
+                     </table>
+                  </div>
+               </div>
+            )}
+          </div>
+        );
+      };
+
+      const UploadCSVView = () => {
+        const [parsedData, setParsedData] = useState([]);
+        const [isProcessing, setIsProcessing] = useState(false);
+
+        const handleFileUpload = (e) => {
+          const file = e.target.files[0];
+          if(!file) return;
+
+          Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: function(results) {
+              const rawData = results.data;
+              const processed = rawData.map(row => {
+                const m = [
+                  Number(row.usage_m1)||0, Number(row.usage_m2)||0, Number(row.usage_m3)||0,
+                  Number(row.usage_m4)||0, Number(row.usage_m5)||0, Number(row.usage_m6)||0, Number(row.usage_m7)||0
+                ];
+                const total = m.reduce((a,b)=>a+b, 0);
+                const mean = total / 7;
+                
+                const variance = m.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / 6;
+                const sd = Math.sqrt(variance || 0);
+
+                const ADU = total / 210;
+                const SS = 1.645 * (sd / 30) * Math.sqrt(7);
+                const rawInitial = (ADU * 60) + SS; // 60 วันตามคำขอ
+                const ceilInitial = Math.ceil(rawInitial);
+
+                const drug = appDb.drugs.find(d => d.drug_id === row.drug_id);
+                const hosp = appDb.hospitals.find(h => h.hospital_id === row.hospital_id);
+                const packSize = drug ? (Number(drug.pack_size) || 1) : 1;
+                const isUnpacked = drug ? !!drug.unpacked : false;
+
+                let finalQty, finalPack;
+                if (isUnpacked) {
+                  finalQty = ceilInitial; 
+                  finalPack = Math.ceil(ceilInitial / packSize);
+                } else {
+                  finalPack = Math.ceil(ceilInitial / packSize);
+                  finalQty = finalPack * packSize;
+                }
+
+                return {
+                  hospital_id: row.hospital_id,
+                  drug_id: row.drug_id,
+                  m1: m[0], m2: m[1], m3: m[2], m4: m[3], m5: m[4], m6: m[5], m7: m[6],
+                  total, adu: ADU.toFixed(3), sd: sd.toFixed(3), ss: SS.toFixed(3),
+                  ceilInitial, packSize, finalPack, finalQty, isUnpacked,
+                  isNewDrug: !drug,
+                  isNewHosp: !hosp,
+                  drugName: drug ? drug.drug_name : 'ไม่พบชื่อยาในระบบ',
+                  unit: drug ? drug.unit_display_name : '-'
+                };
+              });
+
+              setParsedData(processed);
+            }
+          });
+        };
+
+        const handleSubmitRequest = async () => {
+          if (parsedData.length === 0) return showToast('ไม่มีข้อมูล', 'error');
+          setIsProcessing(true);
+          try {
+            const grouped = {};
+            parsedData.forEach(item => {
+              if(!grouped[item.hospital_id]) grouped[item.hospital_id] = [];
+              grouped[item.hospital_id].push(item);
+            });
+
+            const operations = [];
+            for (const hospId in grouped) {
+              const newReqRef = db.collection('csv_initial_requests').doc();
+              // ใช้ set({merge:true}) ถ้าต้องการอัปเดตเอกสารเดิม (แต่คำขอมักสร้างใหม่)
+              operations.push({
+                type: 'set', ref: newReqRef, 
+                data: { hospital_id: hospId, items: grouped[hospId], status: 'Pending', created_at: firebase.firestore.FieldValue.serverTimestamp(), user_name: currentUser.name }
+              });
+            }
+            await executeBatchChunks(operations);
+            showToast('ส่งข้อมูลคำขอ Initial Stock (CSV) สำเร็จ (ทับข้อมูลเดิมเมื่ออนุมัติ)');
+            setParsedData([]);
+            refreshData();
+            setCurrentView('dashboard');
+          } catch(e) {
+            showToast(e.message, 'error');
+          } finally {
+            setIsProcessing(false);
+          }
+        };
+
+        return (
+          <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 animate-fade-in max-w-6xl mx-auto">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-800">นำเข้าข้อมูล CSV เพื่อตั้งค่า Initial Stock</h2>
+                <p className="text-slate-500 mt-1">คอลัมน์ที่ต้องการ: hospital_id, drug_id, usage_m1 ถึง usage_m7</p>
+              </div>
+              <button onClick={() => setCurrentView('dashboard')} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">กลับหน้าหลัก</button>
+            </div>
+
+            <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 mb-8">
+              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-indigo-300 border-dashed rounded-xl cursor-pointer bg-white hover:bg-indigo-50/50 transition">
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <i className="fa-solid fa-cloud-arrow-up text-4xl text-indigo-400 mb-3"></i>
+                  <p className="text-sm text-slate-600 font-bold">คลิกเพื่อเลือกไฟล์ CSV (7 เดือนย้อนหลัง)</p>
+                </div>
+                <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+              </label>
+            </div>
+
+            {parsedData.length > 0 && (
+              <div className="animate-fade-in">
+                <div className="overflow-x-auto border border-slate-200 rounded-xl mb-6 max-h-[500px] overflow-y-auto">
+                  <table className="w-full text-left whitespace-nowrap text-sm">
+                    <thead className="bg-slate-800 text-white sticky top-0 z-10">
+                      <tr>
+                        <th className="p-3">รพ.สต.</th>
+                        <th className="p-3">รหัสยา</th>
+                        <th className="p-3 text-center">ยอดใช้<br/>(M1-M7)</th>
+                        <th className="p-3 text-center bg-slate-700">ADU</th>
+                        <th className="p-3 text-center bg-slate-700">SD</th>
+                        <th className="p-3 text-center bg-slate-700">Safety<br/>Stock</th>
+                        <th className="p-3 text-center text-amber-300 bg-slate-900">คำนวณ<br/>(60 วัน)</th>
+                        <th className="p-3 text-center">Pack<br/>Size</th>
+                        <th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(แพ็ค)</th>
+                        <th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(หน่วยย่อย)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parsedData.map((row, idx) => (
+                        <tr key={idx} className="border-b hover:bg-slate-50">
+                          <td className="p-3">
+                            <span className="font-bold">{row.hospital_id}</span>
+                            {row.isNewHosp && <span className="ml-2 bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold">รหัสใหม่</span>}
+                          </td>
+                          <td className="p-3">
+                            <div className="font-bold">{row.drug_id} {row.isUnpacked && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded ml-1">แตกหน่วย</span>}</div>
+                            <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{row.drugName}</div>
+                            {row.isNewDrug && <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold mt-1 inline-block">ยาใหม่</span>}
+                          </td>
+                          <td className="p-3 text-center text-slate-500">{row.total}</td>
+                          <td className="p-3 text-center font-mono">{row.adu}</td>
+                          <td className="p-3 text-center font-mono">{row.sd}</td>
+                          <td className="p-3 text-center font-mono text-amber-600">{row.ss}</td>
+                          <td className="p-3 text-center font-bold text-amber-600 bg-amber-50/50">{row.ceilInitial}</td>
+                          <td className="p-3 text-center">{row.packSize}</td>
+                          <td className="p-3 text-center font-bold text-emerald-600">{row.finalPack}</td>
+                          <td className="p-3 text-center font-extrabold text-emerald-700 bg-emerald-50/50">{row.finalQty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex justify-end gap-3">
+                  <button onClick={() => setParsedData([])} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200">เคลียร์ข้อมูล</button>
+                  <button onClick={handleSubmitRequest} disabled={isProcessing} className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition disabled:opacity-50">
+                    {isProcessing ? 'กำลังส่งข้อมูล...' : 'ส่งเรื่องให้ Admin อนุมัติ (ทับข้อมูลเดิม)'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      const AdjustStockView = () => {
+        const hospId = currentUser.hospital_id;
+        const isAdmin = currentUser.role === 'admin';
+        const [searchTerm, setSearchTerm] = useState('');
+        const [showMyStockOnly, setShowMyStockOnly] = useState(true);
+        const [selectedDrug, setSelectedDrug] = useState(null);
+        const [newBalance, setNewBalance] = useState('');
+        const [reason, setReason] = useState('');
+        const [isSaving, setIsSaving] = useState(false);
+
+        const drugList = useMemo(() => {
+          if (!appDb) return [];
+          const myPars = appDb.parLevels.filter(p => String(p.hospital_id) === String(hospId));
+          const myParDrugIds = myPars.map(p => String(p.drug_id));
+
+          let listToProcess = appDb.drugs;
+          if (showMyStockOnly) {
+             listToProcess = appDb.drugs.filter(d => myParDrugIds.includes(String(d.drug_id)));
+          }
+
+          let list = listToProcess.map(drug => {
+            const bal = appDb.balances.find(b => String(b.hospital_id) === String(hospId) && String(b.drug_id) === String(drug.drug_id));
+            return {
+              drugId: drug.drug_id, name: drug.drug_name || 'N/A', unit: drug.unit_display_name || '', currentBal: bal ? Number(bal.excess_balance) : 0
+            };
+          });
+          return list.sort(sortDrugs);
+        }, [appDb, hospId, showMyStockOnly]);
+
+        const filteredList = drugList.filter(d => d.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(d.drugId).includes(searchTerm.toLowerCase()));
+
+        const handleSaveAdjust = async () => {
+          if(!selectedDrug) return showToast('กรุณาเลือกรายการยา', 'error');
+          if(newBalance === '') return showToast('กรุณาระบุยอดยกมาใหม่', 'error');
+          if(!reason.trim()) return showToast('บังคับต้องระบุเหตุผลในการปรับ', 'error');
+          
+          setIsSaving(true);
+          try {
+            const batch = db.batch();
+            const adjStatus = isAdmin ? 'Approved' : 'Pending';
+
+            batch.set(db.collection('stock_adjustments').doc(), {
+              hospital_id: hospId, drug_id: selectedDrug.drugId, old_balance: selectedDrug.currentBal, new_balance: Number(newBalance), 
+              reason: reason, user_name: currentUser.name, status: adjStatus, date: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            if (isAdmin) {
+              const docId = `${hospId}_${selectedDrug.drugId}`;
+              batch.set(db.collection('current_excess').doc(docId), {
+                hospital_id: hospId, drug_id: selectedDrug.drugId, excess_balance: Number(newBalance), last_updated: firebase.firestore.FieldValue.serverTimestamp()
+              }, { merge: true });
+            }
+
+            await batch.commit();
+            showToast(isAdmin ? 'ปรับสต๊อกเรียบร้อยแล้ว' : 'ส่งคำขอปรับสต๊อกแล้ว กรุณารอแอดมินอนุมัติ');
+            setNewBalance(''); setReason(''); setSelectedDrug(null);
+            await refreshData();
+            if(!isAdmin) setCurrentView('dashboard');
+          } catch(e) { showToast(e.message, 'error'); } finally { setIsSaving(false); }
+        };
+
+        return (
+          <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 animate-fade-in max-w-4xl mx-auto">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-800">ขอปรับปรุงยอดยกมา (Adjust Stock)</h2>
+                <p className="text-slate-500 mt-1">กรณีที่สต๊อกในระบบไม่ตรงกับความจริง ต้องส่งเรื่องให้แอดมินอนุมัติ</p>
+              </div>
+              <button onClick={() => setCurrentView('dashboard')} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">กลับหน้าหลัก</button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div>
+                <div className="mb-4 relative">
+                  <i className="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400"></i>
+                  <input type="text" placeholder="ค้นหารายการยา..." className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 transition" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer mb-4 text-emerald-700 font-semibold bg-emerald-50 p-2 rounded-lg border border-emerald-200">
+                  <input type="checkbox" className="w-5 h-5 accent-emerald-600" checked={showMyStockOnly} onChange={e=>setShowMyStockOnly(e.target.checked)} /> 
+                  แสดงเฉพาะยาที่มีในคลังย่อย (ตั้ง Target ไว้)
+                </label>
+                <div className="border border-slate-200 rounded-xl max-h-[400px] overflow-y-auto">
+                  {filteredList.map(d => (
+                    <div key={d.drugId} onClick={() => { setSelectedDrug(d); setNewBalance(''); setReason(''); }} className={`p-4 border-b cursor-pointer transition ${selectedDrug?.drugId === d.drugId ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : 'hover:bg-slate-50 border-l-4 border-l-transparent'}`}>
+                      <div className="font-bold text-slate-800">{d.name} <span className="text-xs font-normal text-slate-500 ml-1">[{d.drugId}]</span></div>
+                      <div className="text-sm text-slate-500 mt-1">ยอดปัจจุบันในระบบ: <span className="font-bold text-blue-600">{d.currentBal}</span> {d.unit}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 h-fit">
+                {selectedDrug ? (
+                  <div className="space-y-4 animate-fade-in">
+                    <h3 className="font-bold text-lg text-slate-800 border-b pb-2">รายละเอียดการปรับแก้</h3>
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-600 mb-1">รายการยา</label>
+                      <div className="font-bold text-emerald-700 bg-emerald-100/50 p-3 rounded-lg border border-emerald-200">{selectedDrug.name} <span className="text-xs font-normal">[{selectedDrug.drugId}]</span></div>
+                    </div>
+                    <div className="flex gap-4">
+                      <div className="flex-1">
+                        <label className="block text-sm font-semibold text-slate-600 mb-1">ยอดเดิม</label>
+                        <input type="text" disabled value={selectedDrug.currentBal} className="w-full bg-slate-200 border-none rounded-lg p-3 text-slate-500 font-bold" />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-sm font-semibold text-red-600 mb-1">ยอดใหม่ที่ถูกต้อง <span className="text-xs font-normal">({selectedDrug.unit})</span></label>
+                        <input type="number" min="0" value={newBalance} onChange={e=>setNewBalance(e.target.value)} className="w-full border-2 border-red-300 rounded-lg p-3 font-bold text-red-700 outline-none focus:border-red-500" placeholder="0" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-600 mb-1">เหตุผลในการปรับยอด (บังคับ) <span className="text-red-500">*</span></label>
+                      <textarea rows="3" value={reason} onChange={e=>setReason(e.target.value)} className="w-full border border-slate-300 rounded-lg p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="เช่น ยาเสื่อมสภาพ, นับสต๊อกสิ้นเดือน, คีย์เบิกผิดรอบที่แล้ว..."></textarea>
+                    </div>
+                    <button onClick={handleSaveAdjust} disabled={isSaving} className="w-full bg-emerald-600 text-white rounded-lg p-4 font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition disabled:opacity-50 mt-4">
+                      {isSaving ? 'กำลังบันทึก...' : 'ส่งคำขอปรับสต๊อก'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-center text-slate-400 py-20">
+                    <i className="fa-solid fa-hand-pointer text-4xl mb-3 opacity-50"></i>
+                    <p>คลิกเลือกรายการยาจากตารางด้านซ้าย<br/>เพื่อทำการขอปรับยอด</p>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         );
       };
@@ -536,7 +874,7 @@
         
         const [manualAddSearch, setManualAddSearch] = useState('');
 
-        const VMI_MULTIPLIER = 1.25; // ค่าคงที่ตามกติกาใหม่
+        const VMI_MULTIPLIER = 1.25; 
 
         const [items, setItems] = useState(() => {
           if (!appDb || !appDb.parLevels) return [];
@@ -580,7 +918,6 @@
             const targetVMI = Math.ceil((ADU * 30) + (1.645 * SD));
 
             if (existingItem) {
-               // ถ้าเป็นการ Edit เอาของเดิมมาแต่ให้แน่ใจว่า field พื้นฐานครบ
                return { ...existingItem, targetVMI, isUnpacked, avgUsage: ADU.toFixed(2), type, price };
             }
 
@@ -592,7 +929,6 @@
             };
           });
 
-          // ดึง Special Items จาก existingReqItems ที่ไม่ได้อยู่ใน Par
           existingReqItems.forEach(ex => {
              if(!generatedList.find(g => g.drugId === ex.drugId)) {
                 generatedList.push(ex);
@@ -602,11 +938,10 @@
           return generatedList.sort(sortDrugs);
         });
 
-        // ⭐️ ตรวจสอบไฟล์ Excel .xlsx
         const handleJHCISUpload = (e) => {
           const file = e.target.files[0];
           if(!file) return;
-          setExcelFile(file); // เก็บไฟล์ไว้เพื่อ Upload เข้า Drive ตอนกดส่ง
+          setExcelFile(file); 
 
           const processData = (dataRows) => {
             let hospInfo = "";
@@ -622,21 +957,14 @@
               if (compacted.some(c => c.includes('สถานบริการ'))) {
                  hospInfo = compacted.find(c => c.includes('สถานบริการ'));
               }
-              // หาช่องที่มีคำว่า ระหว่างวันที่ เพื่อดึง Date
               if (compacted.some(c => c.includes('ระหว่างวันที่'))) {
                  periodInfo = compacted.find(c => c.includes('ระหว่างวันที่')) || compacted.join(' ');
-                 // Regex หาวันที่แบบคร่าวๆ: (1 พ.ค. 2569-31 พ.ค. 2569)
                  const dateRegex = /(\d{1,2})\s*([ก-๙\.]+)\s*(\d{4})\s*-\s*(\d{1,2})\s*([ก-๙\.]+)\s*(\d{4})/;
                  const match = periodInfo.match(dateRegex);
                  if (match) {
                     const startDay = parseInt(match[1]);
-                    const startMonthStr = match[2];
-                    const startYearThai = parseInt(match[3]);
                     const endDay = parseInt(match[4]);
-                    // เช็คกรอบเวลาคร่าวๆ: ควรเริ่มแถวๆ 25 หรือจบแถวๆ 25
-                    if (startDay < 20 && endDay < 20) {
-                       isDateValid = false; // นอกช่วงเวลา หรือไม่ใช่รอบที่ถูกต้อง
-                    }
+                    if (startDay < 20 && endDay < 20) isDateValid = false;
                  }
               }
 
@@ -723,19 +1051,18 @@
           setItems(newItems);
         };
 
-        // ⭐️ ฟังก์ชันเพิ่มยาด้วยตนเองจากกล่องค้นหา
         const handleManualAdd = () => {
            if(!manualAddSearch) return;
            const drug = appDb.drugs.find(d => d.drug_id === manualAddSearch);
            if(!drug) return showToast('ไม่พบรหัสยานี้ในระบบ', 'error');
            if(items.find(i => i.drugId === drug.drug_id)) return showToast('มีรายการนี้ในใบเบิกอยู่แล้ว', 'error');
 
-           const isMed = drug.type === '32'; // เวชภัณฑ์
+           const isMed = drug.type === '32'; 
            const newItem = {
               drugId: drug.drug_id, name: drug.drug_name, unit: drug.unit_display_name,
               packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type, price: drug.price,
               avgUsage: 0, prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0,
-              isSpecial: !isMed // ถ้าไม่ใช่เวชภัณฑ์ ให้ติดป้ายแดงว่า "กรณีพิเศษ"
+              isSpecial: !isMed 
            };
            
            setItems([newItem, ...items].sort(sortDrugs));
@@ -749,7 +1076,6 @@
           
           try {
             const processSave = async (fileUrl) => {
-               // หา Item ที่ข้าม (Skipped) ไปให้แอดมิน
                const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: i.rawName, usage: i.usage }));
 
                const sanitizedItems = items.map(item => ({
@@ -766,7 +1092,6 @@
                   if (fileUrl) payload.excel_url = fileUrl; 
                   await db.collection('requisitions').doc(editReqId).update(payload);
                   
-                  // อัปเดต Fuzzy ให้อัตโนมัติ (กรณี User จับคู่มือ)
                   const batch = db.batch();
                   importData.items.filter(i => i.mappedDrugId !== '').forEach(item => {
                      const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
@@ -789,11 +1114,10 @@
                   const batch = db.batch();
                   const reqRef = db.collection('requisitions').doc(newId);
                   batch.set(reqRef, {
-                    hospitalId: hospId, month: currentMonth, year: currentYear, status: 'Pending',
+                    hospitalId: hospId, month: currentMonth, year: currentYear, status: 'Pending', is_printed: false,
                     excel_url: fileUrl || "", items: sanitizedItems, skipped_items: skipped, created_by_name: currentUser.name, created_at: firebase.firestore.FieldValue.serverTimestamp() 
                   });
 
-                  // อัปเดต Fuzzy
                   importData.items.filter(i => i.mappedDrugId !== '').forEach(item => {
                      const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
                      const drugObj = appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
@@ -895,7 +1219,7 @@
             </div>
 
             <div className="flex flex-col md:flex-row gap-4 mb-6 items-center bg-slate-50 p-4 rounded-xl border border-slate-200">
-               <div className="font-bold text-slate-700"><i className="fa-solid fa-plus-circle text-blue-500 mr-2"></i> ค้นหาเพื่อเพิ่มรายการเบิก (ที่ไม่ได้ตั้ง Par)</div>
+               <div className="font-bold text-slate-700"><i className="fa-solid fa-plus-circle text-blue-500 mr-2"></i> ค้นหาเพื่อเพิ่มรายการเบิก</div>
                <div className="flex flex-grow w-full md:w-auto gap-2">
                  <input list="all-drugs" className="border border-slate-300 rounded-lg p-2 flex-grow outline-none focus:border-blue-500" placeholder="พิมพ์ชื่อหรือรหัส..." value={manualAddSearch} onChange={e=>setManualAddSearch(e.target.value)} />
                  <datalist id="all-drugs">
@@ -1015,29 +1339,52 @@
                  <div className="mt-6 flex justify-end gap-3 shrink-0">
                      <button onClick={() => setShowImportModal(false)} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">ยกเลิก</button>
                      <button onClick={() => {
+                        let newItemsArr = [...items];
                         let newAdded = false;
-                        items.forEach(mainItem => {
-                           const importItem = importData.items.find(i => i.mappedDrugId === mainItem.drugId);
-                           if (importItem && importItem.usage > 0) {
-                               updateRow(mainItem.drugId, importItem.usage);
-                           }
-                        });
-                        // Add mapped items that are not in the current list
+                        
                         importData.items.forEach(importItem => {
-                           if(importItem.mappedDrugId && importItem.usage > 0 && !items.find(i => i.drugId === importItem.mappedDrugId)) {
-                              const d = appDb.drugs.find(x => x.drug_id === importItem.mappedDrugId);
-                              if(d) {
-                                 const isMed = d.type === '32';
-                                 items.push({
-                                    drugId: d.drug_id, name: d.drug_name, unit: d.unit_display_name, packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
-                                    avgUsage: 0, prevExcess: 0, usage: importItem.usage, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: !isMed
-                                 });
-                                 updateRow(d.drug_id, importItem.usage); // calc immediately
-                                 newAdded = true;
+                           if(importItem.mappedDrugId && importItem.usage > 0) {
+                              let existing = newItemsArr.find(i => i.drugId === importItem.mappedDrugId);
+                              if(!existing) {
+                                 const d = appDb.drugs.find(x => x.drug_id === importItem.mappedDrugId);
+                                 if(d) {
+                                    const isMed = d.type === '32';
+                                    existing = {
+                                       drugId: d.drug_id, name: d.drug_name, unit: d.unit_display_name,
+                                       packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
+                                       avgUsage: 0, prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
+                                       dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: !isMed
+                                    };
+                                    newItemsArr.push(existing);
+                                    newAdded = true;
+                                 }
                               }
                            }
                         });
+
+                        if(newAdded) newItemsArr.sort(sortDrugs);
                         
+                        const calcItems = newItemsArr.map(item => {
+                           const importItem = importData.items.find(i => i.mappedDrugId === item.drugId);
+                           if (importItem && importItem.usage > 0) {
+                              const usage = parseInt(importItem.usage) || 0;
+                              const currentBal = item.prevExcess - usage;
+                              const netNeed = item.targetVMI - currentBal;
+                              let dispensePack=0, dispenseQty=0, newExcess=currentBal;
+                              if (netNeed > 0) {
+                                 if (item.isUnpacked) {
+                                    dispensePack = Math.ceil(netNeed / item.packSize); dispenseQty = Math.ceil(netNeed);
+                                 } else {
+                                    dispensePack = Math.ceil(netNeed / item.packSize); dispenseQty = dispensePack * item.packSize;
+                                 }
+                                 newExcess = currentBal + dispenseQty;
+                              }
+                              return { ...item, usage, netNeed: netNeed>0?netNeed:0, dispensePack, dispenseQty, newExcess };
+                           }
+                           return item;
+                        });
+
+                        setItems(calcItems);
                         setShowImportModal(false);
                         showToast('ดึงข้อมูลยอดใช้เข้าสู่ตารางเรียบร้อยแล้ว');
                      }} className="px-8 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 flex items-center transition">
@@ -1050,9 +1397,9 @@
         );
       };
 
-      // ⭐️ ระบบดูใบเบิก และพิมพ์เอกสารราชการ
       const ViewReqView = () => {
         const req = appDb.requisitions.find(r => r.id === currentReqId);
+        const [showPdf, setShowPdf] = useState(true);
         const [isApproving, setIsApproving] = useState(false);
         const [editableItems, setEditableItems] = useState(req?.items || []);
         
@@ -1078,7 +1425,6 @@
             const batch = db.batch(); batch.update(db.collection('requisitions').doc(req.id), { status: 'Completed', items: editableItems });
             editableItems.forEach(it => batch.set(db.collection('current_excess').doc(`${req.hospitalId}_${it.drugId}`), { hospital_id: req.hospitalId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
             
-            // Map skipped items to fuzzy if admin mapped them
             if(req.skipped_items) {
                req.skipped_items.filter(s => s.mappedDrugId).forEach(s => {
                   const d = appDb.drugs.find(x => x.drug_id === s.mappedDrugId);
@@ -1109,12 +1455,11 @@
               <button onClick={() => setCurrentView('dashboard')} className="text-slate-500 font-bold hover:text-slate-800"><i className="fa-solid fa-arrow-left mr-1"></i> กลับ</button>
               <div className="flex gap-2">
                 {req.excel_url && <a href={req.excel_url} target="_blank" className="bg-slate-100 px-4 py-2 rounded-xl font-bold flex items-center hover:bg-slate-200"><i className="fa-solid fa-file-excel text-emerald-600 mr-2"></i> โหลด รบ.301</a>}
-                <button onClick={() => window.print()} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold shadow-lg flex items-center hover:bg-blue-700"><i className="fa-solid fa-print mr-2"></i> พิมพ์เอกสารเบิก</button>
+                <button onClick={() => { db.collection('requisitions').doc(req.id).update({is_printed: true}); window.print(); }} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold shadow-lg flex items-center hover:bg-blue-700"><i className="fa-solid fa-print mr-2"></i> พิมพ์เอกสารเบิก</button>
                 {isAdmin && isPending && <button onClick={() => setConfirmDialog({ title: 'ยืนยันอนุมัติ', message: 'คุณตรวจสอบยอดและต้องการอนุมัติการจ่ายยานี้ใช่หรือไม่?', icon: 'fa-check-double', confirmText: 'ยืนยันอนุมัติ', onConfirm: handleApprove })} disabled={isApproving} className="bg-gradient-main text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center hover:scale-105">{isApproving ? '...' : <span><i className="fa-solid fa-check-double mr-2"></i> อนุมัติจัดยา</span>}</button>}
               </div>
             </div>
 
-            {/* แสดง Skipped Items สำหรับ Admin */}
             {isAdmin && isPending && req.skipped_items && req.skipped_items.length > 0 && (
                <div className="mb-6 bg-amber-50 p-4 rounded-xl border border-amber-200 no-print">
                   <h3 className="font-bold text-amber-800 mb-2"><i className="fa-solid fa-triangle-exclamation mr-2"></i> รายการยาที่ รพ.สต. ข้ามไป (หาไม่เจอ)</h3>
@@ -1137,7 +1482,7 @@
             {/* ⭐️ เค้าโครงเอกสารสำหรับพิมพ์ (Print Area) */}
             <div className="print-area font-sarabun w-full">
                
-               {['32', '1', '25', '3'].map((typeKey, typeIdx) => {
+               {['32', '1', '25', '3'].map((typeKey) => {
                   const typeItems = groupedItems[typeKey];
                   if(typeItems.length === 0) return null;
                   
@@ -1151,7 +1496,7 @@
                            <h1 className="text-lg font-bold mb-1">แบบเบิกเวชภัณฑ์สำหรับโรงพยาบาลส่งเสริมสุขภาพระดับตำบล (รพ.สต)</h1>
                            <div className="text-left text-[14px] leading-relaxed mt-4">
                               <p>ข้าพเจ้า <span className="font-semibold underline underline-offset-4 decoration-dotted">{req.created_by_name}</span> ตำแหน่ง <span className="font-semibold underline underline-offset-4 decoration-dotted">{userInfo.position}</span></p>
-                              <p>หน่วยงาน (รพ.สต.) <span className="font-semibold underline underline-offset-4 decoration-dotted">{hosp?.hospital_name}</span> อ.สวี จ.ชุมพร</p>
+                              <p>หน่วยงาน <span className="font-semibold underline underline-offset-4 decoration-dotted">{hosp?.hospital_name}</span> อ.สวี จ.ชุมพร</p>
                               <p>งบที่ได้รับจัดสรรปี <span className="font-semibold underline underline-offset-4 decoration-dotted">{fiscalYear}</span> เป็นเงิน ............................................ บาท ได้เบิกเวชภัณฑ์ ปีนี้ ไปแล้วมูลค่า ............................................ บาท </p>
                               <p>มีความประสงค์เบิกเวชภัณฑ์ปี <span className="font-semibold underline underline-offset-4 decoration-dotted">{fiscalYear}</span> ครั้งที่ <span className="font-semibold underline underline-offset-4 decoration-dotted">{term}</span> ดังนี้</p>
                            </div>
@@ -1176,7 +1521,7 @@
                            </thead>
                            <tbody>
                               {typeItems.map((it, i) => {
-                                 const itemValue = it.dispenseQty * (it.price || 0);
+                                 const itemValue = (it.dispenseQty / (it.packSize||1)) * (it.price || 0);
                                  subTotalPrice += itemValue;
                                  grandTotalPrice += itemValue;
                                  return (
@@ -1191,9 +1536,9 @@
                                        <td className="text-center">{it.usage}</td>
                                        <td className="text-center text-blue-700">{it.prevExcess - it.usage}</td>
                                        <td className="text-center font-bold bg-emerald-50/50 no-print">
-                                          {isAdmin && isPending ? <input type="number" className="w-16 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white text-emerald-700" value={it.dispenseQty} onChange={e=>handleAdjust(editableItems.findIndex(x=>x.drugId===it.drugId), e.target.value)} /> : <span>{it.dispenseQty}</span>}
+                                          {isAdmin && isPending ? <input type="number" className="w-16 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white text-emerald-700" value={it.dispenseQty} onChange={e=>handleAdjust(editableItems.findIndex(x=>x.drugId===it.drugId), e.target.value)} /> : <span>{it.dispensePack} {it.isUnpacked && <span className="text-[9px] font-normal">({it.dispenseQty})</span>}</span>}
                                        </td>
-                                       <td className="text-center font-bold hidden print:table-cell">{it.dispenseQty}</td>
+                                       <td className="text-center font-bold hidden print:table-cell">{it.dispensePack} {it.isUnpacked && <span className="text-[9px] font-normal">({it.dispenseQty})</span>}</td>
                                        <td className="text-right text-slate-500">{(it.price || 0).toFixed(2)}</td>
                                        <td className="text-right font-semibold">{itemValue.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                                        <td></td>
@@ -1213,7 +1558,6 @@
                   );
                })}
 
-               {/* Grand Total */}
                <div className="flex justify-end mb-12">
                   <table className="official-table w-[300px]">
                      <tbody>
@@ -1223,36 +1567,13 @@
                   </table>
                </div>
 
-               {/* Signatures */}
-               <div className="flex justify-between text-[13px] px-8 mb-16 break-inside-avoid">
-                  <div className="text-center w-1/3">
-                     <p>ลงชื่อ ..................................................... ผู้เบิก</p>
-                     <p className="mt-2">( {req.created_by_name} )</p>
-                     <p className="mt-1">วันที่ ........./........./.........</p>
-                  </div>
-                  <div className="text-center w-1/3">
-                     <p>ลงชื่อ ..................................................... ผอ.รพ.สต.</p>
-                     <p className="mt-2">( ..................................................... )</p>
-                     <p className="mt-1">วันที่ ........./........./.........</p>
-                  </div>
-               </div>
-
-               <div className="flex justify-between text-[13px] px-8 break-inside-avoid">
-                  <div className="text-center w-1/3">
-                     <p>ลงชื่อ ..................................................... ผู้อนุมัติ</p>
-                     <p className="mt-2">( ..................................................... )</p>
-                     <p className="mt-1">วันที่ ........./........./.........</p>
-                  </div>
-                  <div className="text-center w-1/3">
-                     <p>ลงชื่อ ..................................................... ผู้จ่าย</p>
-                     <p className="mt-2">( ..................................................... )</p>
-                     <p className="mt-1">วันที่ ........./........./.........</p>
-                  </div>
-                  <div className="text-center w-1/3">
-                     <p>ลงชื่อ ..................................................... ผู้รับ</p>
-                     <p className="mt-2">( ..................................................... )</p>
-                     <p className="mt-1">วันที่ ........./........./.........</p>
-                  </div>
+               <div className="flex flex-col space-y-4 text-[13px] px-8 mb-16 mt-8 break-inside-avoid">
+                  <div className="flex w-full"><span className="w-16">ลงชื่อ</span><span className="flex-1 border-b border-dotted border-black mx-2 max-w-[200px]"></span><span>ผู้เบิก วันที่ ........................................</span></div>
+                  <div className="flex w-full"><span className="w-16">ลงชื่อ</span><span className="flex-1 border-b border-dotted border-black mx-2 max-w-[200px]"></span><span>ผอ.รพ.สต. {hosp?.hospital_name} วันที่ ........................................</span></div>
+                  <div className="flex w-full"><span className="w-16">ลงชื่อ</span><span className="flex-1 border-b border-dotted border-black mx-2 max-w-[200px]"></span><span>{hosp?.affiliation === 'OPT' ? 'รักษาการแทน นายก อบจ.ชุมพร' : 'สาธารณสุขอำเภอสวี'} วันที่ ........................................</span></div>
+                  <div className="flex w-full"><span className="w-16">ลงชื่อ</span><span className="flex-1 border-b border-dotted border-black mx-2 max-w-[200px]"></span><span>ผู้อนุมัติ วันที่ ........................................</span></div>
+                  <div className="flex w-full"><span className="w-16">ลงชื่อ</span><span className="flex-1 border-b border-dotted border-black mx-2 max-w-[200px]"></span><span>ผู้จ่าย วันที่ ........................................</span></div>
+                  <div className="flex w-full"><span className="w-16">ลงชื่อ</span><span className="flex-1 border-b border-dotted border-black mx-2 max-w-[200px]"></span><span>ผู้รับ วันที่ ........................................</span></div>
                </div>
 
             </div>
@@ -1300,7 +1621,7 @@
           } else if (editTarget.col === 'master_unit') {
              docId = data.unit_id; payload = { unit_id: data.unit_id, unit_name: data.unit_name };
           } else if (editTarget.col === 'master_hospitals') {
-             docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name };
+             docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation };
           } else if (editTarget.col === 'users') {
              docId = editTarget.data.id; payload = { name: data.name, position: data.position, hospital_id: data.hospital_id, role: data.role };
           }
@@ -1336,10 +1657,8 @@
               let dynamicTarget = par?.par_qty || 0;
               let dynamicCSV = csvData;
               if (csvData) {
-                  // SS = Z * (SD/30) * SQRT(LT)
-                  const SDMonth = csvData.sd * Math.sqrt(30); // Convert back roughly if stored as daily SD. Actually in CSV processing we calculated it per month based on 7 elements. Let's assume csvData.sd is the monthly SD. 
                   const SS = zScore * (csvData.sd / reviewPeriod) * Math.sqrt(leadTime);
-                  const rawInitial = (csvData.adu * 60) + SS; // 60 days
+                  const rawInitial = (csvData.adu * 60) + SS; 
                   const ceilInitial = Math.ceil(rawInitial);
                   let finalQty, finalPack;
                   if (d.unpacked) {
@@ -1643,11 +1962,12 @@
               </div>
               <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                 <table className="w-full text-left text-sm border-collapse">
-                  <thead className="bg-slate-50 border-b"><tr><th className="p-4">รหัส</th><th className="p-4">ชื่อ รพ.สต.</th><th className="p-4 text-center">จัดการ</th></tr></thead>
+                  <thead className="bg-slate-50 border-b"><tr><th className="p-4">รหัส</th><th className="p-4">สังกัด</th><th className="p-4">ชื่อ รพ.สต.</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                   <tbody>
                     {filteredHosp.map(h=>(
                       <tr key={h.id} className="border-b hover:bg-slate-50">
                         <td className="p-4 font-mono">{h.hospital_id}</td>
+                        <td className="p-4 font-bold text-indigo-600">{h.affiliation === 'OPT' ? 'อปท.' : 'สสอ.'}</td>
                         <td className="p-4 font-bold text-slate-800">{h.hospital_name}</td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'master_hospitals', data: h, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
@@ -1786,7 +2106,6 @@
               currentBatch.update(db.collection('csv_initial_requests').doc(reqDoc.id), { status: 'Approved', approved_at: firebase.firestore.FieldValue.serverTimestamp() });
               addOp();
 
-              // ⭐️ เตรียมข้อมูลบิล พ.ค. 69 (เดือน 5 ปี 2026) จ่ายเท่ากับ Target Stock ไม่หักลบ
               const newReqId = `REQ-2026-05-${Math.floor(Math.random()*1000).toString().padStart(3, '0')}`;
               const newReqItems = [];
 
@@ -1802,7 +2121,6 @@
                 currentBatch.set(db.collection('config_par').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, par_qty: item.finalQty }, { merge: true }); addOp();
                 currentBatch.set(db.collection('current_excess').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, excess_balance: item.finalQty, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); addOp();
 
-                // นำไปใส่ในบิลเดือน พ.ค. 69 โดยให้ dispenseQty = finalQty
                 newReqItems.push({
                    drugId: item.drug_id, name: item.drugName || item.drug_id, 
                    usage: 0, prevExcess: 0, netNeed: item.finalQty, targetVMI: item.finalQty,
@@ -1811,9 +2129,8 @@
                 });
               });
 
-              // ⭐️ เซฟบิล พ.ค. 69 อัตโนมัติ เพื่อตั้งต้นระบบ
               currentBatch.set(db.collection('requisitions').doc(newReqId), {
-                 hospitalId: hospId, month: 5, year: 2026, status: 'Completed', 
+                 hospitalId: hospId, month: 5, year: 2026, status: 'Completed', is_printed: false,
                  created_by_name: 'System (CSV Setup)', items: newReqItems
               });
               addOp();
@@ -1855,7 +2172,7 @@
                           <td className="p-4 font-semibold text-slate-800">{hospName} <div className="text-xs font-normal text-slate-500 mt-1">ผู้ทำรายการ: {req.user_name}</div></td>
                           <td className="p-4 text-center font-bold text-indigo-600 bg-indigo-50/50">{req.items?.length || 0} รายการ</td>
                           <td className="p-4 text-center space-x-2">
-                            <button onClick={()=>setConfirmDialog({title:'ยืนยันอนุมัติ Initial Stock', message:'ยืนยันการอนุมัติ Initial Stock และสร้างบิลเดือน พ.ค. 69 อัตโนมัติ?', onConfirm: ()=>handleApproveCSV(req), icon:'fa-cloud-arrow-down', confirmText:'นำเข้า'})} className="bg-indigo-500 text-white px-3 py-2 rounded-lg shadow hover:bg-indigo-600"><i className="fa-solid fa-cloud-arrow-down mr-1"></i> นำเข้าฐานข้อมูล</button>
+                            <button onClick={()=>setConfirmDialog({title:'ยืนยันอนุมัติ Initial Stock', message:'ยืนยันการอนุมัติ Initial Stock และสร้างบิลเดือน พ.ค. 69 อัตโนมัติ (จะทับข้อมูลเดิมที่มีอยู่)?', onConfirm: ()=>handleApproveCSV(req), icon:'fa-cloud-arrow-down', confirmText:'นำเข้า'})} className="bg-indigo-500 text-white px-3 py-2 rounded-lg shadow hover:bg-indigo-600"><i className="fa-solid fa-cloud-arrow-down mr-1"></i> นำเข้าฐานข้อมูล</button>
                             <button onClick={()=>setConfirmDialog({title:'ยืนยันลบคำขอ', message:'ต้องการลบคำขอ Initial Stock นี้ทิ้ง?', onConfirm: ()=>handleRejectCSV(req), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="bg-red-500 text-white px-3 py-2 rounded-lg shadow hover:bg-red-600"><i className="fa-solid fa-trash"></i> ลบทิ้ง</button>
                           </td>
                         </tr>
@@ -1916,7 +2233,7 @@
                           <div className="w-1/2">
                             <label className="text-sm font-bold text-slate-600 block mb-1">หมวดหมู่</label>
                             <select name="type" defaultValue={editTarget.data.type || '1'} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
-                              <option value="1">ยา</option><option value="25">โรคเรื้อรัง (NCDs)</option><option value="3">สมุนไพร</option><option value="32">เวชภัณฑ์</option>
+                              {Object.keys(DRUG_TYPES).map(k=><option key={k} value={k}>{DRUG_TYPES[k]}</option>)}
                             </select>
                           </div>
                           <div className="w-1/2">
@@ -1933,8 +2250,8 @@
                             </select>
                           </div>
                           <div className="w-1/2">
-                            <label className="text-sm font-bold text-slate-600 block mb-1">ราคา (฿)</label>
-                            <input name="price" type="number" defaultValue={editTarget.data.price} placeholder="ราคาต่อ 1 หน่วย" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                            <label className="text-sm font-bold text-slate-600 block mb-1">ราคา (฿) - ต่อ Pack</label>
+                            <input name="price" type="number" step="0.01" defaultValue={editTarget.data.price} placeholder="ราคาต่อ 1 Pack" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                           </div>
                         </div>
                         <div className="mt-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
@@ -1966,6 +2283,13 @@
                           <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อ รพ.สต.</label>
                           <input name="hospital_name" defaultValue={editTarget.data.hospital_name} placeholder="ชื่อหน่วยงาน" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                         </div>
+                        <div>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">สังกัด</label>
+                          <select name="affiliation" defaultValue={editTarget.data.affiliation || 'SSO'} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
+                             <option value="SSO">สสอ. (สาธารณสุขอำเภอ)</option>
+                             <option value="OPT">อปท. (องค์การบริหารส่วนท้องถิ่น)</option>
+                          </select>
+                        </div>
                       </>
                     )}
                     {editTarget.col === 'users' && (
@@ -1974,6 +2298,10 @@
                         <div>
                           <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อ-นามสกุล ผู้ใช้งาน</label>
                           <input name="name" defaultValue={editTarget.data.name} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                        </div>
+                        <div>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">อีเมล (อ่านอย่างเดียว)</label>
+                          <input disabled defaultValue={editTarget.data.email} className="w-full p-3 border rounded-xl bg-slate-100 text-slate-500" />
                         </div>
                         <div>
                           <label className="text-sm font-bold text-slate-600 block mb-1">ตำแหน่ง</label>
@@ -2024,11 +2352,17 @@
               <button onClick={() => setCurrentView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>
               {currentUser?.role === 'hospital' && <button onClick={() => {setEditReqId(null); setCurrentView('create_req');}} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='create_req'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-packing w-6 text-center mr-2"></i> เบิกยา / เติมยา</button>}
               {currentUser?.role === 'admin' && <button onClick={() => setCurrentView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
+              
+              <div className="border-t border-slate-800 my-2 pt-2"></div>
+              <button onClick={() => setCurrentView('profile_edit')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='profile_edit'?'bg-slate-700 text-white':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-user-pen w-6 text-center mr-2"></i> แก้ไขข้อมูลส่วนตัว</button>
             </nav>
             <div className="p-5 border-t border-slate-800 bg-slate-900">
               <div className="flex items-center mb-4 text-sm text-slate-300 font-medium bg-slate-800 p-3 rounded-xl border border-slate-700">
                 <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold mr-3">{currentUser?.name?.charAt(0)}</div>
-                <div className="truncate">{currentUser?.name}</div>
+                <div className="truncate w-full">
+                   <div>{currentUser?.name}</div>
+                   <div className="text-[10px] text-slate-500">{currentUser?.position || currentUser?.role}</div>
+                </div>
               </div>
               <button onClick={() => auth.signOut()} className="w-full text-left p-3 rounded-xl text-red-400 hover:bg-red-500/10 font-bold border border-red-500/30 transition flex items-center justify-center"><i className="fa-solid fa-power-off mr-2"></i> ออกจากระบบ</button>
             </div>
@@ -2041,6 +2375,7 @@
               {currentView === 'adjust_stock' && <AdjustStockView />}
               {currentView === 'upload_csv' && <UploadCSVView />}
               {currentView === 'config' && <AdminConfigView />}
+              {currentView === 'profile_edit' && <ProfileEditView />}
             </div>
           </div>
           <UniversalConfirmModal />

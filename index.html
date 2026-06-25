@@ -13,7 +13,9 @@
   <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
+  <!-- Libraries สำหรับอ่าน CSV และ Excel -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
@@ -830,70 +832,83 @@
           return generatedList.sort(sortDrugs);
         });
 
-        // ⭐️ ฟังก์ชันดึงยอดใช้จากไฟล์ JHCIS รบ.301
+        // ⭐️ ฟังก์ชันดึงยอดใช้จากไฟล์ JHCIS รบ.301 (รองรับ Excel และ CSV)
         const handleJHCISUpload = (e) => {
           const file = e.target.files[0];
           if(!file) return;
 
-          Papa.parse(file, {
-            header: false,
-            skipEmptyLines: true,
-            complete: function(results) {
-              let hospInfo = "";
-              let periodInfo = "";
-              let extracted = [];
+          const processData = (dataRows) => {
+            let hospInfo = "";
+            let periodInfo = "";
+            let extracted = [];
 
-              results.data.forEach(row => {
-                const compacted = row.map(c => String(c).trim()).filter(c => c !== '');
-                if (compacted.length === 0) return;
+            dataRows.forEach(row => {
+              const rowArr = Array.isArray(row) ? row : Object.values(row);
+              const compacted = rowArr.map(c => String(c || '').trim()).filter(c => c !== '');
+              if (compacted.length === 0) return;
 
-                // ดึงชื่อ รพ.สต. ในไฟล์
-                if (compacted.some(c => c.includes('สถานบริการ'))) {
-                   hospInfo = compacted.find(c => c.includes('สถานบริการ'));
-                }
-                // ดึงรอบเวลา
-                if (compacted.some(c => c.includes('ระหว่างวันที่'))) {
-                   periodInfo = compacted.find(c => c.includes('ระหว่างวันที่')) || compacted.join(' ');
-                }
+              if (compacted.some(c => c.includes('สถานบริการ'))) {
+                 hospInfo = compacted.find(c => c.includes('สถานบริการ'));
+              }
+              if (compacted.some(c => c.includes('ระหว่างวันที่'))) {
+                 periodInfo = compacted.find(c => c.includes('ระหว่างวันที่')) || compacted.join(' ');
+              }
 
-                // หาบรรทัดที่เป็นข้อมูลยา (ขึ้นต้นด้วยเลขลำดับ เช่น 1.)
-                if (compacted.length >= 7 && /^\d+\.$/.test(compacted[0])) {
-                   const rawName = compacted[1];
-                   // ยอดใช้อยู่ในตำแหน่ง index 6 ใน array ที่ compacted แล้ว
-                   const usageStr = compacted[6]; 
-                   const usageNum = parseFloat(usageStr?.replace(/,/g, ''));
-                   if (!isNaN(usageNum) && rawName && !rawName.includes('รวม')) {
-                       extracted.push({ id: Math.random().toString(), rawName, usage: usageNum, mappedDrugId: '' });
-                   }
-                }
-              });
+              if (compacted.length >= 6 && /^\d+\.?$/.test(compacted[0])) {
+                 const rawName = compacted[1];
+                 const usageStr = compacted[6]; 
+                 const usageNum = parseFloat(usageStr?.replace(/,/g, ''));
+                 if (!isNaN(usageNum) && rawName && !rawName.includes('รวม')) {
+                     extracted.push({ id: Math.random().toString(), rawName, usage: usageNum, mappedDrugId: '' });
+                 }
+              }
+            });
 
-              // ระบบจับคู่ยาอัจฉริยะ (Auto-Mapping)
-              const normalize = (str) => String(str).toLowerCase().replace(/[\s\-\.\(\)]/g, '');
-              extracted = extracted.map(item => {
-                const normRaw = normalize(item.rawName);
-                let mappedId = '';
-                
-                // ลองจับคู่แบบตรงเป๊ะ
-                let matched = appDb.drugs.find(d => normalize(d.drug_name) === normRaw);
-                
-                // ถ้าไม่เจอ ลองจับคู่แบบค้นหาคำ
-                if (!matched) {
-                  matched = appDb.drugs.find(d => {
-                     const normSys = normalize(d.drug_name);
-                     return normRaw.includes(normSys) || normSys.includes(normRaw);
-                  });
-                }
-                
-                if (matched) mappedId = matched.drug_id;
-                return { ...item, mappedDrugId: mappedId };
-              });
+            const normalize = (str) => String(str).toLowerCase().replace(/[\s\-\.\(\)]/g, '');
+            extracted = extracted.map(item => {
+              const normRaw = normalize(item.rawName);
+              let mappedId = '';
+              
+              let matched = appDb.drugs.find(d => normalize(d.drug_name) === normRaw);
+              if (!matched) {
+                matched = appDb.drugs.find(d => {
+                   const normSys = normalize(d.drug_name);
+                   return normRaw.includes(normSys) || normSys.includes(normRaw);
+                });
+              }
+              if (matched) mappedId = matched.drug_id;
+              return { ...item, mappedDrugId: mappedId };
+            });
 
-              setImportData({ hospInfo, periodInfo, items: extracted });
-              setShowImportModal(true);
-              e.target.value = null; // reset input
-            }
-          });
+            setImportData({ hospInfo, periodInfo, items: extracted });
+            setShowImportModal(true);
+          };
+
+          if (file.name.endsWith('.csv')) {
+            Papa.parse(file, {
+              header: false,
+              skipEmptyLines: true,
+              complete: function(results) {
+                 processData(results.data);
+                 e.target.value = null;
+              }
+            });
+          } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+              const bstr = evt.target.result;
+              const wb = XLSX.read(bstr, {type:'binary'});
+              const wsname = wb.SheetNames[0];
+              const ws = wb.Sheets[wsname];
+              const data = XLSX.utils.sheet_to_json(ws, {header:1});
+              processData(data);
+              e.target.value = null;
+            };
+            reader.readAsBinaryString(file);
+          } else {
+            showToast("รองรับเฉพาะไฟล์ .csv, .xls, .xlsx", "error");
+            e.target.value = null;
+          }
         };
 
         const updateRow = (drugIdToUpdate, usageVal) => {
@@ -1046,8 +1061,8 @@
                 <p className="text-sm text-indigo-600 mt-1">อัปโหลดไฟล์สรุปรวมรายเดือน ระบบจะดึงยอดจ่ายมาคีย์ลงตารางให้อัตโนมัติ</p>
               </div>
               <label className="bg-white border-2 border-indigo-600 text-indigo-700 px-6 py-3 rounded-xl cursor-pointer hover:bg-indigo-100 transition flex items-center font-bold shrink-0 shadow-lg shadow-indigo-100">
-                <i className="fa-solid fa-upload mr-2"></i> เลือกไฟล์ CSV
-                <input type="file" accept=".csv" className="hidden" onChange={handleJHCISUpload} />
+                <i className="fa-solid fa-upload mr-2"></i> อัปโหลด รบ.301 (.xlsx / .csv)
+                <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" className="hidden" onChange={handleJHCISUpload} />
               </label>
             </div>
 
@@ -1629,7 +1644,6 @@
         };
 
         const UserManager = () => {
-          // ⭐️ ปรับให้ใช้ระบบ Modal แก้ไขแทนเพื่อแก้ข้อมูลทุกฟิลด์
           return (
             <div className="p-6">
               <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">

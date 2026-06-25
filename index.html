@@ -13,7 +13,7 @@
   <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
-  <!-- ⭐️ เพิ่ม PapaParse สำหรับอ่านไฟล์ CSV -->
+  <!-- ⭐️ PapaParse สำหรับอ่านไฟล์ CSV -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
@@ -98,6 +98,21 @@
       return idA.localeCompare(idB);
     };
 
+    // Helper: Chunk Batch Operations to prevent exceeding 500 limit
+    const executeBatchChunks = async (operations) => {
+      const BATCH_SIZE = 450;
+      for (let i = 0; i < operations.length; i += BATCH_SIZE) {
+        const batch = db.batch();
+        const chunk = operations.slice(i, i + BATCH_SIZE);
+        chunk.forEach(op => {
+          if (op.type === 'set') batch.set(op.ref, op.data, { merge: true });
+          if (op.type === 'update') batch.update(op.ref, op.data);
+          if (op.type === 'delete') batch.delete(op.ref);
+        });
+        await batch.commit();
+      }
+    };
+
     function App() {
       const [loading, setLoading] = useState(true);
       const [appDb, setAppDb] = useState(null); 
@@ -120,7 +135,7 @@
             db.collection('requisitions').orderBy('created_at', 'desc').get(),
             db.collection('users').get(),
             db.collection('stock_adjustments').orderBy('date', 'desc').get(),
-            db.collection('csv_initial_requests').orderBy('created_at', 'desc').get() // โหลดคำขอ CSV
+            db.collection('csv_initial_requests').orderBy('created_at', 'desc').get()
           ]);
 
           const units = unitSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -425,7 +440,7 @@
         );
       };
 
-      // ⭐️ ใหม่: อัปโหลด CSV เพื่อตั้งค่า Initial Stock
+      // ⭐️ คำนวณ Initial Stock 45 วันจาก 7 เดือน
       const UploadCSVView = () => {
         const [parsedData, setParsedData] = useState([]);
         const [isProcessing, setIsProcessing] = useState(false);
@@ -446,42 +461,38 @@
                 ];
                 const total = m.reduce((a,b)=>a+b, 0);
                 const mean = total / 7;
-                
-                // Sample Standard Deviation (n-1)
                 const variance = m.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / 6;
                 const sd = Math.sqrt(variance || 0);
 
                 const ADU = total / 210;
-                const Z = 1.645; // Service Level 95%
-                const LT = 7; // Lead Time
-                const SS = Z * sd * Math.sqrt(LT / 30); // Safety Stock Formula
-                
-                // Initial Stock 45 วัน
+                // สูตร: SS = 1.645 * (sd / 30) * Math.sqrt(7)  [อิง Lead Time 7 วัน]
+                const SS = 1.645 * (sd / 30) * Math.sqrt(7);
                 const rawInitial = (ADU * 45) + SS;
                 const ceilInitial = Math.ceil(rawInitial);
 
-                // เช็คฐานข้อมูล
                 const drug = appDb.drugs.find(d => d.drug_id === row.drug_id);
                 const hosp = appDb.hospitals.find(h => h.hospital_id === row.hospital_id);
                 const packSize = drug ? (Number(drug.pack_size) || 1) : 1;
+                const isUnpacked = drug ? !!drug.unpacked : false;
 
-                // การปัดขึ้นตาม Pack Size (เช่น ยา 500 เม็ด แต่คำนวณได้ 225 ก็ปัดให้ไป 1 หน่วยย่อย)
-                const finalPack = Math.ceil(ceilInitial / packSize);
-                const finalQty = finalPack * packSize;
+                let finalQty, finalPack;
+                if (isUnpacked) {
+                  finalQty = ceilInitial; 
+                  finalPack = Math.ceil(ceilInitial / packSize);
+                } else {
+                  finalPack = Math.ceil(ceilInitial / packSize);
+                  finalQty = finalPack * packSize;
+                }
 
                 return {
-                  hospital_id: row.hospital_id,
-                  drug_id: row.drug_id,
+                  hospital_id: row.hospital_id, drug_id: row.drug_id,
                   m1: m[0], m2: m[1], m3: m[2], m4: m[3], m5: m[4], m6: m[5], m7: m[6],
                   total, adu: ADU.toFixed(2), sd: sd.toFixed(2), ss: SS.toFixed(2),
-                  ceilInitial, packSize, finalPack, finalQty,
-                  isNewDrug: !drug,
-                  isNewHosp: !hosp,
-                  drugName: drug ? drug.drug_name : 'ไม่พบชื่อยาในระบบ',
-                  unit: drug ? drug.unit_display_name : '-'
+                  ceilInitial, packSize, finalPack, finalQty, isUnpacked,
+                  isNewDrug: !drug, isNewHosp: !hosp,
+                  drugName: drug ? drug.drug_name : 'ไม่พบชื่อยาในระบบ', unit: drug ? drug.unit_display_name : '-'
                 };
               });
-
               setParsedData(processed);
             }
           });
@@ -491,34 +502,24 @@
           if (parsedData.length === 0) return showToast('ไม่มีข้อมูล', 'error');
           setIsProcessing(true);
           try {
-            // Group by Hospital
             const grouped = {};
             parsedData.forEach(item => {
               if(!grouped[item.hospital_id]) grouped[item.hospital_id] = [];
               grouped[item.hospital_id].push(item);
             });
 
-            const batch = db.batch();
+            const operations = [];
             for (const hospId in grouped) {
               const newReqRef = db.collection('csv_initial_requests').doc();
-              batch.set(newReqRef, {
-                hospital_id: hospId,
-                items: grouped[hospId],
-                status: 'Pending',
-                created_at: firebase.firestore.FieldValue.serverTimestamp(),
-                user_name: currentUser.name
+              operations.push({
+                type: 'set', ref: newReqRef, 
+                data: { hospital_id: hospId, items: grouped[hospId], status: 'Pending', created_at: firebase.firestore.FieldValue.serverTimestamp(), user_name: currentUser.name }
               });
             }
-            await batch.commit();
+            await executeBatchChunks(operations);
             showToast('ส่งข้อมูลคำขอ Initial Stock (CSV) สำเร็จ');
-            setParsedData([]);
-            refreshData();
-            setCurrentView('dashboard');
-          } catch(e) {
-            showToast(e.message, 'error');
-          } finally {
-            setIsProcessing(false);
-          }
+            setParsedData([]); refreshData(); setCurrentView('dashboard');
+          } catch(e) { showToast(e.message, 'error'); } finally { setIsProcessing(false); }
         };
 
         return (
@@ -567,7 +568,7 @@
                             {row.isNewHosp && <span className="ml-2 bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold">รหัสใหม่</span>}
                           </td>
                           <td className="p-3">
-                            <div className="font-bold">{row.drug_id}</div>
+                            <div className="font-bold">{row.drug_id} {row.isUnpacked && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded ml-1">แตกหน่วย</span>}</div>
                             <div className="text-[10px] text-slate-500 truncate max-w-[150px]">{row.drugName}</div>
                             {row.isNewDrug && <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold mt-1 inline-block">ยาใหม่</span>}
                           </td>
@@ -620,10 +621,7 @@
           let list = listToProcess.map(drug => {
             const bal = appDb.balances.find(b => String(b.hospital_id) === String(hospId) && String(b.drug_id) === String(drug.drug_id));
             return {
-              drugId: drug.drug_id,
-              name: drug.drug_name || 'N/A',
-              unit: drug.unit_display_name || '',
-              currentBal: bal ? Number(bal.excess_balance) : 0
+              drugId: drug.drug_id, name: drug.drug_name || 'N/A', unit: drug.unit_display_name || '', currentBal: bal ? Number(bal.excess_balance) : 0
             };
           });
           return list.sort(sortDrugs);
@@ -642,8 +640,7 @@
             const adjStatus = isAdmin ? 'Approved' : 'Pending';
 
             batch.set(db.collection('stock_adjustments').doc(), {
-              hospital_id: hospId, drug_id: selectedDrug.drugId, 
-              old_balance: selectedDrug.currentBal, new_balance: Number(newBalance), 
+              hospital_id: hospId, drug_id: selectedDrug.drugId, old_balance: selectedDrug.currentBal, new_balance: Number(newBalance), 
               reason: reason, user_name: currentUser.name, status: adjStatus, date: firebase.firestore.FieldValue.serverTimestamp()
             });
 
@@ -659,11 +656,7 @@
             setNewBalance(''); setReason(''); setSelectedDrug(null);
             await refreshData();
             if(!isAdmin) setCurrentView('dashboard');
-          } catch(e) {
-            showToast(e.message, 'error');
-          } finally {
-            setIsSaving(false);
-          }
+          } catch(e) { showToast(e.message, 'error'); } finally { setIsSaving(false); }
         };
 
         return (
@@ -734,6 +727,7 @@
         );
       };
 
+      // ⭐️ ระบบคำนวณ VMI อัตโนมัติ (6 เดือนย้อนหลัง)
       const CreateReqView = () => {
         const hospId = currentUser.hospital_id;
         const isAdmin = currentUser.role === 'admin';
@@ -746,13 +740,11 @@
         const [searchTerm, setSearchTerm] = useState(''); 
         const [filterType, setFilterType] = useState('all'); 
         const [showUsedOnly, setShowUsedOnly] = useState(false); 
-        const [multiplier, setMultiplier] = useState(1.25);
         const [proofFile, setProofFile] = useState(null);
         const [isSubmitting, setIsSubmitting] = useState(false);
 
         const [items, setItems] = useState(() => {
           if (!appDb || !appDb.parLevels) return [];
-          
           let existingReqItems = [];
           if (editReqId) {
              const reqToEdit = appDb.requisitions.find(r => r.id === editReqId);
@@ -763,32 +755,40 @@
           const generatedList = myPars.map(par => {
             const drug = appDb.drugs.find(d => String(d.drug_id) === String(par.drug_id));
             const bal = appDb.balances.find(b => String(b.hospital_id) === String(hospId) && String(b.drug_id) === String(par.drug_id));
-            
             const existingItem = existingReqItems.find(ex => ex.drugId === par.drug_id);
             const prevExcess = bal ? Number(bal.excess_balance) : 0;
+            const isUnpacked = drug ? !!drug.unpacked : false;
             
-            let totalHist = 0; let count = 0;
-            for(let i=1; i<=3; i++) {
+            // ⭐️ ดึงประวัติย้อนหลัง 6 เดือน
+            let m_usages = [];
+            for(let i=1; i<=6; i++) {
               let m = currentMonth - i; let y = currentYear;
               if(m <= 0) { m += 12; y -= 1; }
               const oldReq = appDb.requisitions.find(r => r.hospitalId === hospId && r.month === m && r.year === y && r.id !== editReqId);
+              let usage = 0;
               if(oldReq && oldReq.items) {
                 const oldItem = oldReq.items.find(it => it.drugId === par.drug_id);
-                if(oldItem) { totalHist += Number(oldItem.usage); count++; }
+                if(oldItem) usage = Number(oldItem.usage);
               }
+              m_usages.push(usage);
             }
-            const avgUsage = count > 0 ? Math.ceil(totalHist / 3) : 0; 
+            
+            const total6M = m_usages.reduce((a,b)=>a+b, 0);
+            const ADU = total6M / 180; 
+            const mean6M = total6M / 6;
+            const variance = m_usages.reduce((acc, val) => acc + Math.pow(val - mean6M, 2), 0) / 5;
+            const SD = Math.sqrt(variance || 0);
+            
+            // Target = (ADU * 30) + (1.645 * SD)
+            const targetVMI = Math.ceil((ADU * 30) + (1.645 * SD));
 
-            if (existingItem) return { ...existingItem, avgUsage: avgUsage };
+            if (existingItem) return { ...existingItem, targetVMI, isUnpacked };
 
             return {
-              drugId: par.drug_id, 
-              name: drug ? drug.drug_name : 'N/A', 
-              unit: drug ? drug.unit_display_name : '',
-              packSize: drug ? Number(drug.pack_size) : 1,
-              avgUsage: avgUsage,
-              prevExcess: prevExcess, 
-              usage: 0, vmiTarget: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess
+              drugId: par.drug_id, name: drug ? drug.drug_name : 'N/A', unit: drug ? drug.unit_display_name : '',
+              packSize: drug ? Number(drug.pack_size) : 1, isUnpacked: isUnpacked,
+              avgUsage: ADU.toFixed(2), prevExcess: prevExcess, 
+              usage: 0, targetVMI: targetVMI, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess
             };
           });
 
@@ -809,22 +809,28 @@
           );
         }
 
-        const updateRow = (drugIdToUpdate, usageVal, multiVal = multiplier) => {
+        const updateRow = (drugIdToUpdate, usageVal) => {
           const usage = parseInt(usageVal) || 0;
           const newItems = items.map(item => {
             if (item.drugId === drugIdToUpdate) {
               const row = { ...item, usage };
-              row.vmiTarget = Math.ceil(row.avgUsage * multiVal);
-              let netNeed = row.vmiTarget - row.prevExcess;
+              let currentBal = row.prevExcess - usage;
+              let netNeed = row.targetVMI - currentBal;
               
               if (netNeed <= 0) {
                  row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; 
-                 row.newExcess = row.prevExcess - usage; 
+                 row.newExcess = currentBal; 
               } else {
                  row.netNeed = netNeed; 
-                 row.dispensePack = Math.ceil(netNeed / row.packSize);
-                 row.dispenseQty = row.dispensePack * row.packSize; 
-                 row.newExcess = (row.prevExcess - usage) + row.dispenseQty;
+                 if (row.isUnpacked) {
+                    // ถ้าอนุญาตให้แตกย่อยได้ ไม่ต้องปัดเต็ม Pack
+                    row.dispensePack = Math.ceil(netNeed / row.packSize);
+                    row.dispenseQty = Math.ceil(netNeed);
+                 } else {
+                    row.dispensePack = Math.ceil(netNeed / row.packSize);
+                    row.dispenseQty = row.dispensePack * row.packSize; 
+                 }
+                 row.newExcess = currentBal + row.dispenseQty;
               }
               return row;
             }
@@ -833,32 +839,10 @@
           setItems(newItems);
         };
 
-        const handleMultiplierChange = (e) => {
-          const m = parseFloat(e.target.value);
-          setMultiplier(m);
-          setItems(items.map(item => {
-            const row = { ...item };
-            row.vmiTarget = Math.ceil(row.avgUsage * m);
-            let netNeed = row.vmiTarget - row.prevExcess;
-            if (netNeed <= 0) {
-               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; 
-               row.newExcess = row.prevExcess - row.usage; 
-            } else {
-               row.netNeed = netNeed; 
-               row.dispensePack = Math.ceil(netNeed / row.packSize);
-               row.dispenseQty = row.dispensePack * row.packSize; 
-               row.newExcess = (row.prevExcess - row.usage) + row.dispenseQty;
-            }
-            return row;
-          }));
-        };
-
         const handleFileChange = (e) => {
           const file = e.target.files[0];
           if(file && file.type !== "application/pdf") {
-            showToast("กรุณาแนบไฟล์ PDF เท่านั้น", "error");
-            e.target.value = null;
-            return;
+            showToast("กรุณาแนบไฟล์ PDF เท่านั้น", "error"); e.target.value = null; return;
           }
           setProofFile(file);
         };
@@ -871,7 +855,7 @@
             const processSave = async (fileUrl) => {
                const sanitizedItems = items.map(item => ({
                   drugId: item.drugId || "", name: item.name || "N/A", unit: item.unit || "",
-                  packSize: item.packSize || 1, avgUsage: item.avgUsage || 0, prevExcess: item.prevExcess || 0,
+                  packSize: item.packSize || 1, isUnpacked: !!item.isUnpacked, avgUsage: item.avgUsage || 0, prevExcess: item.prevExcess || 0,
                   usage: item.usage || 0, vmiTarget: item.vmiTarget || 0, netNeed: item.netNeed || 0,
                   dispensePack: item.dispensePack || 0, dispenseQty: item.dispenseQty || 0, newExcess: item.newExcess || 0
                }));
@@ -910,19 +894,15 @@
                 processSave(fileUrl);
               };
               reader.readAsDataURL(proofFile);
-            } else {
-              processSave(""); 
-            }
-          } catch (e) {
-            showToast('เกิดข้อผิดพลาด: ' + e.message, 'error');
-            setIsSubmitting(false);
-          }
+            } else { processSave(""); }
+          } catch (e) { showToast('เกิดข้อผิดพลาด: ' + e.message, 'error'); setIsSubmitting(false); }
         };
 
         const filteredItems = items.filter(item => {
           const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(item.drugId).includes(searchTerm.toLowerCase());
-          const isDrug = String(item.drugId).length >= 5;
-          const matchType = filterType === 'all' ? true : filterType === 'drug' ? isDrug : !isDrug;
+          const drugDoc = appDb.drugs.find(d => d.drug_id === item.drugId);
+          const type = drugDoc ? drugDoc.type : 'DRUG';
+          const matchType = filterType === 'all' ? true : filterType === type;
           const matchUsage = showUsedOnly ? item.usage > 0 : true;
           return matchSearch && matchType && matchUsage;
         });
@@ -934,24 +914,9 @@
                 <h2 className="text-2xl font-bold text-slate-800">
                   {editReqId ? `แก้ไขใบเบิกยารอบ ${currentMonth}/${currentYear}` : `ทำเรื่องเติมยารอบใหม่ (${currentMonth}/${currentYear})`}
                 </h2>
-                <p className="text-slate-500 mt-1">กรุณาระบุยอดใช้จริง (25 เดือนที่แล้ว - 25 เดือนนี้)</p>
+                <p className="text-slate-500 mt-1">สูตร VMI (6 เดือนย้อนหลัง): Target = (ADU x 30) + (1.645 x SD)</p>
               </div>
               <button onClick={() => {setEditReqId(null); setCurrentView('dashboard');}} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">ยกเลิก</button>
-            </div>
-
-            <div className="flex flex-col sm:flex-row bg-emerald-50 p-4 rounded-xl mb-6 items-start sm:items-center border border-emerald-100 gap-4">
-              <div className="flex items-center flex-grow">
-                <i className="fa-solid fa-calculator text-emerald-500 text-2xl mr-4"></i>
-                <div>
-                  <div className="font-bold text-emerald-800">ตั้งค่าตัวคูณ (Safety Stock)</div>
-                  <div className="text-sm text-emerald-600">เป้าหมาย VMI = ค่าเฉลี่ย 3 เดือน x ตัวคูณ</div>
-                </div>
-              </div>
-              <select disabled={!isAdmin} value={multiplier} onChange={handleMultiplierChange} className="bg-white border border-emerald-200 text-emerald-800 rounded-lg p-3 font-bold outline-none shadow-sm min-w-[200px] disabled:opacity-70 disabled:bg-slate-100 disabled:cursor-not-allowed">
-                <option value={1.25}>รอบ 7 วัน (x1.25)</option>
-                <option value={1.5}>รอบ 14 วัน (x1.5)</option>
-                <option value={2.0}>รอบ 1 เดือน (x2.0)</option>
-              </select>
             </div>
 
             <div className="flex flex-col md:flex-row gap-4 mb-6">
@@ -959,10 +924,12 @@
                 <i className="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400"></i>
                 <input type="text" placeholder="ค้นหารายการ (ชื่อ หรือ รหัส)..." className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 transition font-medium" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
               </div>
-              <div className="flex gap-2 shrink-0 bg-slate-100 p-1 rounded-xl">
+              <div className="flex gap-2 shrink-0 bg-slate-100 p-1 rounded-xl overflow-x-auto">
                 <button onClick={()=>setFilterType('all')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='all'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>ทั้งหมด</button>
-                <button onClick={()=>setFilterType('drug')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='drug'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>เฉพาะยา</button>
-                <button onClick={()=>setFilterType('supply')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='supply'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>เวชภัณฑ์ฯ</button>
+                <button onClick={()=>setFilterType('DRUG')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='DRUG'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>ยา</button>
+                <button onClick={()=>setFilterType('NCD')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='NCD'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>NCD</button>
+                <button onClick={()=>setFilterType('HERB')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='HERB'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>สมุนไพร</button>
+                <button onClick={()=>setFilterType('MED')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='MED'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>เวชภัณฑ์</button>
               </div>
               <label className="flex items-center gap-2 cursor-pointer bg-amber-50 px-4 rounded-xl border border-amber-200 text-amber-800 font-bold shrink-0">
                 <input type="checkbox" className="w-5 h-5 accent-amber-500" checked={showUsedOnly} onChange={e=>setShowUsedOnly(e.target.checked)} /> แสดงเฉพาะที่ระบุยอด
@@ -977,8 +944,7 @@
                     <th className="p-4 text-center">Pack</th>
                     <th className="p-4 text-center bg-blue-50/80 border-x border-blue-100">ยอดยกมา<br/><span className="font-normal text-xs">(A)</span></th>
                     <th className="p-4 text-center bg-amber-100 text-amber-800 border-r border-amber-200">ยอดใช้ 1 เดือน (หน่วยย่อย)<br/><span className="font-normal text-xs">(กรอกข้อมูล - B)</span></th>
-                    <th className="p-4 text-center bg-slate-50/80">เฉลี่ย 3ด.<br/><span className="font-normal text-xs">(Hist)</span></th>
-                    <th className="p-4 text-center text-emerald-700 bg-emerald-50/80 border-l border-emerald-100">เป้าหมาย<br/><span className="font-normal text-xs">(VMI)</span></th>
+                    <th className="p-4 text-center text-emerald-700 bg-emerald-50/80 border-l border-emerald-100">เป้าหมาย<br/><span className="font-normal text-xs">(VMI 6 ด.)</span></th>
                     <th className="p-4 text-center text-red-600 bg-slate-50/80">คาดว่าจัดให้<br/><span className="font-normal text-xs">(หน่วยย่อย)</span></th>
                     <th className="p-4 text-center bg-purple-50/80 border-l border-purple-100">คาดการณ์ยกไป</th>
                   </tr>
@@ -987,7 +953,7 @@
                   {filteredItems.map((item) => (
                     <tr key={item.drugId} className="border-b border-slate-200 hover:bg-slate-50 transition">
                       <td className="p-4">
-                        <div className="font-bold text-slate-800">{item.name} <span className="text-xs font-normal text-slate-400 ml-1">[{item.drugId}]</span></div>
+                        <div className="font-bold text-slate-800">{item.name} <span className="text-xs font-normal text-slate-400 ml-1">[{item.drugId}]</span> {item.isUnpacked && <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1 rounded">แตกหน่วย</span>}</div>
                         <div className="text-xs text-slate-500 mt-1">หน่วย: <span className="font-semibold">{item.unit}</span></div>
                       </td>
                       <td className="p-4 text-center font-medium text-slate-500">{item.packSize}</td>
@@ -1001,14 +967,13 @@
                           </div>
                         )}
                       </td>
-                      <td className="p-4 text-center font-medium text-slate-400">{item.avgUsage}</td>
                       <td className="p-4 text-center text-emerald-600 font-bold bg-emerald-50/20 border-l border-emerald-50">{item.vmiTarget}</td>
                       <td className="p-4 text-center text-red-600 font-extrabold text-lg">{item.dispenseQty}</td>
                       <td className="p-4 text-center text-purple-600 font-bold bg-purple-50/20 border-l border-purple-50">{item.newExcess}</td>
                     </tr>
                   ))}
                   {filteredItems.length === 0 && (
-                    <tr><td colSpan="8" className="p-8 text-center text-slate-400">ไม่พบรายการยาที่ค้นหา</td></tr>
+                    <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่พบรายการยาที่ค้นหา</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1185,7 +1150,7 @@
 
       // ⭐️ FULL ADMIN CRUD CONFIG VIEW ⭐️
       const AdminConfigView = () => {
-        const [activeTab, setActiveTab] = useState('hospitals');
+        const [activeTab, setActiveTab] = useState('drugs');
         const [deleteTarget, setDeleteTarget] = useState(null); 
 
         const requestDelete = (col, id) => setDeleteTarget({ col, id });
@@ -1205,7 +1170,6 @@
           </button>
         );
 
-        // --- Hospitals CRUD ---
         const HospitalManager = () => {
           const [hId, setHId] = useState(''); const [hName, setHName] = useState('');
           const handleSave = async () => {
@@ -1213,9 +1177,7 @@
             await db.collection('master_hospitals').doc(hId).set({hospital_id: hId, hospital_name: hName});
             setHId(''); setHName(''); await refreshData(); showToast('บันทึก รพ.สต. แล้ว');
           };
-          const handleEdit = (h) => {
-            setHId(h.hospital_id); setHName(h.hospital_name);
-          };
+          const handleEdit = (h) => { setHId(h.hospital_id); setHName(h.hospital_name); };
           return (
             <div className="p-6">
               <div className="flex gap-4 mb-6">
@@ -1238,11 +1200,30 @@
             await db.collection('master_unit').doc(uId).set({unit_id: uId, unit_name: uName});
             setUId(''); setUName(''); await refreshData(); showToast('บันทึกหน่วยแล้ว');
           };
-          const handleEdit = (u) => {
-            setUId(u.unit_id); setUName(u.unit_name);
+          const handleEdit = (u) => { setUId(u.unit_id); setUName(u.unit_name); };
+          
+          const handleCSVUpload = (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            Papa.parse(file, {
+              header: true, skipEmptyLines: true,
+              complete: async (results) => {
+                const ops = results.data.map(row => ({
+                  type: 'set', ref: db.collection('master_unit').doc(row.unit_id), data: { unit_id: row.unit_id, unit_name: row.unit_name }
+                })).filter(op => op.data.unit_id);
+                await executeBatchChunks(ops);
+                refreshData(); showToast('อัปโหลด CSV หน่วยนับแล้ว');
+                e.target.value = null;
+              }
+            });
           };
+
           return (
             <div className="p-6">
+              <div className="flex justify-between items-center bg-indigo-50 p-4 rounded-xl mb-6">
+                <div><h3 className="font-bold text-indigo-800">นำเข้า CSV (unit_id, unit_name)</h3></div>
+                <label className="bg-indigo-600 text-white px-4 py-2 rounded-lg cursor-pointer font-bold hover:bg-indigo-700">อัปโหลดไฟล์ CSV <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload}/></label>
+              </div>
               <div className="flex gap-4 mb-6">
                 <input className="border border-slate-300 p-2 rounded-lg" placeholder="รหัสหน่วย (เช่น U01)" value={uId} onChange={e=>setUId(e.target.value)} />
                 <input className="border border-slate-300 p-2 rounded-lg flex-grow" placeholder="ชื่อหน่วยนับ" value={uName} onChange={e=>setUName(e.target.value)} />
@@ -1256,33 +1237,78 @@
         };
 
         const DrugManager = () => {
-          const [dId, setDId] = useState(''); const [dName, setDName] = useState(''); const [dPack, setDPack] = useState(''); const [dUnit, setDUnit] = useState(''); const [dPrice, setDPrice] = useState('');
+          const [dId, setDId] = useState(''); const [dName, setDName] = useState(''); const [dPack, setDPack] = useState(''); 
+          const [dUnit, setDUnit] = useState(''); const [dPrice, setDPrice] = useState(''); const [dType, setDType] = useState('DRUG');
+          const [dUnpacked, setDUnpacked] = useState(false);
+
+          const typeLabels = { 'DRUG': 'ยา', 'HERB': 'สมุนไพร', 'NCD': 'โรคเรื้อรัง', 'MED': 'เวชภัณฑ์' };
+
           const handleSave = async () => {
             if(!dId || !dName) return;
             await db.collection('master_drugs').doc(dId).set({
-              drug_id: dId, drug_name: dName, pack_size: Number(dPack)||1, unit_id: dUnit, price: Number(dPrice)||0, type: 'DRUG'
+              drug_id: dId, drug_name: dName, pack_size: Number(dPack)||1, unit_id: dUnit, price: Number(dPrice)||0, type: dType, unpacked: dUnpacked
             });
-            setDId(''); setDName(''); setDPack(''); setDUnit(''); setDPrice(''); 
-            await refreshData(); showToast('บันทึกยาแล้ว');
+            setDId(''); setDName(''); setDPack(''); setDUnit(''); setDPrice(''); setDUnpacked(false);
+            await refreshData(); showToast('บันทึกข้อมูลสำเร็จ');
           };
           const handleEdit = (d) => {
-            setDId(d.drug_id || ''); setDName(d.drug_name || ''); setDPack(d.pack_size || ''); setDUnit(d.unit_id || ''); setDPrice(d.price || '');
+            setDId(d.drug_id || ''); setDName(d.drug_name || ''); setDPack(d.pack_size || ''); setDUnit(d.unit_id || ''); 
+            setDPrice(d.price || ''); setDType(d.type || 'DRUG'); setDUnpacked(!!d.unpacked);
           };
+
+          const handleCSVUpload = (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            Papa.parse(file, {
+              header: true, skipEmptyLines: true,
+              complete: async (results) => {
+                const ops = results.data.map(row => {
+                  const isUnpacked = String(row.unpacked).toUpperCase() === 'TRUE';
+                  return {
+                    type: 'set', ref: db.collection('master_drugs').doc(row.drug_id),
+                    data: {
+                      drug_id: row.drug_id, drug_name: row.drug_name, pack_size: Number(row.pack_size) || 1,
+                      unit_id: row.unit_id, price: Number(row.price) || 0, type: row.type || 'DRUG', unpacked: isUnpacked
+                    }
+                  };
+                }).filter(op => op.data.drug_id);
+                await executeBatchChunks(ops);
+                refreshData(); showToast('อัปโหลดและอัปเดตข้อมูลยาผ่าน CSV สำเร็จ');
+                e.target.value = null;
+              }
+            });
+          };
+
           return (
             <div className="p-6">
-              <div className="flex flex-wrap gap-3 mb-6 items-end">
-                <input className="border border-slate-300 p-2 rounded-lg w-24" placeholder="รหัสยา" value={dId} onChange={e=>setDId(e.target.value)} />
-                <input className="border border-slate-300 p-2 rounded-lg flex-grow min-w-[200px]" placeholder="ชื่อยา" value={dName} onChange={e=>setDName(e.target.value)} />
+              <div className="flex justify-between items-center bg-indigo-50 p-4 rounded-xl mb-6">
+                <div>
+                  <h3 className="font-bold text-indigo-800">นำเข้า/อัปเดต CSV (drug_id, drug_name, pack_size, unit_id, price, type, unpacked)</h3>
+                  <p className="text-xs text-indigo-600">ใช้อัปเดตราคา หรือเพิ่มยาใหม่ (unpacked ใส่ TRUE/FALSE)</p>
+                </div>
+                <label className="bg-indigo-600 text-white px-4 py-2 rounded-lg cursor-pointer font-bold hover:bg-indigo-700">อัปโหลดไฟล์ CSV <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload}/></label>
+              </div>
+
+              <div className="flex flex-wrap gap-3 mb-6 items-end bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <input className="border border-slate-300 p-2 rounded-lg w-24" placeholder="รหัส" value={dId} onChange={e=>setDId(e.target.value)} />
+                <input className="border border-slate-300 p-2 rounded-lg flex-grow min-w-[150px]" placeholder="ชื่อรายการ" value={dName} onChange={e=>setDName(e.target.value)} />
+                <select className="border border-slate-300 p-2 rounded-lg" value={dType} onChange={e=>setDType(e.target.value)}>
+                  <option value="DRUG">ยา</option><option value="NCD">โรคเรื้อรัง (NCD)</option><option value="HERB">สมุนไพร</option><option value="MED">เวชภัณฑ์</option>
+                </select>
                 <input className="border border-slate-300 p-2 rounded-lg w-20" placeholder="Pack" type="number" value={dPack} onChange={e=>setDPack(e.target.value)} />
-                <select className="border border-slate-300 p-2 rounded-lg w-32" value={dUnit} onChange={e=>setDUnit(e.target.value)}>
+                <select className="border border-slate-300 p-2 rounded-lg w-28" value={dUnit} onChange={e=>setDUnit(e.target.value)}>
                   <option value="">-หน่วย-</option>
                   {appDb.units.map(u=><option key={u.id} value={u.unit_id}>{u.unit_name}</option>)}
                 </select>
-                <input className="border border-slate-300 p-2 rounded-lg w-24" placeholder="ราคา (฿)" type="number" value={dPrice} onChange={e=>setDPrice(e.target.value)} />
+                <input className="border border-slate-300 p-2 rounded-lg w-24" placeholder="ราคา(฿)" type="number" value={dPrice} onChange={e=>setDPrice(e.target.value)} />
+                <label className="flex items-center gap-1 bg-white border border-slate-300 p-2 rounded-lg cursor-pointer text-sm font-semibold">
+                  <input type="checkbox" className="w-4 h-4" checked={dUnpacked} onChange={e=>setDUnpacked(e.target.checked)}/> แตกหน่วยย่อย
+                </label>
+                
                 <button onClick={handleSave} className="bg-emerald-600 text-white px-6 py-2 rounded-lg font-bold shadow hover:bg-emerald-700">บันทึก</button>
               </div>
-              <table className="w-full text-left text-sm border"><thead className="bg-slate-100"><tr><th className="p-3 border-b">รหัส</th><th className="p-3 border-b">ชื่อ</th><th className="p-3 border-b">Pack</th><th className="p-3 border-b">หน่วย</th><th className="p-3 border-b">ราคา (฿)</th><th className="p-3 border-b text-center">จัดการ</th></tr></thead>
-                <tbody>{appDb.drugs.sort(sortDrugs).map(d=><tr key={d.id} className="border-b hover:bg-slate-50"><td className="p-3 font-mono">{d.drug_id}</td><td className="p-3 font-bold">{d.drug_name}</td><td className="p-3">{d.pack_size}</td><td className="p-3">{d.unit_display_name}</td><td className="p-3 text-emerald-600 font-semibold">{d.price || 0}</td><td className="p-3 text-center"><button onClick={()=>handleEdit(d)} className="text-blue-500 hover:text-blue-700 bg-blue-50 px-3 py-1 rounded mr-2"><i className="fa-solid fa-pen-to-square"></i></button><button onClick={()=>requestDelete('master_drugs', d.id)} className="text-red-500 hover:text-red-700 bg-red-50 px-3 py-1 rounded"><i className="fa-solid fa-trash"></i></button></td></tr>)}</tbody>
+              <table className="w-full text-left text-sm border"><thead className="bg-slate-100"><tr><th className="p-3 border-b">รหัส</th><th className="p-3 border-b">หมวด</th><th className="p-3 border-b">ชื่อ</th><th className="p-3 border-b">Pack</th><th className="p-3 border-b">หน่วย</th><th className="p-3 border-b">แตกย่อย</th><th className="p-3 border-b">ราคา (฿)</th><th className="p-3 border-b text-center">จัดการ</th></tr></thead>
+                <tbody>{appDb.drugs.sort(sortDrugs).map(d=><tr key={d.id} className="border-b hover:bg-slate-50"><td className="p-3 font-mono">{d.drug_id}</td><td className="p-3 text-slate-500 font-bold">{typeLabels[d.type] || 'ยา'}</td><td className="p-3 font-bold">{d.drug_name}</td><td className="p-3">{d.pack_size}</td><td className="p-3">{d.unit_display_name}</td><td className="p-3">{d.unpacked ? <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-bold text-xs">TRUE</span> : '-'}</td><td className="p-3 text-emerald-600 font-semibold">{d.price || 0}</td><td className="p-3 text-center"><button onClick={()=>handleEdit(d)} className="text-blue-500 hover:text-blue-700 bg-blue-50 px-3 py-1 rounded mr-2"><i className="fa-solid fa-pen-to-square"></i></button><button onClick={()=>requestDelete('master_drugs', d.id)} className="text-red-500 hover:text-red-700 bg-red-50 px-3 py-1 rounded"><i className="fa-solid fa-trash"></i></button></td></tr>)}</tbody>
               </table>
             </div>
           );
@@ -1312,38 +1338,18 @@
             await refreshData();
           };
           
-          const getHistory = (drugId) => {
-             let total = 0; const today = new Date();
-             for(let i=1; i<=3; i++) {
-               let m = (today.getMonth() + 1) - i; let y = today.getFullYear();
-               if (m <= 0) { m += 12; y -= 1; }
-               const oldReq = appDb.requisitions.find(r => r.hospitalId === selHosp && r.month === m && r.year === y);
-               if (oldReq && oldReq.items) {
-                 const item = oldReq.items.find(it => it.drugId === drugId);
-                 if (item) total += Number(item.usage);
-               }
-             }
-             return { total, avg: Math.ceil(total / 3) };
-          };
-
-          const listWithHistory = appDb.drugs.map(d => {
-             const h = getHistory(d.drug_id);
-             return { ...d, histTotal: h.total, histAvg: h.avg };
-          }).sort(sortDrugs);
-
           return (
              <div className="p-6">
                <select className="border-2 border-emerald-300 text-emerald-800 rounded-lg p-2 mb-6 w-64 font-bold outline-none" value={selHosp} onChange={e=>setSelHosp(e.target.value)}>
                  {appDb.hospitals.map(h=><option key={h.id} value={h.hospital_id}>{h.hospital_name}</option>)}
                </select>
-               <table className="w-full text-left text-sm border"><thead className="bg-slate-100"><tr><th className="p-3 border-b">รายการยา</th><th className="p-3 border-b text-center bg-blue-50">ยอดใช้ 3 ด.</th><th className="p-3 border-b text-center bg-blue-50">เฉลี่ย 1 ด.</th><th className="p-3 border-b text-center">Par Stock (อ้างอิง)</th><th className="p-3 border-b text-center">ยอดยกมาปัจจุบัน</th></tr></thead>
-                 <tbody>{listWithHistory.map(d=>{
+               <table className="w-full text-left text-sm border"><thead className="bg-slate-100"><tr><th className="p-3 border-b">รายการยา</th><th className="p-3 border-b text-center">Par Stock (อ้างอิง)</th><th className="p-3 border-b text-center">ยอดยกมาปัจจุบัน</th></tr></thead>
+                 <tbody>{appDb.drugs.sort(sortDrugs).map(d=>{
                     const par = appDb.parLevels.find(p=>p.hospital_id===selHosp && p.drug_id===d.drug_id)?.par_qty || 0;
                     const bal = appDb.balances.find(b=>b.hospital_id===selHosp && b.drug_id===d.drug_id)?.excess_balance || 0;
-                    return <tr key={d.id} className="border-b hover:bg-slate-50"><td className="p-3 font-bold text-slate-700">{d.drug_name} <span className="text-xs text-slate-500 font-normal ml-1">[{d.drug_id}]</span></td><td className="p-3 text-center text-slate-500 bg-blue-50/20">{d.histTotal}</td><td className="p-3 text-center text-blue-600 font-bold bg-blue-50/20">{d.histAvg}</td><td className="p-3 text-center"><input type="number" className="border border-slate-300 rounded p-1 w-24 text-center text-emerald-700 font-bold outline-none focus:ring-2 focus:ring-emerald-500" defaultValue={par} onBlur={e=>handleUpdate(d.drug_id, 'par', e.target.value)}/></td><td className="p-3 text-center"><input type="number" className="border border-slate-300 rounded p-1 w-24 text-center text-amber-700 font-bold outline-none focus:ring-2 focus:ring-amber-500" defaultValue={bal} onBlur={e=>handleUpdate(d.drug_id, 'bal', e.target.value)}/></td></tr>
+                    return <tr key={d.id} className="border-b hover:bg-slate-50"><td className="p-3 font-bold text-slate-700">{d.drug_name} <span className="text-xs text-slate-500 font-normal ml-1">[{d.drug_id}]</span></td><td className="p-3 text-center"><input type="number" className="border border-slate-300 rounded p-1 w-24 text-center text-emerald-700 font-bold outline-none focus:ring-2 focus:ring-emerald-500" defaultValue={par} onBlur={e=>handleUpdate(d.drug_id, 'par', e.target.value)}/></td><td className="p-3 text-center"><input type="number" className="border border-slate-300 rounded p-1 w-24 text-center text-amber-700 font-bold outline-none focus:ring-2 focus:ring-amber-500" defaultValue={bal} onBlur={e=>handleUpdate(d.drug_id, 'bal', e.target.value)}/></td></tr>
                  })}</tbody>
                </table>
-               <p className="text-xs text-slate-400 mt-4"><i className="fa-solid fa-cloud-arrow-up mr-1"></i> ระบบจะบันทึกข้อมูลเข้าเซิร์ฟเวอร์อัตโนมัติเมื่อพิมพ์เสร็จและคลิกออกนอกช่อง (Auto-save)</p>
              </div>
           );
         };
@@ -1416,15 +1422,12 @@
           );
         };
 
-        // ⭐️ หน้าจอแอดมิน: ตรวจสอบและอนุมัติคำขอ CSV Initial Stock
         const ApproveCSVManager = () => {
           const pendingRequests = appDb.csvRequests ? appDb.csvRequests.filter(r => r.status === 'Pending') : [];
 
           const handleApproveCSV = async (reqDoc) => {
             if(!confirm('ยืนยันการอนุมัติ Initial Stock และสร้างประวัติย้อนหลัง 7 เดือน?')) return;
-            
             try {
-              // เนื่องจากมี Operations จำนวนมาก ต้องใช้ Batch Commit แบบหลายรอบ (ป้องกันลิมิต 500)
               const batches = [];
               let currentBatch = db.batch();
               let opCount = 0;
@@ -1436,17 +1439,13 @@
               };
               const addOp = () => {
                 opCount++;
-                if (opCount >= 450) commitCurrentBatch(); // ตัด Batch ใหม่ก่อนถึง 500
+                if (opCount >= 450) commitCurrentBatch();
               };
 
               const hospId = reqDoc.hospital_id;
-              
-              // 1. อัปเดตสถานะคำขอ
               currentBatch.update(db.collection('csv_initial_requests').doc(reqDoc.id), { status: 'Approved', approved_at: firebase.firestore.FieldValue.serverTimestamp() });
               addOp();
 
-              // เตรียมสร้าง Requisitions ย้อนหลัง (ต.ค. 2025 - เม.ย. 2026)
-              // m1=10/2025, m2=11/2025, m3=12/2025, m4=1/2026, m5=2/2026, m6=3/2026, m7=4/2026
               const monthMap = [
                 { m: 10, y: 2025, field: 'm1' }, { m: 11, y: 2025, field: 'm2' }, { m: 12, y: 2025, field: 'm3' },
                 { m: 1, y: 2026, field: 'm4' }, { m: 2, y: 2026, field: 'm5' }, { m: 3, y: 2026, field: 'm6' }, { m: 4, y: 2026, field: 'm7' }
@@ -1454,20 +1453,17 @@
               const histReqs = {};
 
               reqDoc.items.forEach(item => {
-                // 2. อัปเดตข้อมูลยา (ถ้ายังไม่มีในระบบ)
                 if (item.isNewDrug) {
                   currentBatch.set(db.collection('master_drugs').doc(String(item.drug_id)), {
-                    drug_id: item.drug_id, drug_name: item.drugName, pack_size: 1, unit_id: 'U01', type: 'DRUG'
+                    drug_id: item.drug_id, drug_name: item.drugName, pack_size: 1, unit_id: 'U01', type: 'DRUG', unpacked: false
                   }, { merge: true });
                   addOp();
                 }
 
-                // 3. อัปเดต Par และ Balance
                 const docId = `${hospId}_${item.drug_id}`;
                 currentBatch.set(db.collection('config_par').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, par_qty: item.finalQty }, { merge: true }); addOp();
                 currentBatch.set(db.collection('current_excess').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, excess_balance: item.finalQty, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); addOp();
 
-                // 4. เตรียมข้อมูลใบเบิกย้อนหลัง
                 monthMap.forEach(mm => {
                   const reqId = `HIST-${hospId}-${mm.y}-${String(mm.m).padStart(2, '0')}`;
                   if (!histReqs[reqId]) {
@@ -1477,29 +1473,23 @@
                 });
               });
 
-              // 5. บันทึกใบเบิกย้อนหลังเข้า Batch
               for (const [rId, rData] of Object.entries(histReqs)) {
                 currentBatch.set(db.collection('requisitions').doc(rId), rData, { merge: true });
                 addOp();
               }
 
-              // Commit Batch สุดท้าย
               if (opCount > 0) batches.push(currentBatch.commit());
-              
               await Promise.all(batches);
               showToast('อนุมัติและตั้งค่า Initial Stock สำเร็จ');
               refreshData();
-            } catch (e) {
-              showToast(e.message, 'error');
-            }
+            } catch (e) { showToast(e.message, 'error'); }
           };
 
           const handleRejectCSV = async (reqDoc) => {
             if(!confirm('ต้องการลบคำขอ Initial Stock นี้ทิ้ง?')) return;
             try {
               await db.collection('csv_initial_requests').doc(reqDoc.id).delete();
-              showToast('ลบคำขอสำเร็จ');
-              refreshData();
+              showToast('ลบคำขอสำเร็จ'); refreshData();
             } catch(e) { showToast(e.message, 'error'); }
           };
 
@@ -1562,18 +1552,18 @@
               <h2 className="text-2xl font-bold"><i className="fa-solid fa-server mr-2 text-emerald-400"></i> จัดการฐานข้อมูล (Admin Console)</h2>
             </div>
             <div className="flex overflow-x-auto border-b bg-slate-50 whitespace-nowrap scrollbar-hide">
-              <TabBtn id="hospitals" icon="fa-hospital" label="รพ.สต." />
               <TabBtn id="drugs" icon="fa-pills" label="รายการยาและราคา" />
               <TabBtn id="units" icon="fa-box" label="หน่วยนับ" />
+              <TabBtn id="hospitals" icon="fa-hospital" label="รพ.สต." />
               <TabBtn id="stock" icon="fa-cubes" label="ตั้งค่า Initial Stock" />
               <TabBtn id="approve_stock" icon="fa-check-to-slot" label="อนุมัติปรับสต๊อก" />
               <TabBtn id="approve_csv" icon="fa-file-csv" label="อนุมัติ Initial CSV" />
               <TabBtn id="users" icon="fa-users" label="ผู้ใช้งาน" />
             </div>
             <div className="bg-white">
-              {activeTab === 'hospitals' && <HospitalManager />}
               {activeTab === 'drugs' && <DrugManager />}
               {activeTab === 'units' && <UnitManager />}
+              {activeTab === 'hospitals' && <HospitalManager />}
               {activeTab === 'stock' && <StockManager />}
               {activeTab === 'approve_stock' && <ApproveStockManager />}
               {activeTab === 'approve_csv' && <ApproveCSVManager />}

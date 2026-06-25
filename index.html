@@ -75,6 +75,13 @@
     const db = firebase.firestore();
     const auth = firebase.auth();
 
+    const DRUG_TYPES = {
+      '1': 'ยา',
+      '3': 'สมุนไพร',
+      '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)',
+      '32': 'เวชภัณฑ์ทางการแพทย์'
+    };
+
     const Toast = ({ message, type, onClose }) => {
       useEffect(() => {
         const timer = setTimeout(onClose, 3000);
@@ -206,7 +213,6 @@
         );
       }
 
-      // --- Component: Modal ---
       const Modal = ({ title, children, onClose, isOpen, maxWidth }) => {
         if (!isOpen) return null;
         return (
@@ -490,7 +496,7 @@
                 const ADU = total / 210;
                 // Formula: SS = 1.645 * (sd / 30) * Math.sqrt(7) 
                 const SS = 1.645 * (sd / 30) * Math.sqrt(7);
-                const rawInitial = (ADU * 45) + SS;
+                const rawInitial = (ADU * 60) + SS; // ⭐️ เปลี่ยนเป็น 60 วัน (2 เดือน)
                 const ceilInitial = Math.ceil(rawInitial);
 
                 const drug = appDb.drugs.find(d => d.drug_id === row.drug_id);
@@ -587,7 +593,7 @@
                         <th className="p-3 text-center bg-slate-700">ADU</th>
                         <th className="p-3 text-center bg-slate-700">SD</th>
                         <th className="p-3 text-center bg-slate-700">Safety<br/>Stock</th>
-                        <th className="p-3 text-center text-amber-300 bg-slate-900">คำนวณ<br/>(45 วัน)</th>
+                        <th className="p-3 text-center text-amber-300 bg-slate-900">คำนวณ<br/>(60 วัน)</th>
                         <th className="p-3 text-center">Pack<br/>Size</th>
                         <th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(แพ็ค)</th>
                         <th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(หน่วยย่อย)</th>
@@ -706,7 +712,7 @@
               <div>
                 <div className="mb-4 relative">
                   <i className="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400"></i>
-                  <input type="text" placeholder="ค้นหารายการยา..." className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 transition" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                  <input type="text" placeholder="ค้นหารายยา..." className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 transition" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                 </div>
                 <label className="flex items-center gap-2 cursor-pointer mb-4 text-emerald-700 font-semibold bg-emerald-50 p-2 rounded-lg border border-emerald-200">
                   <input type="checkbox" className="w-5 h-5 accent-emerald-600" checked={showMyStockOnly} onChange={e=>setShowMyStockOnly(e.target.checked)} /> 
@@ -832,7 +838,7 @@
           return generatedList.sort(sortDrugs);
         });
 
-        // ⭐️ ฟังก์ชันดึงยอดใช้จากไฟล์ JHCIS รบ.301 (รองรับ Excel และ CSV)
+        // ⭐️ ฟังก์ชันดึงยอดใช้จากไฟล์ JHCIS รบ.301
         const handleJHCISUpload = (e) => {
           const file = e.target.files[0];
           if(!file) return;
@@ -858,7 +864,8 @@
                  const rawName = compacted[1];
                  const usageStr = compacted[6]; 
                  const usageNum = parseFloat(usageStr?.replace(/,/g, ''));
-                 if (!isNaN(usageNum) && rawName && !rawName.includes('รวม')) {
+                 // ⭐️ กรองเฉพาะยาที่มียอดใช้ > 0
+                 if (!isNaN(usageNum) && usageNum > 0 && rawName && !rawName.includes('รวม')) {
                      extracted.push({ id: Math.random().toString(), rawName, usage: usageNum, mappedDrugId: '' });
                  }
               }
@@ -869,11 +876,18 @@
               const normRaw = normalize(item.rawName);
               let mappedId = '';
               
-              let matched = appDb.drugs.find(d => normalize(d.drug_name) === normRaw);
+              // ⭐️ ค้นหาจาก drug_name และ fuzzy
+              let matched = appDb.drugs.find(d => {
+                 const normSys = normalize(d.drug_name);
+                 const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize) : [];
+                 return normSys === normRaw || fuzzyArr.includes(normRaw);
+              });
+              
               if (!matched) {
                 matched = appDb.drugs.find(d => {
                    const normSys = normalize(d.drug_name);
-                   return normRaw.includes(normSys) || normSys.includes(normRaw);
+                   const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize) : [];
+                   return normSys.includes(normRaw) || normRaw.includes(normSys) || fuzzyArr.some(f => normRaw.includes(f));
                 });
               }
               if (matched) mappedId = matched.drug_id;
@@ -886,12 +900,8 @@
 
           if (file.name.endsWith('.csv')) {
             Papa.parse(file, {
-              header: false,
-              skipEmptyLines: true,
-              complete: function(results) {
-                 processData(results.data);
-                 e.target.value = null;
-              }
+              header: false, skipEmptyLines: true,
+              complete: function(results) { processData(results.data); e.target.value = null; }
             });
           } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
             const reader = new FileReader();
@@ -906,8 +916,7 @@
             };
             reader.readAsBinaryString(file);
           } else {
-            showToast("รองรับเฉพาะไฟล์ .csv, .xls, .xlsx", "error");
-            e.target.value = null;
+            showToast("รองรับเฉพาะไฟล์ .csv, .xls, .xlsx", "error"); e.target.value = null;
           }
         };
 
@@ -1022,7 +1031,7 @@
         const filteredItems = items.filter(item => {
           const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(item.drugId).includes(searchTerm.toLowerCase());
           const drugDoc = appDb.drugs.find(d => d.drug_id === item.drugId);
-          const type = drugDoc ? drugDoc.type : 'DRUG';
+          const type = drugDoc ? drugDoc.type : '1';
           const matchType = filterType === 'all' ? true : filterType === type;
           const matchUsage = showUsedOnly ? item.usage > 0 : true;
           return matchSearch && matchType && matchUsage;
@@ -1054,10 +1063,9 @@
               <button onClick={() => {setEditReqId(null); setCurrentView('dashboard');}} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">ยกเลิก</button>
             </div>
 
-            {/* ⭐️ ส่วนสำหรับอัปโหลดไฟล์ JHCIS CSV */}
             <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-200 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
               <div>
-                <h3 className="font-bold text-indigo-800 text-lg flex items-center"><i className="fa-solid fa-file-excel mr-2"></i> ดึงยอดใช้จากไฟล์ รบ.301 (Excel/CSV) <span className="bg-indigo-600 text-white text-[10px] px-2 py-0.5 rounded-full ml-2">ใหม่</span></h3>
+                <h3 className="font-bold text-indigo-800 text-lg flex items-center"><i className="fa-solid fa-file-excel mr-2"></i> ดึงยอดใช้จากไฟล์ รบ.301 (Excel/CSV)</h3>
                 <p className="text-sm text-indigo-600 mt-1">อัปโหลดไฟล์สรุปรวมรายเดือน ระบบจะดึงยอดจ่ายมาคีย์ลงตารางให้อัตโนมัติ</p>
               </div>
               <label className="bg-white border-2 border-indigo-600 text-indigo-700 px-6 py-3 rounded-xl cursor-pointer hover:bg-indigo-100 transition flex items-center font-bold shrink-0 shadow-lg shadow-indigo-100">
@@ -1088,10 +1096,10 @@
               </div>
               <div className="flex gap-2 shrink-0 bg-slate-100 p-1 rounded-xl overflow-x-auto">
                 <button onClick={()=>setFilterType('all')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='all'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>ทั้งหมด</button>
-                <button onClick={()=>setFilterType('DRUG')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='DRUG'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>ยา</button>
-                <button onClick={()=>setFilterType('NCD')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='NCD'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>NCD</button>
-                <button onClick={()=>setFilterType('HERB')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='HERB'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>สมุนไพร</button>
-                <button onClick={()=>setFilterType('MED')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='MED'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>เวชภัณฑ์</button>
+                <button onClick={()=>setFilterType('1')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='1'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>ยา</button>
+                <button onClick={()=>setFilterType('25')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='25'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>NCDs</button>
+                <button onClick={()=>setFilterType('3')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='3'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>สมุนไพร</button>
+                <button onClick={()=>setFilterType('32')} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${filterType==='32'?'bg-white shadow text-emerald-700':'text-slate-500 hover:bg-slate-200'}`}>เวชภัณฑ์</button>
               </div>
               <label className="flex items-center gap-2 cursor-pointer bg-amber-50 px-4 rounded-xl border border-amber-200 text-amber-800 font-bold shrink-0">
                 <input type="checkbox" className="w-5 h-5 accent-amber-500" checked={showUsedOnly} onChange={e=>setShowUsedOnly(e.target.checked)} /> แสดงเฉพาะที่ระบุยอด
@@ -1123,12 +1131,6 @@
                       <td className="p-4 text-center text-blue-600 font-bold bg-blue-50/20 border-x border-blue-50">{item.prevExcess}</td>
                       <td className="p-4 bg-amber-50/30 border-r border-amber-100 relative text-center">
                         <input type="number" min="0" className="w-24 border-b-2 border-amber-300 bg-transparent p-1 text-center font-bold text-amber-900 outline-none focus:bg-white focus:border-amber-500 transition" value={item.usage || ''} onChange={e => updateRow(item.drugId, e.target.value)} />
-                        {item.usage > 0 && item.usage <= 5 && item.packSize >= 50 && (
-                          <div className="absolute top-12 left-1/2 transform -translate-x-1/2 w-48 bg-slate-800 text-white text-[10px] p-2 rounded shadow-xl z-20 leading-tight">
-                            <i className="fa-solid fa-circle-info text-amber-400 mr-1"></i>
-                            คุณหมายถึง {item.usage} {item.unit} หรือ {item.usage} แพ็คครับ? (ถ้า {item.usage} แพ็ค = {item.usage * item.packSize} {item.unit})
-                          </div>
-                        )}
                       </td>
                       <td className="p-4 text-center font-medium text-slate-400">{item.avgUsage}</td>
                       <td className="p-4 text-center text-emerald-600 font-bold bg-emerald-50/20 border-l border-emerald-50">{item.vmiTarget}</td>
@@ -1164,66 +1166,59 @@
 
             {/* ⭐️ JHCIS Import Modal */}
             {showImportModal && (
-              <div className="fixed inset-0 z-[200] flex items-center justify-center px-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
-                  <div className="p-5 border-b flex justify-between items-center bg-indigo-50">
-                    <h3 className="text-xl font-bold text-indigo-800"><i className="fa-solid fa-file-excel mr-2"></i> ตรวจสอบข้อมูลจาก รบ.301</h3>
-                    <button onClick={() => setShowImportModal(false)} className="text-slate-400 hover:text-red-500 bg-white border border-slate-200 rounded-full w-8 h-8 flex items-center justify-center shadow-sm"><i className="fa-solid fa-xmark"></i></button>
-                  </div>
-                  <div className="p-6 overflow-y-auto space-y-4 bg-slate-50 flex-grow">
-                     <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-white p-4 rounded-xl border border-slate-200">
-                           <p className="text-xs text-slate-500 font-bold mb-1">รพ.สต. ในไฟล์</p>
-                           <p className="font-semibold text-slate-800 text-sm">{importData.hospInfo || 'ไม่พบข้อมูลในไฟล์'}</p>
-                           {!importData.hospInfo?.includes(appDb.hospitals.find(h=>h.hospital_id === hospId)?.hospital_name?.replace('รพ.สต. ', '')) && (
-                             <p className="text-xs text-amber-600 mt-1"><i className="fa-solid fa-triangle-exclamation"></i> ชื่ออาจไม่ตรงกับต้นสังกัด โปรดตรวจสอบ</p>
-                           )}
-                        </div>
-                        <div className="bg-white p-4 rounded-xl border border-slate-200">
-                           <p className="text-xs text-slate-500 font-bold mb-1">ช่วงเวลาในไฟล์</p>
-                           <p className="font-semibold text-slate-800 text-sm">{importData.periodInfo || 'ไม่พบข้อมูล'}</p>
-                        </div>
-                     </div>
+              <Modal title="ตรวจสอบข้อมูลจาก รบ.301" isOpen={true} onClose={()=>setShowImportModal(false)} maxWidth="max-w-4xl">
+                 <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="bg-white p-4 rounded-xl border border-slate-200">
+                       <p className="text-xs text-slate-500 font-bold mb-1">รพ.สต. ในไฟล์</p>
+                       <p className="font-semibold text-slate-800 text-sm">{importData.hospInfo || 'ไม่พบข้อมูลในไฟล์'}</p>
+                       {!importData.hospInfo?.includes(appDb.hospitals.find(h=>h.hospital_id === hospId)?.hospital_name?.replace('รพ.สต. ', '')) && (
+                         <p className="text-xs text-amber-600 mt-1"><i className="fa-solid fa-triangle-exclamation"></i> ชื่ออาจไม่ตรงกับต้นสังกัด โปรดตรวจสอบ</p>
+                       )}
+                    </div>
+                    <div className="bg-white p-4 rounded-xl border border-slate-200">
+                       <p className="text-xs text-slate-500 font-bold mb-1">ช่วงเวลาในไฟล์</p>
+                       <p className="font-semibold text-slate-800 text-sm">{importData.periodInfo || 'ไม่พบข้อมูล'}</p>
+                    </div>
+                 </div>
 
-                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                       <table className="w-full text-left text-sm">
-                         <thead className="bg-slate-100 border-b">
-                           <tr>
-                              <th className="p-3">ชื่อยาจากระบบ JHCIS (ข้อมูลดิบ)</th>
-                              <th className="p-3">จับคู่กับยาในระบบ</th>
-                              <th className="p-3 text-center w-24">ยอดใช้</th>
-                              <th className="p-3 text-center w-12">ข้าม</th>
-                           </tr>
-                         </thead>
-                         <tbody>
-                           {importData.items.map(item => (
-                              <tr key={item.id} className="border-b hover:bg-slate-50">
-                                 <td className="p-3 font-medium text-slate-700">{item.rawName}</td>
-                                 <td className="p-3">
-                                    <select 
-                                       className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800'}`}
-                                       value={item.mappedDrugId}
-                                       onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
-                                    >
-                                       <option value="">-- ไม่ทำการจับคู่ (ข้าม) --</option>
-                                       {appDb.drugs.sort(sortDrugs).map(d => (
-                                          <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>
-                                       ))}
-                                    </select>
-                                 </td>
-                                 <td className="p-3">
-                                    <input type="number" className="w-20 p-2 border rounded-lg text-center font-bold text-slate-700 outline-none focus:border-indigo-500" value={item.usage} onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, usage: Number(e.target.value) } : i)}))} />
-                                 </td>
-                                 <td className="p-3 text-center">
-                                    <button onClick={() => setImportData(prev => ({...prev, items: prev.items.filter(i => i.id !== item.id)}))} className="text-slate-400 hover:text-red-500 transition"><i className="fa-solid fa-trash"></i></button>
-                                 </td>
-                              </tr>
-                           ))}
-                         </tbody>
-                       </table>
-                     </div>
-                  </div>
-                  <div className="p-5 border-t bg-white flex justify-end gap-3 shrink-0">
+                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                   <table className="w-full text-left text-sm">
+                     <thead className="bg-slate-100 border-b">
+                       <tr>
+                          <th className="p-3">ชื่อยาจากระบบ JHCIS (ข้อมูลดิบ)</th>
+                          <th className="p-3">จับคู่กับยาในระบบ</th>
+                          <th className="p-3 text-center w-24">ยอดใช้</th>
+                          <th className="p-3 text-center w-12">ข้าม</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       {importData.items.map(item => (
+                          <tr key={item.id} className="border-b hover:bg-slate-50">
+                             <td className="p-3 font-medium text-slate-700">{item.rawName}</td>
+                             <td className="p-3">
+                                <select 
+                                   className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800'}`}
+                                   value={item.mappedDrugId}
+                                   onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
+                                >
+                                   <option value="">-- ไม่ทำการจับคู่ (ข้าม) --</option>
+                                   {appDb.drugs.sort(sortDrugs).map(d => (
+                                      <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>
+                                   ))}
+                                </select>
+                             </td>
+                             <td className="p-3">
+                                <input type="number" className="w-20 p-2 border rounded-lg text-center font-bold text-slate-700 outline-none focus:border-indigo-500" value={item.usage} onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, usage: Number(e.target.value) } : i)}))} />
+                             </td>
+                             <td className="p-3 text-center">
+                                <button onClick={() => setImportData(prev => ({...prev, items: prev.items.filter(i => i.id !== item.id)}))} className="text-slate-400 hover:text-red-500 transition"><i className="fa-solid fa-trash"></i></button>
+                             </td>
+                          </tr>
+                       ))}
+                     </tbody>
+                   </table>
+                 </div>
+                 <div className="mt-6 flex justify-end gap-3 shrink-0">
                      <button onClick={() => setShowImportModal(false)} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">ยกเลิก</button>
                      <button onClick={() => {
                         items.forEach(mainItem => {
@@ -1238,8 +1233,7 @@
                        <i className="fa-solid fa-file-import mr-2"></i> ยืนยันนำยอดไปใส่ในใบเบิก
                      </button>
                   </div>
-                </div>
-              </div>
+              </Modal>
             )}
           </div>
         );
@@ -1317,6 +1311,18 @@
         const [isSaving, setIsSaving] = useState(false);
         const [showFormula, setShowFormula] = useState(null); 
 
+        const requestDelete = (col, id) => setDeleteTarget({ col, id });
+
+        const executeDelete = async () => {
+          if(!deleteTarget) return;
+          try {
+            await db.collection(deleteTarget.col).doc(deleteTarget.id).delete();
+            showToast('ลบข้อมูลสำเร็จ');
+            await refreshData(); 
+          } catch(e) { showToast(e.message, 'error'); }
+          setDeleteTarget(null);
+        };
+
         const handleSave = async (col, id, data) => {
           setIsSaving(true);
           try {
@@ -1338,14 +1344,13 @@
              payload = {
                  drug_id: data.drug_id, drug_name: data.drug_name, type: data.type,
                  pack_size: Number(data.pack_size) || 1, price: Number(data.price) || 0,
-                 unit_id: data.unit_id, unpacked: !!data.unpacked
+                 unit_id: data.unit_id, unpacked: !!data.unpacked, fuzzy: data.fuzzy || ''
              };
           } else if (editTarget.col === 'master_unit') {
              docId = data.unit_id; payload = { unit_id: data.unit_id, unit_name: data.unit_name };
           } else if (editTarget.col === 'master_hospitals') {
              docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name };
           } else if (editTarget.col === 'users') {
-             // ⭐️ อัปเดตข้อมูล User
              docId = editTarget.data.id; payload = { name: data.name, hospital_id: data.hospital_id, role: data.role };
           }
           await handleSave(editTarget.col, docId, payload);
@@ -1360,6 +1365,10 @@
           const [searchTerm, setSearchTerm] = useState('');
           const activeCSV = appDb.csvRequests?.find(r => r.hospital_id === selHosp && r.status === 'Approved');
           
+          // ⭐️ ตัวแปรปรับสูตรสด
+          const [zScore, setZScore] = useState(1.645);
+          const [reviewPeriod, setReviewPeriod] = useState(30);
+
           const stockList = useMemo(() => {
             return appDb.drugs.map(d => {
               const par = appDb.parLevels.find(p => p.hospital_id === selHosp && p.drug_id === d.drug_id);
@@ -1373,31 +1382,75 @@
                   }
               });
 
-              return { ...d, targetStock: par?.par_qty || 0, currentBal: bal?.excess_balance || 0, csvData, hasReqHistory };
+              // ⭐️ ถ้ามี csvData ให้ Re-calculate ตาม Z-score และ Review Period ใหม่
+              let dynamicTarget = par?.par_qty || 0;
+              let dynamicCSV = csvData;
+              if (csvData) {
+                  const SS = zScore * (csvData.sd / reviewPeriod) * Math.sqrt(7);
+                  const rawInitial = (csvData.adu * 60) + SS;
+                  const ceilInitial = Math.ceil(rawInitial);
+                  let finalQty, finalPack;
+                  if (d.unpacked) {
+                    finalQty = ceilInitial; 
+                    finalPack = Math.ceil(ceilInitial / d.pack_size);
+                  } else {
+                    finalPack = Math.ceil(ceilInitial / d.pack_size);
+                    finalQty = finalPack * d.pack_size;
+                  }
+                  dynamicTarget = finalQty;
+                  dynamicCSV = { ...csvData, ss: SS.toFixed(3), ceilInitial, finalPack, finalQty };
+              }
+
+              return { ...d, targetStock: dynamicTarget, currentBal: bal?.excess_balance || 0, csvData: dynamicCSV, hasReqHistory };
             }).filter(item => 
               (item.targetStock > 0 || item.currentBal > 0 || item.csvData || item.hasReqHistory) && 
               ((item.drug_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || (item.drug_id || '').includes(searchTerm))
             );
-          }, [appDb, selHosp, searchTerm, activeCSV]);
+          }, [appDb, selHosp, searchTerm, activeCSV, zScore, reviewPeriod]);
 
           return (
             <div className="p-6">
-              <div className="flex flex-col md:flex-row gap-4 mb-6 items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-200">
-                <select className="border-2 border-emerald-300 text-emerald-800 rounded-lg p-2 font-bold w-full md:w-64 outline-none" value={selHosp} onChange={e=>setSelHosp(e.target.value)}>{appDb.hospitals.map(h=><option key={h.id} value={h.hospital_id}>{h.hospital_name}</option>)}</select>
-                <div className="relative flex-grow max-w-md w-full">
+              <div className="flex flex-col lg:flex-row gap-4 mb-6 items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <div className="flex gap-4 w-full lg:w-auto">
+                  <select className="border-2 border-emerald-300 text-emerald-800 rounded-lg p-2 font-bold w-full md:w-64 outline-none" value={selHosp} onChange={e=>setSelHosp(e.target.value)}>
+                    {appDb.hospitals.map(h=><option key={h.id} value={h.hospital_id}>{h.hospital_name}</option>)}
+                  </select>
+                </div>
+                
+                <div className="flex gap-4 items-center bg-white p-2 rounded-lg border border-slate-200 w-full lg:w-auto">
+                   <div className="text-sm font-bold text-slate-600">ตัวแปรสูตร:</div>
+                   <label className="text-xs text-slate-500 flex flex-col">Z-Score
+                     <input type="number" step="0.001" className="w-16 border rounded p-1 text-center font-bold text-slate-800" value={zScore} onChange={e=>setZScore(Number(e.target.value) || 0)} />
+                   </label>
+                   <label className="text-xs text-slate-500 flex flex-col">Review Period
+                     <input type="number" className="w-16 border rounded p-1 text-center font-bold text-slate-800" value={reviewPeriod} onChange={e=>setReviewPeriod(Number(e.target.value) || 1)} />
+                   </label>
+                </div>
+
+                <div className="relative flex-grow max-w-sm w-full">
                   <i className="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400"></i>
                   <input type="text" placeholder="ค้นหาชื่อหรือรหัสยา..." className="w-full pl-10 pr-4 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
                 </div>
               </div>
+
               <div className="overflow-x-auto border rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
-                <table className="w-full text-left text-sm border-collapse">
+                <table className="w-full text-left text-sm border-collapse whitespace-nowrap">
                   <thead className="bg-slate-100 border-b sticky top-0 z-10">
                     <tr>
-                      <th className="p-3">รายการยา [รหัส]</th>
-                      <th className="p-3 text-center bg-blue-50/80">ประวัติ (M1-M7)</th>
-                      <th className="p-3 text-center text-blue-800 bg-blue-100/80 font-bold border-x border-blue-200">Target Stock</th>
-                      <th className="p-3 text-center text-amber-800 bg-amber-100/80 font-bold">ยอดยกมาปัจจุบัน</th>
-                      <th className="p-3 text-center bg-slate-100/80">สูตร</th>
+                      <th className="p-3" rowSpan="2">รายการยา [รหัส]</th>
+                      <th className="p-3 text-center bg-blue-50/80 border-x border-blue-200" colSpan="7">ประวัติการใช้ 7 เดือน (Initial CSV)</th>
+                      <th className="p-3 text-center bg-indigo-50/80 border-r border-indigo-200" colSpan="2">คำนวณ (ADU/SD)</th>
+                      <th className="p-3 text-center text-blue-800 bg-blue-100/80 font-bold border-r border-blue-200" rowSpan="2">Target Stock</th>
+                      <th className="p-3 text-center text-amber-800 bg-amber-100/80 font-bold" rowSpan="2">ยอดยกมาปัจจุบัน<br/><span className="text-xs font-normal">(Credit)</span></th>
+                      <th className="p-3 text-center bg-slate-100/80" rowSpan="2">สูตร</th>
+                    </tr>
+                    <tr className="bg-slate-50 text-[11px] text-slate-500 text-center border-b">
+                      <th className="p-1 border-x border-blue-100">ต.ค. 68</th><th className="p-1 border-r border-blue-100">พ.ย. 68</th>
+                      <th className="p-1 border-r border-blue-100">ธ.ค. 68</th><th className="p-1 border-r border-blue-100">ม.ค. 69</th>
+                      <th className="p-1 border-r border-blue-100">ก.พ. 69</th><th className="p-1 border-r border-blue-100">มี.ค. 69</th>
+                      <th className="p-1 border-r border-blue-200">เม.ย. 69</th>
+                      <th className="p-1 bg-indigo-50/50 border-r border-indigo-100">Avg. Daily Use</th>
+                      <th className="p-1 bg-indigo-50/50 border-r border-indigo-200">SD daily</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1407,14 +1460,22 @@
                           <div className="font-bold text-slate-800">{d.drug_name}</div>
                           <div className="text-xs text-slate-400">[{d.drug_id}] | Pack {d.pack_size} {d.unit_display_name}</div>
                         </td>
-                        <td className="p-3 text-center font-mono text-[11px] text-slate-500 whitespace-nowrap bg-blue-50/30">
-                          {d.csvData ? `${d.csvData.m1},${d.csvData.m2},${d.csvData.m3},${d.csvData.m4},${d.csvData.m5},${d.csvData.m6},${d.csvData.m7}` : '-'}
-                        </td>
-                        <td className="p-3 text-center bg-blue-50 border-x border-blue-100">
-                          <input type="number" className="w-20 text-center border-b-2 border-blue-400 bg-transparent font-extrabold text-blue-700 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 rounded p-1" defaultValue={d.targetStock} onBlur={e=>handleSave('config_par', `${selHosp}_${d.drug_id}`, {hospital_id: selHosp, drug_id: d.drug_id, par_qty: Number(e.target.value)})} />
+                        <td className="p-2 text-center text-slate-600 border-x border-slate-100">{d.csvData ? d.csvData.m1 : '-'}</td>
+                        <td className="p-2 text-center text-slate-600 border-r border-slate-100">{d.csvData ? d.csvData.m2 : '-'}</td>
+                        <td className="p-2 text-center text-slate-600 border-r border-slate-100">{d.csvData ? d.csvData.m3 : '-'}</td>
+                        <td className="p-2 text-center text-slate-600 border-r border-slate-100">{d.csvData ? d.csvData.m4 : '-'}</td>
+                        <td className="p-2 text-center text-slate-600 border-r border-slate-100">{d.csvData ? d.csvData.m5 : '-'}</td>
+                        <td className="p-2 text-center text-slate-600 border-r border-slate-100">{d.csvData ? d.csvData.m6 : '-'}</td>
+                        <td className="p-2 text-center text-slate-600 border-r border-blue-200">{d.csvData ? d.csvData.m7 : '-'}</td>
+                        
+                        <td className="p-2 text-center font-bold text-indigo-700 bg-indigo-50/30 border-r border-indigo-100">{d.csvData ? d.csvData.adu : '-'}</td>
+                        <td className="p-2 text-center font-bold text-indigo-700 bg-indigo-50/30 border-r border-indigo-200">{d.csvData ? (d.csvData.sd/reviewPeriod).toFixed(3) : '-'}</td>
+
+                        <td className="p-3 text-center bg-blue-50 border-r border-blue-100">
+                          <input type="number" className="w-20 text-center border-b-2 border-blue-400 bg-transparent font-extrabold text-blue-700 outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 rounded p-1" value={d.targetStock} onChange={e=>handleSave('config_par', `${selHosp}_${d.drug_id}`, {hospital_id: selHosp, drug_id: d.drug_id, par_qty: Number(e.target.value)})} />
                         </td>
                         <td className="p-3 text-center bg-amber-50">
-                          <input type="number" className="w-20 text-center border-b-2 border-amber-400 bg-transparent font-extrabold text-amber-700 outline-none focus:bg-white focus:ring-2 focus:ring-amber-500 rounded p-1" defaultValue={d.currentBal} onBlur={e=>handleSave('current_excess', `${selHosp}_${d.drug_id}`, {hospital_id: selHosp, drug_id: d.drug_id, excess_balance: Number(e.target.value), last_updated: firebase.firestore.FieldValue.serverTimestamp()})} />
+                          <input type="number" className="w-20 text-center border-b-2 border-amber-400 bg-transparent font-extrabold text-amber-700 outline-none focus:bg-white focus:ring-2 focus:ring-amber-500 rounded p-1" value={d.currentBal} onChange={e=>handleSave('current_excess', `${selHosp}_${d.drug_id}`, {hospital_id: selHosp, drug_id: d.drug_id, excess_balance: Number(e.target.value), last_updated: firebase.firestore.FieldValue.serverTimestamp()})} />
                         </td>
                         <td className="p-3 text-center">
                           {d.csvData ? (
@@ -1425,10 +1486,11 @@
                         </td>
                       </tr>
                     ))}
-                    {stockList.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">ไม่พบรายการยาที่มีประวัติหรือยอดยกมา</td></tr>}
+                    {stockList.length === 0 && <tr><td colSpan="13" className="p-8 text-center text-slate-400">ไม่พบรายการยาที่มีประวัติหรือยอดยกมา</td></tr>}
                   </tbody>
                 </table>
               </div>
+              
               {showFormula && (
                 <Modal title="ที่มาของสูตรการคำนวณ Initial Stock" isOpen={true} onClose={()=>setShowFormula(null)}>
                   <div className="space-y-4 text-slate-700">
@@ -1443,17 +1505,17 @@
                         <p className="text-[10px] text-blue-400 mt-1">ΣM / 210 วัน</p>
                       </div>
                       <div className="bg-amber-50 p-4 rounded-xl border border-amber-200">
-                        <p className="text-xs text-amber-600 font-bold mb-1">Standard Deviation (SD)</p>
-                        <p className="text-2xl font-black text-amber-700">{showFormula.sd}</p>
+                        <p className="text-xs text-amber-600 font-bold mb-1">Standard Deviation (SD daily)</p>
+                        <p className="text-2xl font-black text-amber-700">{(showFormula.sd/reviewPeriod).toFixed(3)}</p>
                       </div>
                       <div className="bg-purple-50 p-4 rounded-xl border border-purple-200">
                         <p className="text-xs text-purple-600 font-bold mb-1">Safety Stock (SS)</p>
                         <p className="text-2xl font-black text-purple-700">{showFormula.ss}</p>
-                        <p className="text-[10px] text-purple-400 mt-1">1.645 * (SD/30) * √7</p>
+                        <p className="text-[10px] text-purple-400 mt-1">{zScore} * ({showFormula.sd}/{reviewPeriod}) * √7</p>
                       </div>
                     </div>
                     <div className="p-6 bg-emerald-50 rounded-2xl border-2 border-emerald-200 text-center mt-6">
-                      <p className="text-sm font-bold text-emerald-800 mb-2">Target Stock (45 วัน) = (ADU × 45) + SS</p>
+                      <p className="text-sm font-bold text-emerald-800 mb-2">Target Stock (60 วัน) = (ADU × 60) + SS</p>
                       <p className="text-4xl font-black text-emerald-600 mb-2">{showFormula.finalQty} <span className="text-lg font-bold">{showFormula.unit}</span></p>
                       <p className="text-sm text-emerald-700 font-medium bg-emerald-100 inline-block px-3 py-1 rounded-full">
                          คำนวณได้ {showFormula.ceilInitial} ➔ ปัดเศษ ({showFormula.finalPack} Pack × {showFormula.packSize})
@@ -1480,7 +1542,7 @@
                     type: 'set', ref: db.collection('master_drugs').doc(row.drug_id),
                     data: {
                       drug_id: row.drug_id, drug_name: row.drug_name, pack_size: Number(row.pack_size) || 1,
-                      unit_id: row.unit_id, price: Number(row.price) || 0, type: row.type || 'DRUG', unpacked: isUnpacked
+                      unit_id: row.unit_id, price: Number(row.price) || 0, type: String(row.type) || '1', unpacked: isUnpacked, fuzzy: row.fuzzy || ''
                     }
                   };
                 }).filter(op => op.data.drug_id);
@@ -1493,7 +1555,8 @@
 
           const filteredDrugs = appDb.drugs.filter(d => 
             (d.drug_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-            (d.drug_id || '').toLowerCase().includes(searchTerm.toLowerCase())
+            (d.drug_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (d.fuzzy || '').toLowerCase().includes(searchTerm.toLowerCase())
           ).sort(sortDrugs);
 
           return (
@@ -1501,7 +1564,7 @@
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-indigo-50 p-4 rounded-xl mb-6 gap-4 border border-indigo-100">
                 <div>
                   <h3 className="font-bold text-indigo-800">นำเข้า/อัปเดตยาด้วยไฟล์ CSV</h3>
-                  <p className="text-xs text-indigo-600 mt-1">คอลัมน์ที่ต้องการ: drug_id, drug_name, pack_size, unit_id, price, type, unpacked</p>
+                  <p className="text-xs text-indigo-600 mt-1">คอลัมน์ที่ต้องการ: drug_id, drug_name, pack_size, unit_id, price, type, unpacked, fuzzy</p>
                 </div>
                 <label className="bg-indigo-600 text-white px-4 py-2 rounded-lg cursor-pointer font-bold hover:bg-indigo-700 shrink-0 shadow-lg">
                   <i className="fa-solid fa-file-csv mr-2"></i>อัปโหลด CSV ยา <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload}/>
@@ -1521,21 +1584,22 @@
               <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
                 <table className="w-full text-left text-sm border-collapse whitespace-nowrap">
                   <thead className="bg-slate-100 border-b sticky top-0 z-10">
-                    <tr><th className="p-4">รหัส</th><th className="p-4">หมวด</th><th className="p-4">ชื่อยา</th><th className="p-4 text-center">Pack</th><th className="p-4 text-center">หน่วย</th><th className="p-4 text-center">แตกย่อย</th><th className="p-4 text-right">ราคา (฿)</th><th className="p-4 text-center">จัดการ</th></tr>
+                    <tr><th className="p-4">รหัส</th><th className="p-4">หมวด</th><th className="p-4">ชื่อยา</th><th className="p-4">ชื่อพ้อง (Fuzzy)</th><th className="p-4 text-center">Pack</th><th className="p-4 text-center">หน่วย</th><th className="p-4 text-center">แตกย่อย</th><th className="p-4 text-right">ราคา (฿)</th><th className="p-4 text-center">จัดการ</th></tr>
                   </thead>
                   <tbody>
                     {filteredDrugs.map(d=>(
                       <tr key={d.id} className="border-b hover:bg-slate-50 transition">
                         <td className="p-4 font-mono text-slate-500">{d.drug_id}</td>
-                        <td className="p-4 font-bold text-slate-600">{d.type || 'DRUG'}</td>
+                        <td className="p-4 font-bold text-slate-600">{DRUG_TYPES[d.type] || DRUG_TYPES['1']}</td>
                         <td className="p-4 font-bold text-slate-800">{d.drug_name}</td>
+                        <td className="p-4 text-xs text-slate-500 max-w-[150px] truncate" title={d.fuzzy}>{d.fuzzy || '-'}</td>
                         <td className="p-4 text-center font-medium text-slate-600">{d.pack_size}</td>
                         <td className="p-4 text-center">{d.unit_display_name}</td>
                         <td className="p-4 text-center">{d.unpacked ? <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-bold text-xs">TRUE</span> : '-'}</td>
                         <td className="p-4 text-right text-emerald-600 font-bold">{d.price || 0}</td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'master_drugs', data: d, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                          <button onClick={()=>requestDelete('master_drugs', d.id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={()=>requestDelete('master_drugs', d.drug_id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1594,7 +1658,7 @@
                         <td className="p-4 font-bold text-slate-800">{u.unit_name}</td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'master_unit', data: u, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                          <button onClick={()=>requestDelete('master_unit', u.id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={()=>requestDelete('master_unit', u.unit_id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1632,7 +1696,7 @@
                         <td className="p-4 font-bold text-slate-800">{h.hospital_name}</td>
                         <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'master_hospitals', data: h, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                          <button onClick={()=>requestDelete('master_hospitals', h.id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                          <button onClick={()=>requestDelete('master_hospitals', h.hospital_id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1658,8 +1722,9 @@
                         <td className="p-4">
                           <span className={`px-2 py-1 rounded text-xs font-bold ${u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{u.role === 'admin' ? 'แอดมิน' : 'รพ.สต.'}</span>
                         </td>
-                        <td className="p-4 text-center">
+                        <td className="p-4 text-center space-x-2">
                           <button onClick={()=>setEditTarget({ col: 'users', data: u, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
+                          <button onClick={()=>requestDelete('users', u.id)} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1747,7 +1812,7 @@
           const pendingRequests = appDb.csvRequests ? appDb.csvRequests.filter(r => r.status === 'Pending') : [];
 
           const handleApproveCSV = async (reqDoc) => {
-            if(!confirm('ยืนยันการอนุมัติ Initial Stock และสร้างประวัติย้อนหลัง 7 เดือน?')) return;
+            if(!confirm('ยืนยันการอนุมัติ Initial Stock และสร้างใบเบิก พ.ค. 69 อัตโนมัติ?')) return;
             setIsSaving(true);
             try {
               const batches = [];
@@ -1768,16 +1833,14 @@
               currentBatch.update(db.collection('csv_initial_requests').doc(reqDoc.id), { status: 'Approved', approved_at: firebase.firestore.FieldValue.serverTimestamp() });
               addOp();
 
-              const monthMap = [
-                { m: 10, y: 2025, field: 'm1' }, { m: 11, y: 2025, field: 'm2' }, { m: 12, y: 2025, field: 'm3' },
-                { m: 1, y: 2026, field: 'm4' }, { m: 2, y: 2026, field: 'm5' }, { m: 3, y: 2026, field: 'm6' }, { m: 4, y: 2026, field: 'm7' }
-              ];
-              const histReqs = {};
+              // ⭐️ เตรียมข้อมูลบิล พ.ค. 69 (เดือน 5 ปี 2026) จ่ายเท่ากับ Target Stock ไม่หักลบ
+              const newReqId = `REQ-2026-05-${Math.floor(Math.random()*1000).toString().padStart(3, '0')}`;
+              const newReqItems = [];
 
               reqDoc.items.forEach(item => {
                 if (item.isNewDrug) {
                   currentBatch.set(db.collection('master_drugs').doc(String(item.drug_id)), {
-                    drug_id: item.drug_id, drug_name: item.drugName, pack_size: item.packSize || 1, unit_id: 'U01', type: 'DRUG', unpacked: false
+                    drug_id: item.drug_id, drug_name: item.drugName, pack_size: item.packSize || 1, unit_id: 'U01', type: '1', unpacked: false
                   }, { merge: true });
                   addOp();
                 }
@@ -1786,23 +1849,25 @@
                 currentBatch.set(db.collection('config_par').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, par_qty: item.finalQty }, { merge: true }); addOp();
                 currentBatch.set(db.collection('current_excess').doc(docId), { hospital_id: hospId, drug_id: item.drug_id, excess_balance: item.finalQty, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); addOp();
 
-                monthMap.forEach(mm => {
-                  const reqId = `HIST-${hospId}-${mm.y}-${String(mm.m).padStart(2, '0')}`;
-                  if (!histReqs[reqId]) {
-                    histReqs[reqId] = { hospitalId: hospId, month: mm.m, year: mm.y, status: 'Completed', created_by_name: 'System (CSV Seed)', items: [] };
-                  }
-                  histReqs[reqId].items.push({ drugId: item.drug_id, name: item.drugName || item.drug_id, usage: item[mm.field], dispenseQty: 0, newExcess: 0, packSize: item.packSize });
+                // นำไปใส่ในบิลเดือน พ.ค. 69
+                newReqItems.push({
+                   drugId: item.drug_id, name: item.drugName || item.drug_id, 
+                   usage: 0, 
+                   dispensePack: item.finalPack, dispenseQty: item.finalQty, 
+                   newExcess: item.finalQty, packSize: item.packSize 
                 });
               });
 
-              for (const [rId, rData] of Object.entries(histReqs)) {
-                currentBatch.set(db.collection('requisitions').doc(rId), rData, { merge: true });
-                addOp();
-              }
+              // ⭐️ เซฟบิล พ.ค. 69
+              currentBatch.set(db.collection('requisitions').doc(newReqId), {
+                 hospitalId: hospId, month: 5, year: 2026, status: 'Completed', 
+                 created_by_name: 'System (CSV Setup)', items: newReqItems
+              });
+              addOp();
 
               if (opCount > 0) batches.push(currentBatch.commit());
               await Promise.all(batches);
-              showToast('อนุมัติและตั้งค่า Initial Stock สำเร็จ');
+              showToast('อนุมัติ Initial Stock และสร้างบิล พ.ค. 69 สำเร็จ');
               await refreshData();
             } catch (e) { showToast(e.message, 'error'); } finally { setIsSaving(false); }
           };
@@ -1896,7 +1961,6 @@
               {activeTab === 'users' && <UserManager />}
             </div>
             
-            {/* ⭐️ Modal แก้ไข (Edit Modal) สำหรับทุกฟิลด์ */}
             {editTarget && (
               <Modal title={`${editTarget.isNew ? 'เพิ่ม' : 'แก้ไข'}ข้อมูล ${editTarget.col === 'master_drugs' ? 'ยา' : editTarget.col === 'master_unit' ? 'หน่วยนับ' : editTarget.col === 'users' ? 'ผู้ใช้งาน' : 'รพ.สต.'}`} isOpen={true} onClose={()=>setEditTarget(null)}>
                 <form className="space-y-4" onSubmit={handleSaveForm}>
@@ -1911,11 +1975,15 @@
                           <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อยา</label>
                           <input name="drug_name" defaultValue={editTarget.data.drug_name} placeholder="ชื่อยา" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                         </div>
+                        <div>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อพ้อง (Fuzzy) - คั่นด้วยลูกน้ำ</label>
+                          <input name="fuzzy" defaultValue={editTarget.data.fuzzy} placeholder="เช่น พารา, paracetamol tab" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" />
+                        </div>
                         <div className="flex gap-4">
                           <div className="w-1/2">
                             <label className="text-sm font-bold text-slate-600 block mb-1">หมวดหมู่</label>
-                            <select name="type" defaultValue={editTarget.data.type || 'DRUG'} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
-                              <option value="DRUG">ยา</option><option value="NCD">โรคเรื้อรัง</option><option value="HERB">สมุนไพร</option><option value="MED">เวชภัณฑ์</option>
+                            <select name="type" defaultValue={editTarget.data.type || '1'} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
+                              <option value="1">ยา</option><option value="25">โรคเรื้อรัง (NCDs)</option><option value="3">สมุนไพร</option><option value="32">เวชภัณฑ์</option>
                             </select>
                           </div>
                           <div className="w-1/2">
@@ -1967,9 +2035,9 @@
                         </div>
                       </>
                     )}
-                    {/* ⭐️ เพิ่มการสร้างฟอร์มแก้ไขผู้ใช้งาน */}
                     {editTarget.col === 'users' && (
                       <>
+                        <input type="hidden" name="id" value={editTarget.data.id} />
                         <div>
                           <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อ-นามสกุล ผู้ใช้งาน</label>
                           <input name="name" defaultValue={editTarget.data.name} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />

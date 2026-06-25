@@ -205,11 +205,11 @@
       }
 
       // --- Component: Modal ---
-      const Modal = ({ title, children, onClose, isOpen }) => {
+      const Modal = ({ title, children, onClose, isOpen, maxWidth }) => {
         if (!isOpen) return null;
         return (
           <div className="fixed inset-0 z-[150] flex items-center justify-center px-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidth || 'max-w-2xl'} overflow-hidden flex flex-col max-h-[90vh]`}>
               <div className="p-5 border-b flex justify-between items-center bg-slate-50">
                 <h3 className="text-xl font-bold text-slate-800">{title}</h3>
                 <button onClick={onClose} className="text-slate-400 hover:text-red-500 transition bg-white border border-slate-200 rounded-full w-8 h-8 flex items-center justify-center shadow-sm">
@@ -774,6 +774,10 @@
         const [proofFile, setProofFile] = useState(null);
         const [isSubmitting, setIsSubmitting] = useState(false);
 
+        // ⭐️ State สำหรับจัดการ Modal ตรวจสอบข้อมูลจาก JHCIS
+        const [showImportModal, setShowImportModal] = useState(false);
+        const [importData, setImportData] = useState({ hospInfo: '', periodInfo: '', items: [] });
+
         const [items, setItems] = useState(() => {
           if (!appDb || !appDb.parLevels) return [];
           
@@ -792,7 +796,6 @@
             const prevExcess = bal ? Number(bal.excess_balance) : 0;
             const isUnpacked = drug ? !!drug.unpacked : false;
             
-            // ดึงประวัติย้อนหลัง 6 เดือน
             let m_usages = [];
             for(let i=1; i<=6; i++) {
               let m = currentMonth - i; let y = currentYear;
@@ -827,19 +830,71 @@
           return generatedList.sort(sortDrugs);
         });
 
-        if (isOutOfPeriod && !acknowledged && !editReqId) {
-          return (
-            <div className="bg-white rounded-3xl p-10 text-center shadow-sm max-w-2xl mx-auto mt-10 border border-amber-200 animate-fade-in">
-              <i className="fa-solid fa-triangle-exclamation text-6xl text-amber-500 mb-6"></i>
-              <h2 className="text-2xl font-bold text-slate-800 mb-3">แจ้งเตือน: นอกช่วงเวลาเบิกยา</h2>
-              <p className="text-slate-500 mb-8 text-lg">ระบบแนะนำให้ทำเรื่องเติมยาเฉพาะ <span className="font-bold text-slate-700">วันที่ 25 ถึงวันสิ้นเดือน</span> เพื่อให้การคำนวณ VMI แม่นยำที่สุด</p>
-              <div className="flex flex-col sm:flex-row justify-center gap-4">
-                <button onClick={() => setCurrentView('dashboard')} className="bg-slate-100 text-slate-600 px-6 py-3 rounded-xl font-bold hover:bg-slate-200 transition">กลับหน้าหลัก</button>
-                <button onClick={() => setAcknowledged(true)} className="bg-gradient-to-r from-amber-400 to-orange-500 text-white px-6 py-3 rounded-xl font-bold hover:scale-105 transition shadow-lg shadow-amber-200">รับทราบ และทำรายการต่อ</button>
-              </div>
-            </div>
-          );
-        }
+        // ⭐️ ฟังก์ชันดึงยอดใช้จากไฟล์ JHCIS รบ.301
+        const handleJHCISUpload = (e) => {
+          const file = e.target.files[0];
+          if(!file) return;
+
+          Papa.parse(file, {
+            header: false,
+            skipEmptyLines: true,
+            complete: function(results) {
+              let hospInfo = "";
+              let periodInfo = "";
+              let extracted = [];
+
+              results.data.forEach(row => {
+                const compacted = row.map(c => String(c).trim()).filter(c => c !== '');
+                if (compacted.length === 0) return;
+
+                // ดึงชื่อ รพ.สต. ในไฟล์
+                if (compacted.some(c => c.includes('สถานบริการ'))) {
+                   hospInfo = compacted.find(c => c.includes('สถานบริการ'));
+                }
+                // ดึงรอบเวลา
+                if (compacted.some(c => c.includes('ระหว่างวันที่'))) {
+                   periodInfo = compacted.find(c => c.includes('ระหว่างวันที่')) || compacted.join(' ');
+                }
+
+                // หาบรรทัดที่เป็นข้อมูลยา (ขึ้นต้นด้วยเลขลำดับ เช่น 1.)
+                if (compacted.length >= 7 && /^\d+\.$/.test(compacted[0])) {
+                   const rawName = compacted[1];
+                   // ยอดใช้อยู่ในตำแหน่ง index 6 ใน array ที่ compacted แล้ว
+                   const usageStr = compacted[6]; 
+                   const usageNum = parseFloat(usageStr?.replace(/,/g, ''));
+                   if (!isNaN(usageNum) && rawName && !rawName.includes('รวม')) {
+                       extracted.push({ id: Math.random().toString(), rawName, usage: usageNum, mappedDrugId: '' });
+                   }
+                }
+              });
+
+              // ระบบจับคู่ยาอัจฉริยะ (Auto-Mapping)
+              const normalize = (str) => String(str).toLowerCase().replace(/[\s\-\.\(\)]/g, '');
+              extracted = extracted.map(item => {
+                const normRaw = normalize(item.rawName);
+                let mappedId = '';
+                
+                // ลองจับคู่แบบตรงเป๊ะ
+                let matched = appDb.drugs.find(d => normalize(d.drug_name) === normRaw);
+                
+                // ถ้าไม่เจอ ลองจับคู่แบบค้นหาคำ
+                if (!matched) {
+                  matched = appDb.drugs.find(d => {
+                     const normSys = normalize(d.drug_name);
+                     return normRaw.includes(normSys) || normSys.includes(normRaw);
+                  });
+                }
+                
+                if (matched) mappedId = matched.drug_id;
+                return { ...item, mappedDrugId: mappedId };
+              });
+
+              setImportData({ hospInfo, periodInfo, items: extracted });
+              setShowImportModal(true);
+              e.target.value = null; // reset input
+            }
+          });
+        };
 
         const updateRow = (drugIdToUpdate, usageVal) => {
           const usage = parseInt(usageVal) || 0;
@@ -958,8 +1013,22 @@
           return matchSearch && matchType && matchUsage;
         });
 
+        if (isOutOfPeriod && !acknowledged && !editReqId) {
+          return (
+            <div className="bg-white rounded-3xl p-10 text-center shadow-sm max-w-2xl mx-auto mt-10 border border-amber-200 animate-fade-in">
+              <i className="fa-solid fa-triangle-exclamation text-6xl text-amber-500 mb-6"></i>
+              <h2 className="text-2xl font-bold text-slate-800 mb-3">แจ้งเตือน: นอกช่วงเวลาเบิกยา</h2>
+              <p className="text-slate-500 mb-8 text-lg">ระบบแนะนำให้ทำเรื่องเติมยาเฉพาะ <span className="font-bold text-slate-700">วันที่ 25 ถึงวันสิ้นเดือน</span> เพื่อให้การคำนวณ VMI แม่นยำที่สุด</p>
+              <div className="flex flex-col sm:flex-row justify-center gap-4">
+                <button onClick={() => setCurrentView('dashboard')} className="bg-slate-100 text-slate-600 px-6 py-3 rounded-xl font-bold hover:bg-slate-200 transition">กลับหน้าหลัก</button>
+                <button onClick={() => setAcknowledged(true)} className="bg-gradient-to-r from-amber-400 to-orange-500 text-white px-6 py-3 rounded-xl font-bold hover:scale-105 transition shadow-lg shadow-amber-200">รับทราบ และทำรายการต่อ</button>
+              </div>
+            </div>
+          );
+        }
+
         return (
-          <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 animate-fade-in relative">
             <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
               <div>
                 <h2 className="text-2xl font-bold text-slate-800">
@@ -968,6 +1037,18 @@
                 <p className="text-slate-500 mt-1">สูตร VMI (6 เดือนย้อนหลัง): Target = (ADU x 30) + (1.645 x SD)</p>
               </div>
               <button onClick={() => {setEditReqId(null); setCurrentView('dashboard');}} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">ยกเลิก</button>
+            </div>
+
+            {/* ⭐️ ส่วนสำหรับอัปโหลดไฟล์ JHCIS CSV */}
+            <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-200 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
+              <div>
+                <h3 className="font-bold text-indigo-800 text-lg flex items-center"><i className="fa-solid fa-file-excel mr-2"></i> ดึงยอดใช้จากไฟล์ รบ.301 (Excel/CSV) <span className="bg-indigo-600 text-white text-[10px] px-2 py-0.5 rounded-full ml-2">ใหม่</span></h3>
+                <p className="text-sm text-indigo-600 mt-1">อัปโหลดไฟล์สรุปรวมรายเดือน ระบบจะดึงยอดจ่ายมาคีย์ลงตารางให้อัตโนมัติ</p>
+              </div>
+              <label className="bg-white border-2 border-indigo-600 text-indigo-700 px-6 py-3 rounded-xl cursor-pointer hover:bg-indigo-100 transition flex items-center font-bold shrink-0 shadow-lg shadow-indigo-100">
+                <i className="fa-solid fa-upload mr-2"></i> เลือกไฟล์ CSV
+                <input type="file" accept=".csv" className="hidden" onChange={handleJHCISUpload} />
+              </label>
             </div>
 
             <div className="flex flex-col sm:flex-row bg-emerald-50 p-4 rounded-xl mb-6 items-start sm:items-center border border-emerald-100 gap-4">
@@ -1065,6 +1146,86 @@
                 {isSubmitting ? 'กำลังอัปโหลดและบันทึก...' : editReqId ? 'อัปเดตใบเบิก' : 'ส่งเอกสารเติมยา'}
               </button>
             </div>
+
+            {/* ⭐️ JHCIS Import Modal */}
+            {showImportModal && (
+              <div className="fixed inset-0 z-[200] flex items-center justify-center px-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+                  <div className="p-5 border-b flex justify-between items-center bg-indigo-50">
+                    <h3 className="text-xl font-bold text-indigo-800"><i className="fa-solid fa-file-excel mr-2"></i> ตรวจสอบข้อมูลจาก รบ.301</h3>
+                    <button onClick={() => setShowImportModal(false)} className="text-slate-400 hover:text-red-500 bg-white border border-slate-200 rounded-full w-8 h-8 flex items-center justify-center shadow-sm"><i className="fa-solid fa-xmark"></i></button>
+                  </div>
+                  <div className="p-6 overflow-y-auto space-y-4 bg-slate-50 flex-grow">
+                     <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200">
+                           <p className="text-xs text-slate-500 font-bold mb-1">รพ.สต. ในไฟล์</p>
+                           <p className="font-semibold text-slate-800 text-sm">{importData.hospInfo || 'ไม่พบข้อมูลในไฟล์'}</p>
+                           {!importData.hospInfo?.includes(appDb.hospitals.find(h=>h.hospital_id === hospId)?.hospital_name?.replace('รพ.สต. ', '')) && (
+                             <p className="text-xs text-amber-600 mt-1"><i className="fa-solid fa-triangle-exclamation"></i> ชื่ออาจไม่ตรงกับต้นสังกัด โปรดตรวจสอบ</p>
+                           )}
+                        </div>
+                        <div className="bg-white p-4 rounded-xl border border-slate-200">
+                           <p className="text-xs text-slate-500 font-bold mb-1">ช่วงเวลาในไฟล์</p>
+                           <p className="font-semibold text-slate-800 text-sm">{importData.periodInfo || 'ไม่พบข้อมูล'}</p>
+                        </div>
+                     </div>
+
+                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                       <table className="w-full text-left text-sm">
+                         <thead className="bg-slate-100 border-b">
+                           <tr>
+                              <th className="p-3">ชื่อยาจากระบบ JHCIS (ข้อมูลดิบ)</th>
+                              <th className="p-3">จับคู่กับยาในระบบ</th>
+                              <th className="p-3 text-center w-24">ยอดใช้</th>
+                              <th className="p-3 text-center w-12">ข้าม</th>
+                           </tr>
+                         </thead>
+                         <tbody>
+                           {importData.items.map(item => (
+                              <tr key={item.id} className="border-b hover:bg-slate-50">
+                                 <td className="p-3 font-medium text-slate-700">{item.rawName}</td>
+                                 <td className="p-3">
+                                    <select 
+                                       className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800'}`}
+                                       value={item.mappedDrugId}
+                                       onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
+                                    >
+                                       <option value="">-- ไม่ทำการจับคู่ (ข้าม) --</option>
+                                       {appDb.drugs.sort(sortDrugs).map(d => (
+                                          <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>
+                                       ))}
+                                    </select>
+                                 </td>
+                                 <td className="p-3">
+                                    <input type="number" className="w-20 p-2 border rounded-lg text-center font-bold text-slate-700 outline-none focus:border-indigo-500" value={item.usage} onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, usage: Number(e.target.value) } : i)}))} />
+                                 </td>
+                                 <td className="p-3 text-center">
+                                    <button onClick={() => setImportData(prev => ({...prev, items: prev.items.filter(i => i.id !== item.id)}))} className="text-slate-400 hover:text-red-500 transition"><i className="fa-solid fa-trash"></i></button>
+                                 </td>
+                              </tr>
+                           ))}
+                         </tbody>
+                       </table>
+                     </div>
+                  </div>
+                  <div className="p-5 border-t bg-white flex justify-end gap-3 shrink-0">
+                     <button onClick={() => setShowImportModal(false)} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">ยกเลิก</button>
+                     <button onClick={() => {
+                        items.forEach(mainItem => {
+                           const importItem = importData.items.find(i => i.mappedDrugId === mainItem.drugId);
+                           if (importItem && importItem.usage > 0) {
+                               updateRow(mainItem.drugId, importItem.usage);
+                           }
+                        });
+                        setShowImportModal(false);
+                        showToast('ดึงข้อมูลยอดใช้เข้าสู่ตารางเรียบร้อยแล้ว');
+                     }} className="px-8 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 flex items-center transition">
+                       <i className="fa-solid fa-file-import mr-2"></i> ยืนยันนำยอดไปใส่ในใบเบิก
+                     </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
       };
@@ -1168,6 +1329,9 @@
              docId = data.unit_id; payload = { unit_id: data.unit_id, unit_name: data.unit_name };
           } else if (editTarget.col === 'master_hospitals') {
              docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name };
+          } else if (editTarget.col === 'users') {
+             // ⭐️ อัปเดตข้อมูล User
+             docId = editTarget.data.id; payload = { name: data.name, hospital_id: data.hospital_id, role: data.role };
           }
           await handleSave(editTarget.col, docId, payload);
         };
@@ -1465,29 +1629,23 @@
         };
 
         const UserManager = () => {
-          const handleRoleChange = async (id, newRole) => {
-            setIsSaving(true);
-            try {
-              await db.collection('users').doc(id).update({role: newRole}); 
-              await refreshData(); 
-              showToast('เปลี่ยนสิทธิ์แล้ว');
-            } catch(e) { showToast(e.message, 'error'); } finally { setIsSaving(false); }
-          };
+          // ⭐️ ปรับให้ใช้ระบบ Modal แก้ไขแทนเพื่อแก้ข้อมูลทุกฟิลด์
           return (
             <div className="p-6">
               <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                 <table className="w-full text-left text-sm border-collapse">
-                  <thead className="bg-slate-50 border-b"><tr><th className="p-4">ชื่อผู้ใช้งาน</th><th className="p-4">รพ.สต. ที่สังกัด</th><th className="p-4 w-48">ระดับสิทธิ์ (Role)</th></tr></thead>
+                  <thead className="bg-slate-50 border-b"><tr><th className="p-4">ชื่อผู้ใช้งาน</th><th className="p-4">อีเมล</th><th className="p-4">รพ.สต. ที่สังกัด</th><th className="p-4">ระดับสิทธิ์ (Role)</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                   <tbody>
                     {appDb.usersList.map(u=>(
                       <tr key={u.id} className="border-b hover:bg-slate-50">
-                        <td className="p-4 font-bold text-slate-800">{u.name} <div className="text-xs text-slate-400 font-normal mt-1">{u.email}</div></td>
+                        <td className="p-4 font-bold text-slate-800">{u.name}</td>
+                        <td className="p-4 text-slate-500">{u.email}</td>
                         <td className="p-4 text-slate-600 font-medium">{appDb.hospitals.find(h=>h.hospital_id === u.hospital_id)?.hospital_name || u.hospital_id}</td>
                         <td className="p-4">
-                          <select className="border border-slate-300 rounded-lg p-2 w-full outline-none focus:border-emerald-500 font-semibold text-slate-700" value={u.role} onChange={e=>handleRoleChange(u.id, e.target.value)}>
-                            <option value="hospital">Hospital (รพ.สต.)</option>
-                            <option value="admin">Admin (แอดมิน)</option>
-                          </select>
+                          <span className={`px-2 py-1 rounded text-xs font-bold ${u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{u.role === 'admin' ? 'แอดมิน' : 'รพ.สต.'}</span>
+                        </td>
+                        <td className="p-4 text-center">
+                          <button onClick={()=>setEditTarget({ col: 'users', data: u, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
                         </td>
                       </tr>
                     ))}
@@ -1724,9 +1882,9 @@
               {activeTab === 'users' && <UserManager />}
             </div>
             
-            {/* ⭐️ Modal แก้ไข (Edit Modal) - แก้ปัญหาไม่ต้องเลื่อนขึ้นบน */}
+            {/* ⭐️ Modal แก้ไข (Edit Modal) สำหรับทุกฟิลด์ */}
             {editTarget && (
-              <Modal title={`${editTarget.isNew ? 'เพิ่ม' : 'แก้ไข'}ข้อมูล ${editTarget.col === 'master_drugs' ? 'ยา' : editTarget.col === 'master_unit' ? 'หน่วยนับ' : 'รพ.สต.'}`} isOpen={true} onClose={()=>setEditTarget(null)}>
+              <Modal title={`${editTarget.isNew ? 'เพิ่ม' : 'แก้ไข'}ข้อมูล ${editTarget.col === 'master_drugs' ? 'ยา' : editTarget.col === 'master_unit' ? 'หน่วยนับ' : editTarget.col === 'users' ? 'ผู้ใช้งาน' : 'รพ.สต.'}`} isOpen={true} onClose={()=>setEditTarget(null)}>
                 <form className="space-y-4" onSubmit={handleSaveForm}>
                   <div className="grid grid-cols-1 gap-4">
                     {editTarget.col === 'master_drugs' && (
@@ -1792,6 +1950,29 @@
                         <div>
                           <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อ รพ.สต.</label>
                           <input name="hospital_name" defaultValue={editTarget.data.hospital_name} placeholder="ชื่อหน่วยงาน" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                        </div>
+                      </>
+                    )}
+                    {/* ⭐️ เพิ่มการสร้างฟอร์มแก้ไขผู้ใช้งาน */}
+                    {editTarget.col === 'users' && (
+                      <>
+                        <div>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อ-นามสกุล ผู้ใช้งาน</label>
+                          <input name="name" defaultValue={editTarget.data.name} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                        </div>
+                        <div>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">รพ.สต. ต้นสังกัด</label>
+                          <select name="hospital_id" defaultValue={editTarget.data.hospital_id} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required>
+                            <option value="">- เลือก รพ.สต. -</option>
+                            {appDb.hospitals.map(h=><option key={h.id} value={h.hospital_id}>{h.hospital_name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">ระดับสิทธิ์ (Role)</label>
+                          <select name="role" defaultValue={editTarget.data.role} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required>
+                            <option value="hospital">Hospital (รพ.สต.)</option>
+                            <option value="admin">Admin (แอดมิน)</option>
+                          </select>
                         </div>
                       </>
                     )}

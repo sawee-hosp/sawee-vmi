@@ -26,20 +26,39 @@
     .bg-gradient-main { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); }
     
     @media print {
-      @page { size: A4 portrait; margin: 10mm; }
-      body { background-color: #fff; }
-      body * { visibility: hidden; }
-      .print-area, .print-area * { visibility: visible; }
-      .print-area { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; font-family: 'Sarabun', sans-serif; }
-      .no-print { display: none !important; }
+      @page { size: A4 portrait; margin: 10mm 10mm 15mm 10mm; }
+      body { background-color: #fff; margin: 0; padding: 0; }
+      
+      .no-print, .no-print * { display: none !important; }
+      
+      /* Fix page break constraints */
+      html, body, #root, .print-safe-wrapper { 
+         overflow: visible !important; 
+         height: auto !important; 
+         min-height: 0 !important; 
+         display: block !important; 
+         position: static !important;
+      }
+      
+      .print-area { 
+         width: 100%; 
+         margin: 0; 
+         padding: 0; 
+         font-family: 'Sarabun', sans-serif; 
+         display: block !important;
+         visibility: visible !important;
+         position: static !important;
+      }
       
       table.official-table { width: 100%; border-collapse: collapse; font-size: 11px !important; margin-bottom: 10px; page-break-inside: auto; }
       table.official-table tr { page-break-inside: avoid; page-break-after: auto; }
       table.official-table thead { display: table-header-group; }
       table.official-table tfoot { display: table-footer-group; }
       table.official-table th, table.official-table td { padding: 4px !important; white-space: normal !important; border: 1px solid #000 !important; }
-      table.official-table th { background-color: #f0f0f0 !important; -webkit-print-color-adjust: exact; text-align: center; }
+      table.official-table th { background-color: #f0f0f0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; text-align: center; }
       
+      .highlight-row td { background-color: #e5e7eb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
       .print-header { text-align: center; margin-bottom: 15px; }
       .print-header h1 { font-size: 16px !important; font-weight: bold; margin-bottom: 5px; }
       
@@ -48,21 +67,25 @@
         top: 50% !important; 
         left: 50% !important; 
         transform: translate(-50%, -50%) rotate(-45deg) !important; 
-        font-size: 60px !important; 
+        font-size: 80px !important; 
         font-weight: 900 !important; 
         color: rgba(255, 0, 0, 0.25) !important; 
         z-index: 9999 !important; 
         pointer-events: none !important; 
         white-space: nowrap !important;
         border: none !important;
+        text-shadow: 2px 2px 4px rgba(255,255,255,0.5);
       }
 
       .print-timestamp {
         position: fixed;
-        bottom: 5mm;
-        right: 5mm;
+        bottom: 3mm;
+        right: 3mm;
         font-size: 10px;
         color: #555;
+        background: #fff;
+        padding: 2px 4px;
+        z-index: 50;
       }
     }
     
@@ -1004,7 +1027,7 @@
       }
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 border border-slate-100 animate-fade-in relative w-full">
+        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 border border-slate-100 animate-fade-in relative w-full print-safe-wrapper">
           {isProcessing && <FullScreenSpinner />}
           <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
             <div>
@@ -1433,7 +1456,7 @@
       let globalItemIndex = 0;
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print:p-0 print:border-none print:shadow-none w-full relative overflow-hidden">
+        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print-safe-wrapper print:p-0 print:border-none print:shadow-none w-full relative">
           
           {/* Web Watermark (Visible on screen) */}
           {!isAdmin && isApprovalRequired && (
@@ -1518,17 +1541,17 @@
              <table className="official-table w-full text-[11px] border-collapse border border-black mb-2 relative">
                 <thead>
                    <tr className="bg-gray-200">
-                      <th className="w-8">ที่</th>
+                      <th style={{ width: '5%' }}>ที่</th>
                       <th style={{ width: '25%' }}>ชื่อยา/เวชภัณฑ์</th>
-                      <th className="w-16">ขนาดบรรจุ</th>
-                      <th className="w-12">Target Stock</th>
-                      <th className="w-12">ยอดใช้</th>
-                      <th className="w-12">เครดิต</th>
-                      <th className="w-16">จำนวนจ่าย</th>
-                      <th className="w-16">ราคา/หน่วย</th>
-                      <th className="w-20">มูลค่า (บาท)</th>
-                      <th className="w-16">คงเหลือ</th>
-                      <th className="w-16">รหัส</th>
+                      <th style={{ width: '8%' }}>ขนาดบรรจุ</th>
+                      <th style={{ width: '7%' }}>Target Stock</th>
+                      <th style={{ width: '7%' }}>ยอดใช้</th>
+                      <th style={{ width: '7%' }}>เครดิต</th>
+                      <th style={{ width: '9%' }}>จำนวนจ่าย</th>
+                      <th style={{ width: '8%' }}>ราคา/หน่วย</th>
+                      <th style={{ width: '10%' }}>มูลค่า (บาท)</th>
+                      <th style={{ width: '7%' }}>คงเหลือ</th>
+                      <th style={{ width: '7%' }}>รหัส</th>
                    </tr>
                 </thead>
                 {typeKeys.map((typeKey) => {
@@ -1544,12 +1567,12 @@
 
                    return (
                       <tbody key={typeKey}>
-                         <tr>
-                            <td colSpan="8" className="font-bold bg-gray-100 text-left pl-2 border-y border-black">
-                               {(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]}
-                            </td>
-                            <td colSpan="3" className="font-bold bg-gray-100 text-right pr-2 border-y border-black">
-                               รวม {(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]} {subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})} บาท
+                         <tr className="highlight-row">
+                            <td colSpan="11" className="font-bold text-left px-2 py-1 border-y border-black">
+                               <div className="flex justify-between w-full">
+                                   <span>{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]}</span>
+                                   <span className="pr-1">รวม {(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]} {subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})} บาท</span>
+                               </div>
                             </td>
                          </tr>
                          {typeItems.map((it) => {
@@ -1558,7 +1581,7 @@
                             return (
                                <tr key={it.drugId}>
                                   <td className="text-center">{globalItemIndex}</td>
-                                  <td className="font-semibold text-left pl-1" style={{ width: '25%' }}>
+                                  <td className="font-semibold text-left pl-1">
                                      {it.name} {it.requestMore > 0 && <span className="text-blue-600 font-bold ml-1">(ขอเพิ่ม)</span>}
                                   </td>
                                   <td className="text-center">{it.packSize} {it.unit}</td>
@@ -1581,12 +1604,12 @@
                 })}
              </table>
 
-             <div className="flex justify-end mb-8">
+             <div className="flex justify-end mb-4 mt-2">
                 <table className="official-table w-[400px] border-none text-[13px]">
                    <tbody>
                       <tr>
                           <th className="text-right border-none pb-1 bg-white">รวมจำนวนรายการทั้งหมด:</th>
-                          <td className="text-center font-bold border-none pb-1 bg-white">{grandTotalItems} รายการ</td>
+                          <td className="text-right font-bold border-none pb-1 bg-white pr-4">{grandTotalItems} รายการ</td>
                       </tr>
                       <tr>
                           <th className="text-right bg-gray-200 border-none font-bold">รวมเป็นเงินทั้งสิ้น:</th>
@@ -1596,7 +1619,7 @@
                 </table>
              </div>
 
-             <div className="flex flex-col text-[14px] px-4 w-full break-inside-avoid mt-12" style={{ lineHeight: '1' }}>
+             <div className="flex flex-col text-[12pt] px-4 w-full break-inside-avoid mt-4 print:mt-4" style={{ lineHeight: 'normal' }}>
                  {[
                      `ผู้เบิก`,
                      `ผอ.${hospNameClean}`,
@@ -1605,15 +1628,15 @@
                      `ผู้จ่าย`,
                      `ผู้รับ`
                  ].map((role, idx) => (
-                     <div key={idx} className="flex w-full my-6 break-inside-avoid text-[14px] justify-between px-10" style={{ lineHeight: '1' }}>
-                         <div className="w-1/2 text-left">
-                             <span className="mr-2">ลงชื่อ</span>
-                             <span>........................................</span>
-                             <span className="ml-2 w-32 inline-block">{role}</span>
+                     <div key={idx} className="flex w-full mb-3 break-inside-avoid text-[12pt] justify-between">
+                         <div className="w-1/2 flex items-center pl-10">
+                             <span className="w-12">ลงชื่อ</span>
+                             <span>..........................................</span>
+                             <span className="ml-2 w-48">{role}</span>
                          </div>
-                         <div className="w-1/2 text-center">
-                             <span className="mr-2">วันที่</span>
-                             <span>........................................</span>
+                         <div className="w-1/2 flex items-center justify-center">
+                             <span className="w-12 text-right mr-2">วันที่</span>
+                             <span>..........................................</span>
                          </div>
                      </div>
                  ))}
@@ -1677,8 +1700,8 @@
        const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
 
        return (
-          <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100">
-             <div className="flex flex-wrap justify-between items-center mb-6 pb-4 border-b gap-4">
+          <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print-safe-wrapper">
+             <div className="flex flex-wrap justify-between items-center mb-6 pb-4 border-b gap-4 no-print">
                 <div>
                    <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-chart-bar text-indigo-500 mr-2"></i> รายงานสรุปมูลค่ายาและเวชภัณฑ์</h2>
                    <p className="text-slate-500 mt-1">สรุปยอดที่ได้รับการจัดสรรแล้ว (Completed) แยกตาม รพ.สต. และหมวดหมู่</p>
@@ -1777,8 +1800,8 @@
        const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
 
        return (
-          <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100">
-             <div className="flex flex-wrap justify-between items-start mb-6 pb-4 border-b gap-4">
+          <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print-safe-wrapper">
+             <div className="flex flex-wrap justify-between items-start mb-6 pb-4 border-b gap-4 no-print">
                 <div>
                    <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-ranking-star text-sky-500 mr-2"></i> รายงานการใช้ยารายตัว (Item Usage)</h2>
                    <p className="text-slate-500 mt-1">สรุปยอดจัดสรรทั้งหมดแยกตามรายการยา เรียงลำดับจากมากไปน้อย</p>
@@ -1829,7 +1852,7 @@
                    <p className="text-sm mt-1">กรองโดย: {filterHosp === 'all' ? 'รวมทุก รพ.สต.' : ctx.appDb.hospitals.find(h=>h.hospital_id===filterHosp)?.hospital_name} | {filterType === 'all' ? 'รวมทุกหมวดยา' : typesSource[filterType]}</p>
                 </div>
 
-                <div className="overflow-x-auto w-full border border-slate-200 rounded-xl">
+                <div className="overflow-x-auto w-full border border-slate-200 rounded-xl print:border-none">
                    <table className="official-table w-full text-[13px] border-collapse bg-white">
                       <thead className="bg-slate-100">
                          <tr>
@@ -2822,7 +2845,7 @@
       const ctx = { appDb, currentUser, setCurrentView, showToast, refreshData, currentReqId, setCurrentReqId, editReqId, setEditReqId, setConfirmDialog, adminActiveTab, setAdminActiveTab, targetUploadHosp, setTargetUploadHosp, handleLogin };
 
       return (
-        <div className="flex h-screen bg-[#f8fafc] overflow-hidden">
+        <div className="flex h-screen bg-[#f8fafc] overflow-hidden print-safe-wrapper">
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
@@ -2848,8 +2871,8 @@
               <button onClick={() => auth.signOut()} className="w-full text-left p-3 rounded-xl text-red-400 hover:bg-red-500/10 font-bold border border-red-500/30 transition flex items-center justify-center"><i className="fa-solid fa-power-off mr-2"></i> ออกจากระบบ</button>
             </div>
           </div>
-          <div className="flex-1 p-4 lg:p-10 overflow-auto w-full relative">
-            <div className="max-w-7xl mx-auto pb-20">
+          <div className="flex-1 p-4 lg:p-10 overflow-auto w-full relative print-safe-wrapper print:p-0 print:bg-white">
+            <div className="max-w-7xl mx-auto pb-20 print-safe-wrapper print:pb-0 print:max-w-full">
               {currentView === 'dashboard' && <DashboardView ctx={ctx} />}
               {currentView === 'create_req' && <CreateReqView ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}

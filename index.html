@@ -27,7 +27,7 @@
     .text-gradient { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     
     @media print {
-      @page { size: A4 portrait; margin: 10mm 10mm 15mm 10mm; }
+      @page { size: A4 portrait; margin: 10mm; }
       body { background-color: #fff; }
       body * { visibility: hidden; }
       .print-area, .print-area * { visibility: visible; }
@@ -45,7 +45,7 @@
       .print-header h1 { font-size: 16px !important; font-weight: bold; margin-bottom: 5px; }
       .print-header p { font-size: 13px !important; margin-bottom: 2px; }
       
-      .watermark-print { position: fixed; top: 40%; left: 5%; width: 90%; text-align: center; font-size: 40px; font-weight: bold; color: rgba(255, 0, 0, 0.2); transform: rotate(-35deg); z-index: 9999; pointer-events: none; border: 8px solid rgba(255,0,0,0.15); padding: 20px; border-radius: 20px; }
+      .watermark-print { position: fixed; top: 35%; left: 5%; width: 90%; text-align: center; font-size: 50px; font-weight: bold; color: rgba(255, 0, 0, 0.2); transform: rotate(-30deg); z-index: 9999; pointer-events: none; border: 8px solid rgba(255,0,0,0.15); padding: 20px; border-radius: 20px; }
     }
     
     .loader { border: 4px solid #f3f3f3; border-top: 4px solid #0d9488; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
@@ -294,10 +294,10 @@
       const isHospital = ctx.currentUser?.role === 'hospital';
       const isAdmin = ctx.currentUser?.role === 'admin';
       
-      const [adminSelectedCard, setAdminSelectedCard] = useState('pending'); // all, pending, completed, month
+      const [adminSelectedCard, setAdminSelectedCard] = useState('pending');
 
       const myReqs = isHospital ? ctx.appDb.requisitions.filter(r => r.hospitalId === ctx.currentUser?.hospital_id) : ctx.appDb.requisitions;
-      const validReqs = myReqs; 
+      const validReqs = myReqs.filter(r => r.created_by_name !== 'System (CSV Setup)');
 
       const today = new Date();
       const currentDay = today.getDate();
@@ -347,7 +347,7 @@
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             {isHospital && (
-               <div onClick={() => ctx.setCurrentView('create_req')} className={`rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition bg-white hover:bg-slate-50 ${isRequisitionPeriod ? 'border-emerald-500' : 'border-slate-200'}`}>
+               <div onClick={() => ctx.setCurrentView('create_req')} className={`rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition bg-white hover:bg-slate-50 ${isRequisitionPeriod ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200'}`}>
                  <div className={`p-4 rounded-xl mr-4 ${isRequisitionPeriod ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}><i className="fa-regular fa-calendar-check text-2xl"></i></div>
                  <div>
                     <div className="text-slate-500 font-medium">ปฏิทินเบิกยา (วันที่ 20-31)</div>
@@ -362,27 +362,20 @@
                </div>
             )}
 
-            <div onClick={() => isAdmin && setAdminSelectedCard('all')} className={`bg-white rounded-2xl shadow-sm p-6 border flex items-center transition ${isAdmin ? 'cursor-pointer hover:bg-slate-50' : ''} ${adminSelectedCard==='all' ? 'ring-2 ring-blue-500 border-blue-500' : 'border-slate-100'}`}>
+            <div onClick={() => setAdminSelectedCard('all')} className={`bg-white rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition ${adminSelectedCard==='all' ? 'ring-2 ring-blue-500 border-blue-500' : 'border-slate-100 hover:bg-slate-50'}`}>
               <div className="bg-blue-100 p-4 rounded-xl text-blue-600 mr-4"><i className="fa-solid fa-file-invoice text-2xl"></i></div>
               <div><div className="text-slate-500 font-medium">ประวัติทั้งหมด</div><div className="text-3xl font-extrabold">{validReqs.length}</div></div>
             </div>
             
-            <div onClick={() => isAdmin && setAdminSelectedCard('pending')} className={`bg-white rounded-2xl shadow-sm p-6 border flex items-center transition ${isAdmin ? 'cursor-pointer hover:bg-slate-50' : ''} ${adminSelectedCard==='pending' ? 'ring-2 ring-amber-500 border-amber-500' : 'border-slate-100'}`}>
+            <div onClick={() => setAdminSelectedCard('pending')} className={`bg-white rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition ${adminSelectedCard==='pending' ? 'ring-2 ring-amber-500 border-amber-500' : 'border-slate-100 hover:bg-slate-50'}`}>
               <div className="bg-amber-100 p-4 rounded-xl text-amber-600 mr-4"><i className="fa-solid fa-clock text-2xl"></i></div>
               <div><div className="text-slate-500 font-medium">รอห้องยาอนุมัติ</div><div className="text-3xl font-extrabold">{validReqs.filter(r => r.status === 'Pending' || r.status === 'Pending_Approval').length}</div></div>
             </div>
             
-            <div onClick={() => isAdmin && setAdminSelectedCard('completed')} className={`bg-white rounded-2xl shadow-sm p-6 border flex items-center transition ${isAdmin ? 'cursor-pointer hover:bg-slate-50' : ''} ${adminSelectedCard==='completed' ? 'ring-2 ring-emerald-500 border-emerald-500' : 'border-slate-100'}`}>
+            <div onClick={() => setAdminSelectedCard('completed')} className={`bg-white rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition ${adminSelectedCard==='completed' ? 'ring-2 ring-emerald-500 border-emerald-500' : 'border-slate-100 hover:bg-slate-50'}`}>
               <div className="bg-emerald-100 p-4 rounded-xl text-emerald-600 mr-4"><i className="fa-solid fa-check-double text-2xl"></i></div>
               <div><div className="text-slate-500 font-medium">จัดยาแล้ว</div><div className="text-3xl font-extrabold">{validReqs.filter(r => r.status === 'Completed').length}</div></div>
             </div>
-
-            {isAdmin && (
-               <div onClick={() => setAdminSelectedCard('adjust')} className={`bg-white rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition ${adminSelectedCard==='adjust' ? 'ring-2 ring-purple-500 border-purple-500' : 'border-slate-100 hover:bg-slate-50'}`}>
-                 <div className="bg-purple-100 p-4 rounded-xl text-purple-600 mr-4"><i className="fa-solid fa-boxes-stacked text-2xl"></i></div>
-                 <div><div className="text-slate-500 font-medium">คำขอปรับ Stock</div><div className="text-3xl font-extrabold">{ctx.appDb.stockAdjustments?.filter(a => a.status === 'Pending').length || 0}</div></div>
-               </div>
-            )}
           </div>
 
           {isAdmin && adminSelectedCard === 'month' && (
@@ -437,16 +430,6 @@
              </div>
           )}
 
-          {isAdmin && adminSelectedCard === 'adjust' && (
-             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in">
-                <div className="p-5 border-b font-bold text-slate-800 bg-slate-50"><i className="fa-solid fa-boxes-stacked text-purple-500 mr-2"></i> คำขอปรับปรุงสต๊อก (รอดำเนินการ)</div>
-                <div className="p-6 text-center">
-                   <p className="mb-4 text-slate-600">ตรวจสอบและอนุมัติคำขอปรับสต๊อกได้ที่หน้าจัดการฐานข้อมูล</p>
-                   <button onClick={() => { ctx.setAdminActiveTab('approve_stock'); ctx.setCurrentView('config'); }} className="bg-purple-600 text-white px-6 py-2 rounded-xl font-bold hover:bg-purple-700">ไปที่หน้าจัดการ</button>
-                </div>
-             </div>
-          )}
-
           {(!isAdmin || (isAdmin && ['all','pending','completed'].includes(adminSelectedCard))) && (
              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in">
                <div className="p-5 border-b border-slate-100 font-bold text-slate-800 bg-slate-50 flex justify-between items-center">
@@ -478,7 +461,7 @@
                           <td className="p-4 text-slate-600">{req.month}/{req.year}</td>
                           <td className="p-4">
                             <span className={`px-3 py-1 rounded-lg text-xs font-bold ${req.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' : req.status === 'Pending_Approval' ? 'bg-red-100 text-red-700 border border-red-300' : 'bg-amber-100 text-amber-700'}`}>
-                              {req.status === 'Completed' ? 'สำเร็จ' : req.status === 'Pending_Approval' ? 'รออนุมัติเพิ่ม' : 'กำลังดำเนินการ'}
+                              {req.status === 'Completed' ? 'สำเร็จ' : req.status === 'Pending_Approval' ? 'รออนุมัติพิเศษ' : 'กำลังดำเนินการ'}
                             </span>
                           </td>
                           <td className="p-4 text-right">
@@ -584,7 +567,7 @@
              </div>
              {Object.keys(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES).slice(0,2).map(k => (
                 <div key={k} className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                   <div className="text-xs font-bold text-slate-500 uppercase">หมวด {(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[k]}</div>
+                   <div className="text-xs font-bold text-slate-500 uppercase">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[k]}</div>
                    <div className="text-xl font-bold text-slate-700">{typeCounts[k]} รายการ</div>
                 </div>
              ))}
@@ -660,7 +643,7 @@
                          <div className="w-1/2"><label className="text-sm font-bold text-slate-600 mb-1 block">ยอดเครดิตเดิมในระบบ</label><input disabled value={editItem.currentBal} className="w-full border p-3 rounded-xl bg-slate-50 text-slate-400 font-bold" /></div>
                          <div className="w-1/2"><label className="text-sm font-bold text-amber-600 mb-1 block">ระบุเครดิตใหม่ (หน่วยย่อย)</label><input type="number" name="new_balance" required className="w-full border-2 border-amber-400 p-3 rounded-xl outline-none focus:border-amber-600 font-bold text-amber-700" /></div>
                       </div>
-                      <div><label className="text-sm font-bold text-slate-600 mb-1 block">เหตุผลการขอปรับ</label><textarea name="reason" required rows="2" className="w-full border p-3 rounded-xl outline-none" placeholder="เช่น ยาเสื่อมสภาพ, คีย์เบิกผิดรอบที่แล้ว..."></textarea></div>
+                      <div><label className="text-sm font-bold text-slate-600 mb-1 block">เหตุผลการขอปรับ</label><textarea name="reason" required rows="2" className="w-full border p-3 rounded-xl outline-none" placeholder="เช่น ยาเสื่อมสภาพ, นับสต๊อกสิ้นเดือน, คีย์เบิกผิดรอบที่แล้ว..."></textarea></div>
                       <div className="pt-4 flex justify-end"><button type="submit" className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold">ส่งคำขอ</button></div>
                    </form>
                 )}
@@ -715,10 +698,10 @@
           const packSize = drug ? Number(drug.pack_size) : 1;
           
           let m_usages = [];
-          for(let i=1; i<=6; i++) {
+          for(let i=1; i<=5; i++) {
             let m = currentMonth - i; let y = currentYear;
             if(m <= 0) { m += 12; y -= 1; }
-            const oldReq = ctx.appDb.requisitions.find(r => r.hospitalId === hospId && r.month === m && r.year === y && r.id !== ctx.editReqId);
+            const oldReq = ctx.appDb.requisitions.find(r => r.hospitalId === hospId && r.month === m && r.year === y && r.id !== ctx.editReqId && r.created_by_name !== 'System (CSV Setup)');
             let usage = 0;
             if(oldReq && oldReq.items) {
               const oldItem = oldReq.items.find(it => it.drugId === par.drug_id);
@@ -726,34 +709,22 @@
             }
             m_usages.push(usage);
           }
-          
-          // คำนวณใหม่ เอาเฉพาะเดือนที่เบิก
-          const nonZero = m_usages.filter(u => u > 0);
-          const count = nonZero.length || 1;
-          const totalPast = nonZero.reduce((a,b)=>a+b, 0);
-          const meanPast = totalPast / count; 
-          const variance = nonZero.reduce((acc, val) => acc + Math.pow(val - meanPast, 2), 0) / (count === 1 ? 1 : count - 1);
-          const SD = Math.sqrt(variance || 0);
-          const targetVMI = Math.ceil(meanPast + (1.645 * SD));
-
-          const isNewDrug = count === 1 && totalPast === 0 && !existingItem; // ไม่มีประวัติ
+          const pastHistory = m_usages.slice(0,5);
 
           if (existingItem) {
-             return { ...existingItem, past5Months: m_usages.slice(0,5), targetVMI, isUnpacked, avgUsage: meanPast.toFixed(2), type, price, requestMore: existingItem.requestMore || 0, isUnlocked: (existingItem.requestMore > 0), isNewDrug };
+             return { ...existingItem, isUnpacked, type, price, requestMore: existingItem.requestMore || 0, isUnlocked: (existingItem.requestMore > 0), pastHistory };
           }
 
           return {
             drugId: par.drug_id, name: drug ? drug.drug_name : 'N/A', unit: drug ? drug.unit_display_name : '',
-            packSize, isUnpacked, type, price, isNewDrug,
-            past5Months: m_usages.slice(0,5),
-            avgUsage: meanPast.toFixed(2), prevExcess, 
-            usage: 0, targetVMI, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess, isSpecial: false,
-            requestMore: 0, isUnlocked: false
+            packSize, isUnpacked, type, price, pastHistory,
+            prevExcess, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess, isSpecial: false,
+            requestMore: 0, isUnlocked: false, isNewDrug: true
           };
         });
 
         existingReqItems.forEach(ex => {
-           if(!generatedList.find(g => g.drugId === ex.drugId)) generatedList.push({...ex, past5Months: [0,0,0,0,0], requestMore: ex.requestMore || 0, isUnlocked: (ex.requestMore > 0)});
+           if(!generatedList.find(g => g.drugId === ex.drugId)) generatedList.push({...ex, pastHistory: [0,0,0,0,0], requestMore: ex.requestMore || 0, isUnlocked: (ex.requestMore > 0)});
         });
         return generatedList.sort(sortDrugs);
       });
@@ -834,29 +805,35 @@
             const usage = usageVal !== null ? (parseInt(usageVal) || 0) : item.usage;
             const requestMore = requestMoreVal !== null ? (parseInt(requestMoreVal) || 0) : item.requestMore;
             
-            // Dynamic VMI Recalculation based on current usage
-            const past = item.past5Months || [0,0,0,0,0];
-            const nonZeroUsages = [...past, usage].filter(u => u > 0);
-            const count = nonZeroUsages.length || 1;
-            const mean = nonZeroUsages.reduce((a,b)=>a+b, 0) / count;
-            const variance = nonZeroUsages.reduce((a,b)=>a + Math.pow(b - mean, 2), 0) / (count === 1 ? 1 : count - 1);
+            // Dynamic VMI Recalculation
+            const recent5 = item.pastHistory ? item.pastHistory.slice(0, 5) : [0,0,0,0,0];
+            const activeUsages = [...recent5, usage].filter(u => u > 0);
+            const count = activeUsages.length || 1;
+            const mean = activeUsages.reduce((a,b)=>a+b, 0) / count;
+            const variance = activeUsages.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (count === 1 ? 1 : count - 1);
             const SD = Math.sqrt(variance);
-            const dynamicTargetVMI = Math.ceil(mean + (1.645 * SD));
+            const targetVMI = Math.ceil(mean + (1.645 * SD));
 
-            const row = { ...item, usage, requestMore, targetVMI: dynamicTargetVMI, avgUsage: mean.toFixed(2) };
+            const row = { ...item, usage, requestMore, targetVMI, isNewDrug: count === 1 && recent5.every(u=>u===0) };
             
-            let netNeed = row.targetVMI - row.prevExcess;
+            let currentBal = row.prevExcess - usage;
+            let netNeed = targetVMI - currentBal;
             if (netNeed <= 0) netNeed = 0;
             
             let totalNeedToDispense = netNeed + requestMore;
 
             if (totalNeedToDispense <= 0) {
-               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; row.newExcess = row.prevExcess - usage; 
+               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; row.newExcess = currentBal; 
             } else {
                row.netNeed = netNeed; 
-               row.dispensePack = Math.ceil(totalNeedToDispense / row.packSize); 
-               row.dispenseQty = row.dispensePack * row.packSize; 
-               row.newExcess = row.prevExcess + row.dispenseQty - usage;
+               if (row.isUnpacked) {
+                  row.dispensePack = Math.ceil(totalNeedToDispense / row.packSize); 
+                  row.dispenseQty = Math.ceil(totalNeedToDispense);
+               } else {
+                  row.dispensePack = Math.ceil(totalNeedToDispense / row.packSize); 
+                  row.dispenseQty = row.dispensePack * row.packSize; 
+               }
+               row.newExcess = currentBal + row.dispenseQty;
             }
             return row;
           }
@@ -874,8 +851,8 @@
          const newItem = {
             drugId: drug.drug_id, name: drug.drug_name, unit: drug.unit_display_name,
             packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type, price: drug.price,
-            avgUsage: 0, prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0,
-            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, past5Months: [0,0,0,0,0]
+            prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0,
+            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
          };
          setItems([newItem, ...items].sort(sortDrugs)); setManualAddSearch(''); ctx.showToast(`เพิ่ม ${drug.drug_name} ลงในใบเบิกแล้ว`);
       };
@@ -890,8 +867,7 @@
                return {
                   drugId: item.drugId || "", name: item.name || "N/A", unit: item.unit || "",
                   packSize: item.packSize || 1, isUnpacked: !!item.isUnpacked, type: item.type || '1', price: item.price || 0,
-                  avgUsage: item.avgUsage || 0, prevExcess: item.prevExcess || 0,
-                  usage: item.usage || 0, vmiTarget: item.targetVMI || 0, netNeed: item.netNeed || 0,
+                  prevExcess: item.prevExcess || 0, usage: item.usage || 0, targetVMI: item.targetVMI || 0, netNeed: item.netNeed || 0,
                   dispensePack: item.dispensePack || 0, dispenseQty: item.dispenseQty || 0, newExcess: item.newExcess || 0,
                   isSpecial: false, requestMore: item.requestMore || 0
                };
@@ -1013,7 +989,7 @@
           <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-200 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
             <div>
               <h3 className="font-bold text-indigo-800 text-lg flex items-center"><i className="fa-solid fa-file-excel mr-2"></i> ดึงยอดใช้จากไฟล์ รบ.301 (Excel)</h3>
-              <p className="text-sm text-indigo-600 mt-1">อัปโหลดไฟล์สรุปรวมรายเดือน ระบบจะดึงยอดจ่ายมาคีย์ลงตารางให้อัตโนมัติ</p>
+              <p className="text-sm text-indigo-600 mt-1">อัปโหลดไฟล์สรุปรวมรายเดือน (ให้ดึงจากวันที่ 21 ของเดือนก่อนหน้าจนถึง 20 เดือนนี้) ระบบจะดึงยอดจ่ายมาคีย์ลงตารางให้อัตโนมัติ</p>
               {excelFile && <p className="text-sm font-bold text-emerald-600 mt-2"><i className="fa-solid fa-check"></i> แนบสำเร็จ: {excelFile.name}</p>}
             </div>
             <label className="bg-white border-2 border-indigo-600 text-indigo-700 px-6 py-3 rounded-xl cursor-pointer hover:bg-indigo-100 transition flex items-center font-bold shrink-0 shadow-lg shadow-indigo-100">
@@ -1045,12 +1021,12 @@
              </label>
           </div>
 
-          <div className="overflow-x-auto mb-10 w-full rounded-xl border border-slate-200 bg-white shadow-sm pb-10">
+          <div className="w-full rounded-xl border border-slate-200 bg-white shadow-sm pb-10">
             <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
               <thead className="sticky top-0 z-20 shadow-md">
                 <tr className="bg-slate-800 text-white border-b-4 border-slate-700">
                   <th className="p-3 font-bold">รายการยา/เวชภัณฑ์</th>
-                  <th className="p-3 text-center border-l border-slate-600 w-16">จำนวน<br/>ต่อหน่วย</th>
+                  <th className="p-3 text-center border-l border-slate-600 w-20">จำนวน<br/>ต่อหน่วย</th>
                   <th className="p-3 text-center border-l border-slate-600 w-16">หน่วย<br/>ย่อย</th>
                   <th className="p-3 text-center border-l border-slate-600 bg-slate-700">เครดิตค้าง<br/>แพ็ค(ย่อย)</th>
                   <th className="p-3 text-center border-l border-slate-600">ยอดใช้ 1 เดือน<br/><span className="font-normal text-[10px] text-amber-300">(หน่วยย่อยสุด)</span></th>
@@ -1130,7 +1106,7 @@
                   <div className={`bg-white p-4 rounded-xl border ${importData.isDateValid ? 'border-slate-200' : 'border-red-400 bg-red-50'}`}>
                      <p className="text-xs text-slate-500 font-bold mb-1">ช่วงเวลาในไฟล์</p>
                      <p className="font-semibold text-slate-800 text-sm">{importData.periodInfo || 'ไม่พบข้อมูล'}</p>
-                     {!importData.isDateValid && <p className="text-xs text-red-600 mt-1"><i className="fa-solid fa-calendar-xmark"></i> วันที่อาจไม่ถูกต้องตามรอบ (ปกติควรเริ่มและจบแถวๆ วันที่ 25)</p>}
+                     {!importData.isDateValid && <p className="text-xs text-red-600 mt-1"><i className="fa-solid fa-calendar-xmark"></i> วันที่อาจไม่ถูกต้องตามรอบ (ควรดึงข้อมูล 21 เดือนก่อน - 20 เดือนปัจจุบัน)</p>}
                   </div>
                </div>
 
@@ -1187,9 +1163,9 @@
                                   existing = {
                                      drugId: d.drug_id, name: d.drug_name, unit: d.unit_display_name,
                                      packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
-                                     avgUsage: 0, prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
+                                     prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
                                      dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: false, requestMore: 0,
-                                     isUnlocked: false, isNewDrug: true, past5Months: [0,0,0,0,0]
+                                     isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
                                   };
                                   newItemsArr.push(existing);
                                   newAdded = true;
@@ -1206,11 +1182,11 @@
                             const usage = parseInt(importItem.usage) || 0;
                             const requestMore = item.requestMore || 0;
                             
-                            const past = item.past5Months || [0,0,0,0,0];
-                            const nonZeroUsages = [...past, usage].filter(u => u > 0);
-                            const count = nonZeroUsages.length || 1;
-                            const mean = nonZeroUsages.reduce((a,b)=>a+b, 0) / count;
-                            const variance = nonZeroUsages.reduce((a,b)=>a + Math.pow(b - mean, 2), 0) / (count === 1 ? 1 : count - 1);
+                            const recent5 = item.pastHistory ? item.pastHistory.slice(0, 5) : [0,0,0,0,0];
+                            const activeUsages = [...recent5, usage].filter(u => u > 0);
+                            const count = activeUsages.length || 1;
+                            const mean = activeUsages.reduce((a,b)=>a+b, 0) / count;
+                            const variance = activeUsages.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (count === 1 ? 1 : count - 1);
                             const SD = Math.sqrt(variance);
                             const dynamicTargetVMI = Math.ceil(mean + (1.645 * SD));
 
@@ -1229,7 +1205,7 @@
                                }
                                newExcess = currentBal + dispenseQty;
                             }
-                            return { ...item, usage, netNeed, dispensePack, dispenseQty, newExcess, targetVMI: dynamicTargetVMI, avgUsage: mean.toFixed(2) };
+                            return { ...item, usage, netNeed, dispensePack, dispenseQty, newExcess, targetVMI: dynamicTargetVMI };
                          }
                          return item;
                       });
@@ -1252,6 +1228,8 @@
       const [isApproving, setIsApproving] = useState(false);
       const [editableItems, setEditableItems] = useState(req?.items || []);
       const [printMode, setPrintMode] = useState('req'); 
+      const [showSkipped, setShowSkipped] = useState(false);
+      const [skippedMapping, setSkippedMapping] = useState({});
       
       useEffect(() => { if(req) setEditableItems(req.items); }, [req]);
       if(!req) return null;
@@ -1271,10 +1249,89 @@
         setEditableItems(newItems);
       };
 
+      const handleAddMappedSkipped = (idx, mappedDrugId, usage) => {
+          const drug = ctx.appDb.drugs.find(d => d.drug_id === mappedDrugId);
+          if(!drug) return;
+
+          const bal = ctx.appDb.balances.find(b => String(b.hospital_id) === String(req.hospitalId) && String(b.drug_id) === mappedDrugId);
+          const prevExcess = bal ? Number(bal.excess_balance) : 0;
+          const packSize = Number(drug.pack_size) || 1;
+          
+          let m_usages = [];
+          for(let i=1; i<=6; i++) {
+              let m = req.month - i; let y = req.year;
+              if(m <= 0) { m += 12; y -= 1; }
+              const oldReq = ctx.appDb.requisitions.find(r => r.hospitalId === req.hospitalId && r.month === m && r.year === y && r.id !== req.id);
+              let pastUsage = 0;
+              if(oldReq && oldReq.items) {
+                  const oldItem = oldReq.items.find(it => it.drugId === mappedDrugId);
+                  if(oldItem) pastUsage = Number(oldItem.usage);
+              }
+              m_usages.push(pastUsage);
+          }
+          const total6M = m_usages.reduce((a,b)=>a+b, 0);
+          const mean6M = total6M / 6;
+          const variance = m_usages.reduce((acc, val) => acc + Math.pow(val - mean6M, 2), 0) / 5;
+          const SD = Math.sqrt(variance || 0);
+          const targetVMI = Math.ceil(mean6M + (1.645 * SD));
+
+          const currentBal = prevExcess - usage;
+          let netNeed = targetVMI - currentBal;
+          if (netNeed <= 0) netNeed = 0;
+
+          let dispensePack=0, dispenseQty=0, newExcess=currentBal;
+          if (netNeed > 0) {
+              if (drug.unpacked) {
+                  dispensePack = Math.ceil(netNeed / packSize); 
+                  dispenseQty = Math.ceil(netNeed);
+              } else {
+                  dispensePack = Math.ceil(netNeed / packSize); 
+                  dispenseQty = dispensePack * packSize;
+              }
+              newExcess = currentBal + dispenseQty;
+          }
+
+          const newItem = {
+              drugId: mappedDrugId, name: drug.drug_name, unit: drug.unit_display_name,
+              packSize, isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
+              prevExcess, usage, targetVMI, netNeed, dispensePack, dispenseQty, newExcess,
+              isSpecial: false, requestMore: 0
+          };
+
+          setEditableItems(prev => {
+              const existingIdx = prev.findIndex(i => i.drugId === mappedDrugId);
+              if (existingIdx >= 0) {
+                  const arr = [...prev];
+                  arr[existingIdx].usage += usage;
+                  let cBal = arr[existingIdx].prevExcess - arr[existingIdx].usage;
+                  let nNeed = arr[existingIdx].targetVMI - cBal;
+                  if (nNeed < 0) nNeed = 0;
+                  arr[existingIdx].netNeed = nNeed;
+                  
+                  let dPack=0, dQty=0, nExcess=cBal;
+                  if(nNeed > 0) {
+                      if(arr[existingIdx].isUnpacked) { dPack = Math.ceil(nNeed / arr[existingIdx].packSize); dQty = Math.ceil(nNeed); } 
+                      else { dPack = Math.ceil(nNeed / arr[existingIdx].packSize); dQty = dPack * arr[existingIdx].packSize; }
+                      nExcess = cBal + dQty;
+                  }
+                  arr[existingIdx].dispensePack = dPack;
+                  arr[existingIdx].dispenseQty = dQty;
+                  arr[existingIdx].newExcess = nExcess;
+                  return arr;
+              }
+              return [...prev, newItem].sort(sortDrugs);
+          });
+
+          const updatedSkipped = [...req.skipped_items];
+          updatedSkipped.splice(idx, 1);
+          req.skipped_items = updatedSkipped;
+          ctx.showToast(`นำยา ${drug.drug_name} เข้ารายการแล้ว`);
+      };
+
       const handleApprove = async () => {
         setIsApproving(true);
         try {
-          const batch = db.batch(); batch.update(db.collection('requisitions').doc(req.id), { status: 'Completed', items: editableItems });
+          const batch = db.batch(); batch.update(db.collection('requisitions').doc(req.id), { status: 'Completed', items: editableItems, skipped_items: req.skipped_items || [] });
           editableItems.forEach(it => batch.set(db.collection('current_excess').doc(`${req.hospitalId}_${it.drugId}`), { hospital_id: req.hospitalId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
           
           if(req.skipped_items) {
@@ -1324,7 +1381,7 @@
       const typeKeys = Object.keys(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES);
       typeKeys.forEach(k => groupedItems[k] = []);
       
-      const itemsToDisplay = (isAdmin && isPending) ? editableItems : editableItems.filter(it => it.dispenseQty > 0 || it.requestMore > 0 || it.netNeed > 0 || (it.returnQty && it.returnQty > 0));
+      const itemsToDisplay = editableItems.filter(it => it.dispenseQty > 0 || it.requestMore > 0 || it.netNeed > 0 || (it.returnQty && it.returnQty > 0));
 
       itemsToDisplay.forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
       
@@ -1370,18 +1427,32 @@
 
           {isAdmin && isPending && req.skipped_items && req.skipped_items.length > 0 && (
              <div className="mb-6 bg-amber-50 p-4 rounded-xl border border-amber-200 no-print">
-                <h3 className="font-bold text-amber-800 mb-2"><i className="fa-solid fa-triangle-exclamation mr-2"></i> รายการยาที่ รพ.สต. ข้ามไป (หาไม่เจอ)</h3>
-                <table className="w-full text-sm text-left">
-                   <thead><tr className="border-b border-amber-200"><th>ชื่อยา (ข้อมูลดิบ)</th><th>ยอดใช้</th></tr></thead>
-                   <tbody>
-                      {req.skipped_items.map((s, idx) => (
-                         <tr key={idx} className="border-b border-amber-100">
-                            <td className="py-2 text-amber-900">{s.rawName}</td>
-                            <td className="py-2 font-bold text-amber-700">{s.usage}</td>
-                         </tr>
-                      ))}
-                   </tbody>
-                </table>
+                <div className="flex justify-between items-center cursor-pointer" onClick={() => setShowSkipped(!showSkipped)}>
+                    <h3 className="font-bold text-amber-800"><i className="fa-solid fa-triangle-exclamation mr-2"></i> รายการยาที่ รพ.สต. ข้ามไป ({req.skipped_items.length} รายการ)</h3>
+                    <i className={`fa-solid fa-chevron-${showSkipped ? 'up' : 'down'} text-amber-800`}></i>
+                </div>
+                {showSkipped && (
+                    <table className="w-full text-sm text-left mt-4">
+                       <thead><tr className="border-b border-amber-200"><th>ชื่อยา (ข้อมูลดิบ)</th><th>ยอดใช้</th><th>จับคู่เพื่อดึงเข้าตาราง</th></tr></thead>
+                       <tbody>
+                          {req.skipped_items.map((s, idx) => (
+                             <tr key={idx} className="border-b border-amber-100">
+                                <td className="py-2 text-amber-900">{s.rawName}</td>
+                                <td className="py-2 font-bold text-amber-700">{s.usage}</td>
+                                <td className="py-2">
+                                    <div className="flex gap-2">
+                                        <input list="skipped-drug-list" className="p-1 border border-amber-300 rounded outline-none w-48" value={skippedMapping[idx] || ''} onChange={e => setSkippedMapping({...skippedMapping, [idx]: e.target.value})} placeholder="พิมพ์รหัสยา..." />
+                                        <button onClick={() => handleAddMappedSkipped(idx, skippedMapping[idx], s.usage)} className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1 rounded shadow text-xs font-bold">เพิ่ม</button>
+                                    </div>
+                                </td>
+                             </tr>
+                          ))}
+                       </tbody>
+                    </table>
+                )}
+                <datalist id="skipped-drug-list">
+                    {ctx.appDb.drugs.map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>)}
+                </datalist>
              </div>
           )}
 
@@ -1397,7 +1468,7 @@
                 </div>
              </div>
 
-             <table className="official-table w-full text-[11px] border-collapse border border-black mb-2 relative w-full">
+             <table className="official-table w-full text-[11px] border-collapse border border-black mb-2 relative">
                 <thead>
                    <tr className="bg-gray-200">
                       <th className="w-8">ที่</th>
@@ -1478,24 +1549,24 @@
                 </table>
              </div>
 
-             <div className="mt-8 px-4 text-[13px] leading-relaxed break-inside-avoid w-full max-w-2xl mx-auto mb-2">
+             <div className="flex flex-col text-[14px] px-8 w-full break-inside-avoid mt-12" style={{ lineHeight: '0.8' }}>
                  {[
                      `ผู้เบิก`,
-                     `ผอ.รพ.สต.${hospNameClean}`,
+                     `ผอ.${hospNameClean}`,
                      hosp?.affiliation === 'OPT' ? 'รักษาการแทน นายก อบจ.ชุมพร' : 'สาธารณสุขอำเภอสวี',
                      `ผู้อนุมัติ`,
                      `ผู้จ่าย`,
                      `ผู้รับ`
                  ].map((role, idx) => (
-                     <div key={idx} className="flex justify-between items-end w-full mb-3">
-                         <div className="flex w-1/2 items-end">
-                             <span className="w-12">ลงชื่อ</span>
-                             <span className="flex-1 border-b border-dotted border-black inline-block text-center"></span>
-                             <span className="w-56 text-left pl-2">{role}</span>
+                     <div key={idx} className="flex items-end w-full my-[12px]">
+                         <div className="w-1/2 flex items-end">
+                             <span className="mr-2">ลงชื่อ</span>
+                             <span>.......................................................</span>
+                             <span className="ml-2">{role}</span>
                          </div>
-                         <div className="flex w-1/2 items-end pl-10">
-                             <span className="w-12 text-center">วันที่</span>
-                             <span className="flex-1 border-b border-dotted border-black inline-block text-center"></span>
+                         <div className="w-1/2 flex items-end justify-center">
+                             <span className="mr-2">วันที่</span>
+                             <span>.......................................................</span>
                          </div>
                      </div>
                  ))}
@@ -1552,29 +1623,23 @@
                 <div className="text-center py-20 text-xl font-bold border-2 border-dashed border-gray-400">ไม่มีรายการยาที่ต้องส่งคืน</div>
              )}
 
-             <div className="mt-16 px-10 text-[14px] leading-relaxed break-inside-avoid w-full max-w-3xl mx-auto">
-                 <div className="flex justify-between items-end w-full mb-6">
-                     <div className="flex w-[45%] items-end">
-                         <span className="w-12">ลงชื่อ</span>
-                         <span className="flex-1 border-b border-dotted border-black"></span>
-                         <span className="w-32 pl-2">ผู้ส่งคืน (รพ.สต.)</span>
+             <div className="flex flex-col text-[14px] px-8 w-full break-inside-avoid mt-12" style={{ lineHeight: '0.8' }}>
+                 {[
+                     `ผู้ส่งคืน (รพ.สต.)`,
+                     `ผู้รับคืน (ห้องยา)`
+                 ].map((role, idx) => (
+                     <div key={idx} className="flex items-end w-full my-[12px]">
+                         <div className="w-1/2 flex items-end">
+                             <span className="mr-2">ลงชื่อ</span>
+                             <span>.......................................................</span>
+                             <span className="ml-2">{role}</span>
+                         </div>
+                         <div className="w-1/2 flex items-end justify-center">
+                             <span className="mr-2">วันที่</span>
+                             <span>.......................................................</span>
+                         </div>
                      </div>
-                     <div className="flex w-[45%] items-end pl-4">
-                         <span className="w-12 text-center">วันที่</span>
-                         <span className="flex-1 border-b border-dotted border-black"></span>
-                     </div>
-                 </div>
-                 <div className="flex justify-between items-end w-full mb-6">
-                     <div className="flex w-[45%] items-end">
-                         <span className="w-12">ลงชื่อ</span>
-                         <span className="flex-1 border-b border-dotted border-black"></span>
-                         <span className="w-32 pl-2">ผู้รับคืน (ห้องยา)</span>
-                     </div>
-                     <div className="flex w-[45%] items-end pl-4">
-                         <span className="w-12 text-center">วันที่</span>
-                         <span className="flex-1 border-b border-dotted border-black"></span>
-                     </div>
-                 </div>
+                 ))}
              </div>
           </div>
 
@@ -1727,11 +1792,127 @@
        );
     };
 
+    const DrugHistoryView = ({ ctx }) => {
+        const isAdmin = ctx.currentUser?.role === 'admin';
+        const [selHosp, setSelHosp] = useState(ctx.currentUser?.hospital_id || ctx.appDb.hospitals[0]?.hospital_id || '');
+        
+        const today = new Date();
+        const currentMonth = today.getMonth() + 1;
+        const currentYear = today.getFullYear();
+
+        const historyData = useMemo(() => {
+            if (!selHosp || !ctx.appDb) return [];
+            const result = [];
+
+            ctx.appDb.drugs.forEach(d => {
+                let m_usages = [];
+                let totalUsages = 0;
+                for(let i=1; i<=6; i++) {
+                    let m = currentMonth - i; let y = currentYear;
+                    if(m <= 0) { m += 12; y -= 1; }
+                    const oldReq = ctx.appDb.requisitions.find(r => r.hospitalId === selHosp && r.month === m && r.year === y && r.created_by_name !== 'System (CSV Setup)');
+                    let usage = 0;
+                    if(oldReq && oldReq.items) {
+                        const oldItem = oldReq.items.find(it => it.drugId === d.drug_id);
+                        if(oldItem) usage = Number(oldItem.usage);
+                    }
+                    m_usages.push({ m, y, usage });
+                    totalUsages += usage;
+                }
+
+                if (totalUsages > 0) {
+                    const activeUsages = m_usages.filter(u => u.usage > 0).map(u => u.usage);
+                    const count = activeUsages.length || 1;
+                    const mean = activeUsages.reduce((a,b)=>a+b, 0) / count;
+                    const variance = activeUsages.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (count === 1 ? 1 : count - 1);
+                    const sd = Math.sqrt(variance);
+                    const sdz = sd * 1.645;
+                    const adu = mean / 30;
+
+                    result.push({
+                        drug_id: d.drug_id, drug_name: d.drug_name, type: d.type, unit: d.unit_display_name,
+                        m_usages: m_usages.reverse(), // Show oldest to newest
+                        mean, sd, sdz, adu
+                    });
+                }
+            });
+            return result.sort((a,b) => b.mean - a.mean);
+        }, [ctx.appDb, selHosp, currentMonth, currentYear]);
+
+        const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+
+        return (
+            <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 pb-4 border-b gap-4">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-chart-line text-blue-500 mr-2"></i> ประวัติการใช้ยา (VMI Stats)</h2>
+                        <p className="text-slate-500 mt-1">สถิติยอดใช้ 6 เดือนล่าสุด และค่า Parameter ประจำหน่วยงาน</p>
+                    </div>
+                    {isAdmin && (
+                        <select className="border-2 border-emerald-300 text-emerald-800 rounded-lg p-2 font-bold w-full md:w-64 outline-none" value={selHosp} onChange={e=>setSelHosp(e.target.value)}>
+                            {ctx.appDb.hospitals.map(h=><option key={h.id} value={h.hospital_id}>{h.hospital_name}</option>)}
+                        </select>
+                    )}
+                </div>
+
+                <div className="mb-4 p-4 bg-indigo-50 border border-indigo-200 rounded-xl">
+                    <ul className="flex flex-wrap gap-x-8 gap-y-2 text-sm text-indigo-800">
+                        <li><b>ADU:</b> ยอดใช้รายวัน (Average Daily Use)</li>
+                        <li><b>AMU:</b> ยอดใช้รายเดือน (Average Monthly Use)</li>
+                        <li><b>SD*Z:</b> ยอดเผื่อความผันผวน (Safety Stock = SD × 1.645)</li>
+                        <li className="text-amber-600"><b>หมายเหตุ:</b> คิดจากประวัติการส่งเบิก 6 เดือนล่าสุด โดยหารเฉลี่ยเฉพาะเดือนที่มียอดใช้ > 0</li>
+                    </ul>
+                </div>
+
+                <div className="overflow-x-auto w-full border border-slate-200 rounded-xl max-h-[600px] overflow-y-auto">
+                    <table className="w-full text-left text-[13px] whitespace-nowrap border-collapse">
+                        <thead className="bg-slate-100 sticky top-0 z-10 shadow-sm border-b">
+                            <tr>
+                                <th className="p-3" rowSpan="2">รหัส</th>
+                                <th className="p-3" rowSpan="2">ชื่อยา/เวชภัณฑ์</th>
+                                <th className="p-3" rowSpan="2">หมวด</th>
+                                <th className="p-3 text-center border-x border-slate-300" colSpan="6">ประวัติยอดใช้ (ย้อนหลัง 6 เดือน)</th>
+                                <th className="p-3 text-center text-blue-800 bg-blue-100/80 font-bold border-r border-blue-200" colSpan="4">VMI Parameters</th>
+                            </tr>
+                            <tr className="bg-slate-50 text-[11px] text-slate-500 text-center border-b">
+                                {historyData.length > 0 && historyData[0].m_usages.map((m, i) => (
+                                    <th key={i} className={`p-2 ${i<5 ? 'border-r border-slate-200' : ''}`}>{THAI_MONTHS[m.m-1]} {(m.y+543).toString().substring(2)}</th>
+                                ))}
+                                {historyData.length === 0 && <th colSpan="6" className="p-2">ไม่พบประวัติ</th>}
+                                
+                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">ADU</th>
+                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">AMU</th>
+                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">SD</th>
+                                <th className="p-2 bg-blue-50/50 text-amber-700">SD*Z</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {historyData.map((row, idx) => (
+                                <tr key={idx} className="border-b border-slate-200 hover:bg-slate-50">
+                                    <td className="p-3 font-mono text-slate-500">{row.drug_id}</td>
+                                    <td className="p-3 font-bold text-slate-800">{row.drug_name} <span className="text-[10px] font-normal text-slate-400">({row.unit})</span></td>
+                                    <td className="p-3 text-slate-600">{typesSource[row.type]}</td>
+                                    {row.m_usages.map((m, i) => (
+                                        <td key={i} className={`p-2 text-center ${m.usage > 0 ? 'font-bold text-slate-700' : 'text-slate-300'}`}>{m.usage}</td>
+                                    ))}
+                                    <td className="p-2 text-center font-bold text-blue-700 bg-blue-50/30 border-l border-blue-100">{row.adu.toFixed(2)}</td>
+                                    <td className="p-2 text-center font-bold text-blue-700 bg-blue-50/30 border-l border-blue-100">{row.mean.toFixed(2)}</td>
+                                    <td className="p-2 text-center font-bold text-slate-600 border-l border-blue-100">{row.sd.toFixed(2)}</td>
+                                    <td className="p-2 text-center font-bold text-amber-600 border-l border-blue-100">{row.sdz.toFixed(2)}</td>
+                                </tr>
+                            ))}
+                            {historyData.length === 0 && <tr><td colSpan="13" className="p-8 text-center text-slate-400">ยังไม่มีประวัติการใช้ยาสำหรับหน่วยงานนี้</td></tr>}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        );
+    };
+
     const AdminConfigView = ({ ctx }) => {
       const [activeTab, setActiveTab] = useState(ctx.adminActiveTab || 'drugs');
       const [editTarget, setEditTarget] = useState(null); 
       const [isSaving, setIsSaving] = useState(false);
-      const [showFormula, setShowFormula] = useState(null); 
 
       useEffect(() => { ctx.setAdminActiveTab(activeTab); }, [activeTab]);
 
@@ -1806,163 +1987,6 @@
          );
       };
 
-      const RawDBManager = () => {
-         const collections = [
-            { id: 'requisitions', name: 'ใบเบิก/เติมยา' },
-            { id: 'current_excess', name: 'เครดิต (ยอดยกมา)' },
-            { id: 'config_par', name: 'Target VMI (Par)' },
-            { id: 'master_drugs', name: 'รายการยา/ราคา' },
-            { id: 'master_hospitals', name: 'รพ.สต.' },
-            { id: 'users', name: 'ผู้ใช้งาน' },
-            { id: 'stock_adjustments', name: 'คำขอปรับสต๊อก' }
-         ];
-         const [selCol, setSelCol] = useState(collections[0].id);
-         const [data, setData] = useState([]);
-         
-         useEffect(() => {
-            db.collection(selCol).limit(100).get().then(snap => {
-               setData(snap.docs.map(d => ({ _docId: d.id, ...d.data() })));
-            });
-         }, [selCol]);
-
-         const handleCellEdit = async (docId, field, val) => {
-            try {
-               let parsedVal = val;
-               try { parsedVal = JSON.parse(val); } catch(e) {} 
-               await db.collection(selCol).doc(docId).update({ [field]: parsedVal });
-               ctx.showToast('อัปเดตช่องข้อมูลแล้ว');
-               setData(prev => prev.map(d => d._docId === docId ? { ...d, [field]: parsedVal } : d));
-            } catch(e) { ctx.showToast(e.message, 'error'); }
-         };
-
-         if(data.length === 0) return (
-            <div className="p-6 text-center text-slate-500">
-               <select value={selCol} onChange={e=>setSelCol(e.target.value)} className="mb-4 border p-2 rounded">
-                  {collections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-               </select><br/>ไม่มีข้อมูลในตารางนี้
-            </div>
-         );
-
-         const keys = Object.keys(data[0]).filter(k => k !== '_docId');
-
-         return (
-            <div className="p-6">
-               <div className="flex items-center gap-4 mb-4">
-                  <span className="font-bold text-slate-700">เลือกตาราง:</span>
-                  <select value={selCol} onChange={e=>setSelCol(e.target.value)} className="border border-slate-300 bg-slate-50 p-2 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-indigo-700">
-                     {collections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                  <span className="text-xs text-red-500 font-bold bg-red-50 p-2 rounded-lg"><i className="fa-solid fa-triangle-exclamation mr-1"></i> โหมดอันตราย (แก้ฐานข้อมูลโดยตรง) ช่อง Arrays/Objects จะแสดงเป็น JSON Format</span>
-               </div>
-               <div className="overflow-x-auto border border-slate-300 rounded-xl w-full">
-                  <table className="w-full text-left text-[12px] whitespace-nowrap bg-white">
-                     <thead className="bg-slate-800 text-white sticky top-0 z-10">
-                        <tr>
-                           <th className="p-2 border border-slate-700">Doc ID</th>
-                           {keys.map(k => <th key={k} className="p-2 border border-slate-700">{k}</th>)}
-                        </tr>
-                     </thead>
-                     <tbody>
-                        {data.map((row) => (
-                           <tr key={row._docId} className="hover:bg-amber-50 group">
-                              <td className="p-2 border border-slate-200 font-mono text-slate-500 bg-slate-50">{row._docId}</td>
-                              {keys.map(k => {
-                                 let displayVal = row[k];
-                                 if(typeof displayVal === 'object' && displayVal !== null) {
-                                    if(displayVal.seconds) displayVal = new Date(displayVal.seconds*1000).toISOString();
-                                    else displayVal = JSON.stringify(displayVal);
-                                 }
-                                 return (
-                                    <td key={k} className="p-0 border border-slate-200 relative">
-                                       <textarea 
-                                          defaultValue={displayVal} 
-                                          onBlur={(e) => { if(e.target.value !== String(displayVal)) handleCellEdit(row._docId, k, e.target.value) }}
-                                          className="w-full h-full min-h-[30px] p-2 bg-transparent outline-none focus:bg-amber-100 focus:ring-inset focus:ring-2 focus:ring-amber-500 resize-none overflow-hidden hover:bg-slate-50"
-                                          rows="1"
-                                       />
-                                    </td>
-                                 );
-                              })}
-                           </tr>
-                        ))}
-                     </tbody>
-                  </table>
-               </div>
-            </div>
-         );
-      };
-
-      const ApproveStockManager = () => {
-        const pendingAdjustments = ctx.appDb.stockAdjustments ? ctx.appDb.stockAdjustments.filter(a => a.status === 'Pending') : [];
-
-        const handleApprove = async (adj) => {
-          setIsSaving(true);
-          try {
-            const batch = db.batch();
-            batch.update(db.collection('stock_adjustments').doc(adj.id), { status: 'Approved', approved_at: firebase.firestore.FieldValue.serverTimestamp() });
-            const docId = `${adj.hospital_id}_${adj.drug_id}`;
-            batch.set(db.collection('current_excess').doc(docId), {
-              hospital_id: adj.hospital_id, drug_id: adj.drug_id, excess_balance: Number(adj.new_balance), last_updated: firebase.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-            await batch.commit();
-            ctx.showToast('อนุมัติปรับสต๊อกเรียบร้อยแล้ว');
-            await ctx.refreshData();
-          } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
-        };
-
-        const handleReject = async (adj) => {
-          setIsSaving(true);
-          try {
-            await db.collection('stock_adjustments').doc(adj.id).update({ status: 'Rejected', rejected_at: firebase.firestore.FieldValue.serverTimestamp() });
-            ctx.showToast('ปฏิเสธคำขอแล้ว');
-            await ctx.refreshData();
-          } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
-        };
-
-        return (
-          <div className="p-6">
-            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead className="bg-slate-50 text-slate-600 border-b">
-                  <tr>
-                    <th className="p-4">รพ.สต.</th>
-                    <th className="p-4">รายการยา</th>
-                    <th className="p-4 text-center">ยอดเดิม <i className="fa-solid fa-arrow-right mx-1 text-slate-400"></i> ยอดใหม่</th>
-                    <th className="p-4 w-1/4">เหตุผลในการขอปรับ</th>
-                    <th className="p-4 text-center">จัดการ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingAdjustments.map(adj => {
-                    const hospName = ctx.appDb.hospitals.find(h => h.hospital_id === adj.hospital_id)?.hospital_name || adj.hospital_id;
-                    const drugName = ctx.appDb.drugs.find(d => d.drug_id === adj.drug_id)?.drug_name || adj.drug_id;
-                    return (
-                      <tr key={adj.id} className="border-b hover:bg-slate-50 transition">
-                        <td className="p-4">
-                           <div className="font-semibold text-slate-800">{hospName}</div>
-                           <div className="text-xs text-slate-500 mt-1">ผู้ขอ: {adj.user_name}</div>
-                        </td>
-                        <td className="p-4 font-bold text-slate-800">{drugName} <span className="text-xs font-normal text-slate-500">[{adj.drug_id}]</span></td>
-                        <td className="p-4 text-center bg-slate-50/50">
-                          <span className="text-slate-400 line-through mr-2">{adj.old_balance}</span>
-                          <span className="text-emerald-600 font-bold text-lg">{adj.new_balance}</span>
-                        </td>
-                        <td className="p-4 text-amber-700 bg-amber-50/50 italic leading-snug">"{adj.reason}"</td>
-                        <td className="p-4 text-center space-x-2 whitespace-nowrap">
-                          <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันอนุมัติ', message:'คุณต้องการอนุมัติปรับสต๊อกนี้ใช่หรือไม่?', onConfirm: ()=>handleApprove(adj), icon:'fa-check', confirmText:'อนุมัติ'})} className="bg-emerald-500 text-white px-3 py-2 rounded-lg shadow hover:bg-emerald-600"><i className="fa-solid fa-check mr-1"></i> อนุมัติ</button>
-                          <button onClick={()=>ctx.setConfirmDialog({title:'ปฏิเสธคำขอ', message:'คุณต้องการปฏิเสธการขอปรับสต๊อกนี้ใช่หรือไม่?', onConfirm: ()=>handleReject(adj), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="bg-red-500 text-white px-3 py-2 rounded-lg shadow hover:bg-red-600"><i className="fa-solid fa-xmark mr-1"></i> ปฏิเสธ</button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                  {pendingAdjustments.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">ไม่มีคำขอปรับสต๊อกที่รออนุมัติ</td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      };
-
       const DrugManager = () => {
         const [searchTerm, setSearchTerm] = useState('');
         const handleCSVUpload = (e) => {
@@ -2016,7 +2040,7 @@
                </button>
             </div>
 
-            <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
+            <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
               <table className="w-full text-left text-sm border-collapse whitespace-nowrap">
                 <thead className="bg-slate-100 border-b sticky top-0 z-10">
                   <tr><th className="p-4">รหัส</th><th className="p-4">หมวด</th><th className="p-4">ชื่อยา</th><th className="p-4">ชื่อพ้อง (Fuzzy)</th><th className="p-4 text-center">Pack</th><th className="p-4 text-center">หน่วย</th><th className="p-4 text-center">แตกย่อย</th><th className="p-4 text-right">ราคา (฿)</th><th className="p-4 text-center">จัดการ</th></tr>
@@ -2201,8 +2225,221 @@
         );
       };
 
+      const RawDBManager = () => {
+         const collections = [
+            { id: 'requisitions', name: 'ใบเบิก/เติมยา' },
+            { id: 'current_excess', name: 'เครดิต (ยอดยกมา)' },
+            { id: 'config_par', name: 'Target VMI (Par)' },
+            { id: 'master_drugs', name: 'รายการยา/ราคา' },
+            { id: 'master_hospitals', name: 'รพ.สต.' },
+            { id: 'users', name: 'ผู้ใช้งาน' },
+            { id: 'stock_adjustments', name: 'คำขอปรับสต๊อก' }
+         ];
+         const [selCol, setSelCol] = useState(collections[0].id);
+         const [data, setData] = useState([]);
+         
+         useEffect(() => {
+            db.collection(selCol).limit(100).get().then(snap => {
+               setData(snap.docs.map(d => ({ _docId: d.id, ...d.data() })));
+            });
+         }, [selCol]);
+
+         const handleCellEdit = async (docId, field, val) => {
+            try {
+               let parsedVal = val;
+               try { parsedVal = JSON.parse(val); } catch(e) {} 
+               await db.collection(selCol).doc(docId).update({ [field]: parsedVal });
+               ctx.showToast('อัปเดตช่องข้อมูลแล้ว');
+               setData(prev => prev.map(d => d._docId === docId ? { ...d, [field]: parsedVal } : d));
+            } catch(e) { ctx.showToast(e.message, 'error'); }
+         };
+
+         if(data.length === 0) return (
+            <div className="p-6 text-center text-slate-500">
+               <select value={selCol} onChange={e=>setSelCol(e.target.value)} className="mb-4 border p-2 rounded">
+                  {collections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+               </select><br/>ไม่มีข้อมูลในตารางนี้
+            </div>
+         );
+
+         const keys = Object.keys(data[0]).filter(k => k !== '_docId');
+
+         return (
+            <div className="p-6">
+               <div className="flex items-center gap-4 mb-4">
+                  <span className="font-bold text-slate-700">เลือกตาราง:</span>
+                  <select value={selCol} onChange={e=>setSelCol(e.target.value)} className="border border-slate-300 bg-slate-50 p-2 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-indigo-700">
+                     {collections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <span className="text-xs text-red-500 font-bold bg-red-50 p-2 rounded-lg"><i className="fa-solid fa-triangle-exclamation mr-1"></i> โหมดอันตราย (แก้ฐานข้อมูลโดยตรง) ช่อง Arrays/Objects จะแสดงเป็น JSON Format</span>
+               </div>
+               <div className="overflow-x-auto border border-slate-300 rounded-xl max-h-[600px] overflow-y-auto">
+                  <table className="w-full text-left text-[12px] whitespace-nowrap bg-white">
+                     <thead className="bg-slate-800 text-white sticky top-0 z-10">
+                        <tr>
+                           <th className="p-2 border border-slate-700">Doc ID</th>
+                           {keys.map(k => <th key={k} className="p-2 border border-slate-700">{k}</th>)}
+                        </tr>
+                     </thead>
+                     <tbody>
+                        {data.map((row) => (
+                           <tr key={row._docId} className="hover:bg-amber-50 group">
+                              <td className="p-2 border border-slate-200 font-mono text-slate-500 bg-slate-50">{row._docId}</td>
+                              {keys.map(k => {
+                                 let displayVal = row[k];
+                                 if(typeof displayVal === 'object' && displayVal !== null) {
+                                    if(displayVal.seconds) displayVal = new Date(displayVal.seconds*1000).toISOString();
+                                    else displayVal = JSON.stringify(displayVal);
+                                 }
+                                 return (
+                                    <td key={k} className="p-0 border border-slate-200 relative">
+                                       <textarea 
+                                          defaultValue={displayVal} 
+                                          onBlur={(e) => { if(e.target.value !== String(displayVal)) handleCellEdit(row._docId, k, e.target.value) }}
+                                          className="w-full h-full min-h-[30px] p-2 bg-transparent outline-none focus:bg-amber-100 focus:ring-inset focus:ring-2 focus:ring-amber-500 resize-none overflow-hidden hover:bg-slate-50"
+                                          rows="1"
+                                       />
+                                    </td>
+                                 );
+                              })}
+                           </tr>
+                        ))}
+                     </tbody>
+                  </table>
+               </div>
+            </div>
+         );
+      };
+
+      const ApproveStockManager = () => {
+        const pendingAdjustments = ctx.appDb.stockAdjustments ? ctx.appDb.stockAdjustments.filter(a => a.status === 'Pending') : [];
+
+        const handleApprove = async (adj) => {
+          setIsSaving(true);
+          try {
+            const batch = db.batch();
+            batch.update(db.collection('stock_adjustments').doc(adj.id), { status: 'Approved', approved_at: firebase.firestore.FieldValue.serverTimestamp() });
+            const docId = `${adj.hospital_id}_${adj.drug_id}`;
+            batch.set(db.collection('current_excess').doc(docId), {
+              hospital_id: adj.hospital_id, drug_id: adj.drug_id, excess_balance: Number(adj.new_balance), last_updated: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            await batch.commit();
+            ctx.showToast('อนุมัติปรับสต๊อกเรียบร้อยแล้ว');
+            await ctx.refreshData();
+          } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
+        };
+
+        const handleReject = async (adj) => {
+          setIsSaving(true);
+          try {
+            await db.collection('stock_adjustments').doc(adj.id).update({ status: 'Rejected', rejected_at: firebase.firestore.FieldValue.serverTimestamp() });
+            ctx.showToast('ปฏิเสธคำขอแล้ว');
+            await ctx.refreshData();
+          } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
+        };
+
+        return (
+          <div className="p-6">
+            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead className="bg-slate-50 text-slate-600 border-b">
+                  <tr>
+                    <th className="p-4">รพ.สต.</th>
+                    <th className="p-4">รายการยา</th>
+                    <th className="p-4 text-center">ยอดเดิม <i className="fa-solid fa-arrow-right mx-1 text-slate-400"></i> ยอดใหม่</th>
+                    <th className="p-4 w-1/4">เหตุผลในการขอปรับ</th>
+                    <th className="p-4 text-center">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingAdjustments.map(adj => {
+                    const hospName = ctx.appDb.hospitals.find(h => h.hospital_id === adj.hospital_id)?.hospital_name || adj.hospital_id;
+                    const drugName = ctx.appDb.drugs.find(d => d.drug_id === adj.drug_id)?.drug_name || adj.drug_id;
+                    return (
+                      <tr key={adj.id} className="border-b hover:bg-slate-50 transition">
+                        <td className="p-4">
+                           <div className="font-semibold text-slate-800">{hospName}</div>
+                           <div className="text-xs text-slate-500 mt-1">ผู้ขอ: {adj.user_name}</div>
+                        </td>
+                        <td className="p-4 font-bold text-slate-800">{drugName} <span className="text-xs font-normal text-slate-500">[{adj.drug_id}]</span></td>
+                        <td className="p-4 text-center bg-slate-50/50">
+                          <span className="text-slate-400 line-through mr-2">{adj.old_balance}</span>
+                          <span className="text-emerald-600 font-bold text-lg">{adj.new_balance}</span>
+                        </td>
+                        <td className="p-4 text-amber-700 bg-amber-50/50 italic leading-snug">"{adj.reason}"</td>
+                        <td className="p-4 text-center space-x-2 whitespace-nowrap">
+                          <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันอนุมัติ', message:'คุณต้องการอนุมัติปรับสต๊อกนี้ใช่หรือไม่?', onConfirm: ()=>handleApprove(adj), icon:'fa-check', confirmText:'อนุมัติ'})} className="bg-emerald-500 text-white px-3 py-2 rounded-lg shadow hover:bg-emerald-600"><i className="fa-solid fa-check mr-1"></i> อนุมัติ</button>
+                          <button onClick={()=>ctx.setConfirmDialog({title:'ปฏิเสธคำขอ', message:'คุณต้องการปฏิเสธการขอปรับสต๊อกนี้ใช่หรือไม่?', onConfirm: ()=>handleReject(adj), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="bg-red-500 text-white px-3 py-2 rounded-lg shadow hover:bg-red-600"><i className="fa-solid fa-xmark mr-1"></i> ปฏิเสธ</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {pendingAdjustments.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">ไม่มีคำขอปรับสต๊อกที่รออนุมัติ</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      };
+
+      const SystemCleanupManager = () => {
+         const handleCleanupCSVSetup = async () => {
+             setIsSaving(true);
+             try {
+                 const reqs = ctx.appDb.requisitions.filter(r => r.created_by_name === 'System (CSV Setup)');
+                 const batches = [];
+                 let currentBatch = db.batch();
+                 let count = 0;
+                 reqs.forEach(r => {
+                     currentBatch.delete(db.collection('requisitions').doc(r.id));
+                     count++;
+                     if(count >= 450) { batches.push(currentBatch.commit()); currentBatch = db.batch(); count = 0; }
+                 });
+                 if(count > 0) batches.push(currentBatch.commit());
+                 await Promise.all(batches);
+                 ctx.showToast(`ลบประวัติ System (CSV Setup) สำเร็จ ${reqs.length} รายการ`);
+                 ctx.refreshData();
+             } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
+         };
+
+         const handleResetCredits = async () => {
+             setIsSaving(true);
+             try {
+                 const excess = await db.collection('current_excess').get();
+                 const batches = [];
+                 let currentBatch = db.batch();
+                 let count = 0;
+                 excess.docs.forEach(doc => {
+                     currentBatch.delete(doc.ref);
+                     count++;
+                     if(count >= 450) { batches.push(currentBatch.commit()); currentBatch = db.batch(); count = 0; }
+                 });
+                 if(count > 0) batches.push(currentBatch.commit());
+                 await Promise.all(batches);
+                 ctx.showToast(`รีเซ็ตเครดิตทั้งหมดเป็น 0 สำเร็จ`);
+                 ctx.refreshData();
+             } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
+         };
+
+         return (
+            <div className="p-6 space-y-6">
+                <div className="bg-red-50 p-6 rounded-2xl border border-red-200">
+                    <h3 className="font-bold text-red-800 text-lg mb-2"><i className="fa-solid fa-triangle-exclamation mr-2"></i> ลบประวัติที่สร้างจากระบบอัตโนมัติ (CSV Setup)</h3>
+                    <p className="text-sm text-red-600 mb-4">หากมีการสร้างประวัติหลอกจากการอัปโหลด CSV ครั้งแรก การกดปุ่มนี้จะลบใบเบิกนั้นออกจากระบบทั้งหมด เพื่อให้เหลือแต่ประวัติการเบิกจริงของ รพ.สต.</p>
+                    <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันลบประวัติ CSV Setup', message:'ต้องการลบใบเบิกทั้งหมดที่สร้างโดย System (CSV Setup) ใช่หรือไม่?', onConfirm: handleCleanupCSVSetup, iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition"><i className="fa-solid fa-trash mr-2"></i> ลบประวัติ CSV Setup ทั้งหมด</button>
+                </div>
+                
+                <div className="bg-orange-50 p-6 rounded-2xl border border-orange-200">
+                    <h3 className="font-bold text-orange-800 text-lg mb-2"><i className="fa-solid fa-rotate-left mr-2"></i> รีเซ็ตยอดเครดิต (ล้างยอดยกมาทั้งหมด)</h3>
+                    <p className="text-sm text-orange-600 mb-4">การกดปุ่มนี้จะทำการลบข้อมูล "เครดิตสะสม" ของยาทุกตัวในทุก รพ.สต. กลับไปเริ่มต้นที่ 0 ใหม่ทั้งหมด (ใช้กรณีต้องการทดสอบระบบใหม่)</p>
+                    <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันรีเซ็ตเครดิต', message:'ข้อมูลเครดิตสะสมทั้งหมดจะกลายเป็น 0 ยืนยันใช่หรือไม่?', onConfirm: handleResetCredits, iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition"><i className="fa-solid fa-rotate-left mr-2"></i> รีเซ็ตเครดิตทั้งหมดเป็น 0</button>
+                </div>
+            </div>
+         );
+      };
+
       return (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in relative w-full">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in relative">
           <div className="bg-slate-800 text-white p-6 flex justify-between items-center">
             <h2 className="text-2xl font-bold"><i className="fa-solid fa-server mr-2 text-emerald-400"></i> จัดการฐานข้อมูล (Admin Console)</h2>
             {isSaving && <div className="flex items-center text-emerald-400 font-bold animate-pulse"><i className="fa-solid fa-circle-notch fa-spin mr-2"></i> กำลังบันทึก...</div>}
@@ -2215,6 +2452,7 @@
             <TabBtn id="approve_stock" icon="fa-check-to-slot" label="อนุมัติปรับสต๊อก" />
             <TabBtn id="users" icon="fa-users" label="ผู้ใช้งาน" />
             <TabBtn id="raw_db" icon="fa-table" label="ฐานข้อมูลดิบ (Raw DB)" />
+            <TabBtn id="cleanup" icon="fa-broom" label="ตั้งค่า/ล้างข้อมูล" />
           </div>
           <div className="bg-white">
             {activeTab === 'drugs' && <DrugManager />}
@@ -2224,6 +2462,7 @@
             {activeTab === 'approve_stock' && <ApproveStockManager />}
             {activeTab === 'users' && <UserManager />}
             {activeTab === 'raw_db' && <RawDBManager />}
+            {activeTab === 'cleanup' && <SystemCleanupManager />}
           </div>
           
           {editTarget && (
@@ -2413,7 +2652,7 @@
             units: unitSnap.docs.map(d => d.data()),
             parLevels: parSnap.docs.map(d => d.data()),
             balances: balSnap.docs.map(d => d.data()),
-            requisitions: reqSnap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => !r.isInitialSetup && r.created_by_name !== 'System (CSV Setup)'), // Exclude initial setup
+            requisitions: reqSnap.docs.map(d => ({id: d.id, ...d.data()})),
             usersList: userSnap.docs.map(d => ({id: d.id, ...d.data()})),
             stockAdjustments: adjSnap.docs.map(d => ({id: d.id, ...d.data()})),
             drugTypes: configSnap.exists ? configSnap.data() : null
@@ -2456,7 +2695,7 @@
       const ctx = { appDb, currentUser, setCurrentView, showToast, refreshData, currentReqId, setCurrentReqId, editReqId, setEditReqId, setConfirmDialog, adminActiveTab, setAdminActiveTab, targetUploadHosp, setTargetUploadHosp, handleLogin };
 
       return (
-        <div className="flex flex-col min-h-screen lg:flex-row w-full">
+        <div className="flex flex-col min-h-screen lg:flex-row">
           <div className="w-full lg:w-72 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-10">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
@@ -2465,6 +2704,7 @@
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => setCurrentView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>
               {currentUser?.role === 'hospital' && <button onClick={() => {setEditReqId(null); setCurrentView('create_req');}} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='create_req'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-packing w-6 text-center mr-2"></i> เบิกยา / เติมยา</button>}
+              <button onClick={() => setCurrentView('drug_history')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='drug_history'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-chart-line w-6 text-center mr-2"></i> ประวัติการใช้ยา</button>
               {currentUser?.role === 'admin' && <button onClick={() => setCurrentView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
               
               <div className="border-t border-slate-800 my-2 pt-2"></div>
@@ -2481,8 +2721,8 @@
               <button onClick={() => auth.signOut()} className="w-full text-left p-3 rounded-xl text-red-400 hover:bg-red-500/10 font-bold border border-red-500/30 transition flex items-center justify-center"><i className="fa-solid fa-power-off mr-2"></i> ออกจากระบบ</button>
             </div>
           </div>
-          <div className="flex-1 p-4 lg:p-10 bg-[#f8fafc] w-full min-w-0">
-            <div className="w-full pb-20">
+          <div className="flex-1 p-4 lg:p-10 overflow-auto bg-[#f8fafc] w-full relative">
+            <div className="max-w-7xl mx-auto pb-20">
               {currentView === 'dashboard' && <DashboardView ctx={ctx} />}
               {currentView === 'create_req' && <CreateReqView ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}
@@ -2491,6 +2731,7 @@
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}
               {currentView === 'initial_setup' && <InitialStockSetupView ctx={ctx} />}
+              {currentView === 'drug_history' && <DrugHistoryView ctx={ctx} />}
             </div>
           </div>
           <UniversalConfirmModal confirmDialog={confirmDialog} setConfirmDialog={setConfirmDialog} />

@@ -50,7 +50,7 @@
          position: static !important;
       }
       
-      table.official-table { width: 100%; border-collapse: collapse; font-size: 11px !important; margin-bottom: 10px; page-break-inside: auto; }
+      table.official-table { width: 100%; border-collapse: collapse; font-size: 11px !important; margin-bottom: 10px; page-break-inside: auto; border: 1.5px solid #000 !important; }
       table.official-table tr { page-break-inside: avoid; page-break-after: auto; }
       table.official-table thead { display: table-header-group; }
       table.official-table tfoot { display: table-footer-group; }
@@ -79,8 +79,8 @@
 
       .print-timestamp {
         position: fixed;
-        bottom: 3mm;
-        right: 3mm;
+        bottom: 0mm;
+        right: 0mm;
         font-size: 10px;
         color: #555;
         background: #fff;
@@ -1440,7 +1440,14 @@
 
       const handleTriggerPrint = () => {
          db.collection('requisitions').doc(req.id).update({is_printed: true});
-         setTimeout(() => window.print(), 100);
+         
+         const originalTitle = document.title;
+         document.title = `ใบเบิก ${hospNameClean} ${req.month}/${fiscalYear}`;
+         
+         setTimeout(() => {
+             window.print();
+             document.title = originalTitle;
+         }, 100);
       };
 
       const groupedItems = {};
@@ -1542,16 +1549,16 @@
                 <thead>
                    <tr className="bg-gray-200">
                       <th style={{ width: '5%' }}>ที่</th>
-                      <th style={{ width: '25%' }}>ชื่อยา/เวชภัณฑ์</th>
-                      <th style={{ width: '8%' }}>ขนาดบรรจุ</th>
-                      <th style={{ width: '7%' }}>Target Stock</th>
-                      <th style={{ width: '7%' }}>ยอดใช้</th>
-                      <th style={{ width: '7%' }}>เครดิต</th>
-                      <th style={{ width: '9%' }}>จำนวนจ่าย</th>
+                      <th style={{ width: '36%' }}>ชื่อยา/เวชภัณฑ์</th>
+                      <th style={{ width: '7%' }}>ขนาดบรรจุ</th>
+                      <th style={{ width: '6%' }}>Target Stock</th>
+                      <th style={{ width: '6%' }}>ยอดใช้</th>
+                      <th style={{ width: '6%' }}>เครดิต</th>
+                      <th style={{ width: '7%' }}>จำนวนจ่าย</th>
                       <th style={{ width: '8%' }}>ราคา/หน่วย</th>
-                      <th style={{ width: '10%' }}>มูลค่า (บาท)</th>
-                      <th style={{ width: '7%' }}>คงเหลือ</th>
-                      <th style={{ width: '7%' }}>รหัส</th>
+                      <th style={{ width: '9%' }}>มูลค่า (บาท)</th>
+                      <th style={{ width: '6%' }}>คงเหลือ</th>
+                      <th style={{ width: '6%' }}>รหัส</th>
                    </tr>
                 </thead>
                 {typeKeys.map((typeKey) => {
@@ -1571,7 +1578,7 @@
                             <td colSpan="11" className="font-bold text-left px-2 py-1 border-y border-black">
                                <div className="flex justify-between w-full">
                                    <span>{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]}</span>
-                                   <span className="pr-1">รวม {(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]} {subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})} บาท</span>
+                                   <span className="pr-1">{subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})} บาท</span>
                                </div>
                             </td>
                          </tr>
@@ -1619,7 +1626,7 @@
                 </table>
              </div>
 
-             <div className="flex flex-col text-[12pt] px-4 w-full break-inside-avoid mt-4 print:mt-4" style={{ lineHeight: 'normal' }}>
+             <div className="flex flex-col text-[12pt] px-4 w-full break-inside-avoid mt-4 print:mt-4">
                  {[
                      `ผู้เบิก`,
                      `ผอ.${hospNameClean}`,
@@ -1628,15 +1635,15 @@
                      `ผู้จ่าย`,
                      `ผู้รับ`
                  ].map((role, idx) => (
-                     <div key={idx} className="flex w-full mb-3 break-inside-avoid text-[12pt] justify-between">
-                         <div className="w-1/2 flex items-center pl-10">
+                     <div key={idx} className="flex w-full mb-5 break-inside-avoid text-[12pt] justify-between">
+                         <div className="w-1/2 flex items-end pl-8">
                              <span className="w-12">ลงชื่อ</span>
-                             <span>..........................................</span>
+                             <span>.................................................</span>
                              <span className="ml-2 w-48">{role}</span>
                          </div>
-                         <div className="w-1/2 flex items-center justify-center">
-                             <span className="w-12 text-right mr-2">วันที่</span>
-                             <span>..........................................</span>
+                         <div className="w-1/2 flex items-end justify-center">
+                             <span className="mr-2 text-right">วันที่</span>
+                             <span>.................................................</span>
                          </div>
                      </div>
                  ))}

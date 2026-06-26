@@ -125,9 +125,6 @@
       }
     };
 
-    // ==========================================
-    // SHARED COMPONENTS
-    // ==========================================
     const Toast = ({ message, type, onClose }) => {
       useEffect(() => {
         const timer = setTimeout(onClose, 3000);
@@ -187,9 +184,6 @@
       </div>
     );
 
-    // ==========================================
-    // AUTH VIEWS
-    // ==========================================
     const LoginView = ({ ctx }) => {
       const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
       const [rememberMe, setRememberMe] = useState(true); const [showForgot, setShowForgot] = useState(false);
@@ -296,9 +290,6 @@
       )
     };
 
-    // ==========================================
-    // MAIN APP VIEWS
-    // ==========================================
     const DashboardView = ({ ctx }) => {
       const isHospital = ctx.currentUser?.role === 'hospital';
       const isAdmin = ctx.currentUser?.role === 'admin';
@@ -607,9 +598,9 @@
              <button onClick={() => { setEditItem({ isNew: true }); setShowModal(true); }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:scale-105 transition shrink-0"><i className="fa-solid fa-plus mr-2"></i> เพิ่มยาเข้าคลัง</button>
           </div>
 
-          <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-[650px] overflow-y-auto w-full">
+          <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
             <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
-              <thead className="sticky top-0 z-10 shadow-sm bg-slate-100 text-slate-700">
+              <thead className="bg-slate-100 text-slate-700">
                 <tr>
                   <th className="p-3 font-bold border-b">รหัส</th>
                   <th className="p-3 font-bold border-b">ชื่อรายการยา/เวชภัณฑ์</th>
@@ -748,20 +739,21 @@
           const isNewDrug = count === 1 && totalPast === 0 && !existingItem; // ไม่มีประวัติ
 
           if (existingItem) {
-             return { ...existingItem, targetVMI, isUnpacked, avgUsage: meanPast.toFixed(2), type, price, requestMore: existingItem.requestMore || 0, isNewDrug };
+             return { ...existingItem, past5Months: m_usages.slice(0,5), targetVMI, isUnpacked, avgUsage: meanPast.toFixed(2), type, price, requestMore: existingItem.requestMore || 0, isUnlocked: (existingItem.requestMore > 0), isNewDrug };
           }
 
           return {
             drugId: par.drug_id, name: drug ? drug.drug_name : 'N/A', unit: drug ? drug.unit_display_name : '',
             packSize, isUnpacked, type, price, isNewDrug,
+            past5Months: m_usages.slice(0,5),
             avgUsage: meanPast.toFixed(2), prevExcess, 
             usage: 0, targetVMI, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess, isSpecial: false,
-            requestMore: 0
+            requestMore: 0, isUnlocked: false
           };
         });
 
         existingReqItems.forEach(ex => {
-           if(!generatedList.find(g => g.drugId === ex.drugId)) generatedList.push({...ex, requestMore: ex.requestMore || 0});
+           if(!generatedList.find(g => g.drugId === ex.drugId)) generatedList.push({...ex, past5Months: [0,0,0,0,0], requestMore: ex.requestMore || 0, isUnlocked: (ex.requestMore > 0)});
         });
         return generatedList.sort(sortDrugs);
       });
@@ -813,7 +805,7 @@
                  return normSys.includes(normRaw) || normRaw.includes(normSys) || fuzzyArr.some(f => normRaw.includes(f));
               });
             }
-            if (matched) mappedId = mappedId || matched.drug_id; // Default to first match
+            if (matched) mappedId = matched.drug_id; // Default to first match
             return { ...item, mappedDrugId: mappedId };
           });
 
@@ -842,7 +834,17 @@
             const usage = usageVal !== null ? (parseInt(usageVal) || 0) : item.usage;
             const requestMore = requestMoreVal !== null ? (parseInt(requestMoreVal) || 0) : item.requestMore;
             
-            const row = { ...item, usage, requestMore };
+            // Dynamic VMI Recalculation based on current usage
+            const past = item.past5Months || [0,0,0,0,0];
+            const nonZeroUsages = [...past, usage].filter(u => u > 0);
+            const count = nonZeroUsages.length || 1;
+            const mean = nonZeroUsages.reduce((a,b)=>a+b, 0) / count;
+            const variance = nonZeroUsages.reduce((a,b)=>a + Math.pow(b - mean, 2), 0) / (count === 1 ? 1 : count - 1);
+            const SD = Math.sqrt(variance);
+            const dynamicTargetVMI = Math.ceil(mean + (1.645 * SD));
+
+            const row = { ...item, usage, requestMore, targetVMI: dynamicTargetVMI, avgUsage: mean.toFixed(2) };
+            
             let netNeed = row.targetVMI - row.prevExcess;
             if (netNeed <= 0) netNeed = 0;
             
@@ -873,7 +875,7 @@
             drugId: drug.drug_id, name: drug.drug_name, unit: drug.unit_display_name,
             packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type, price: drug.price,
             avgUsage: 0, prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0,
-            isSpecial: false, requestMore: 0, isNewDrug: true
+            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, past5Months: [0,0,0,0,0]
          };
          setItems([newItem, ...items].sort(sortDrugs)); setManualAddSearch(''); ctx.showToast(`เพิ่ม ${drug.drug_name} ลงในใบเบิกแล้ว`);
       };
@@ -996,7 +998,7 @@
       }
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 border border-slate-100 animate-fade-in relative min-h-[80vh]">
+        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 border border-slate-100 animate-fade-in relative w-full">
           {isProcessing && <FullScreenSpinner />}
           <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
             <div>
@@ -1077,10 +1079,20 @@
                       <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100 bg-slate-50/50">{formatQty(item.targetVMI, item.packSize)}</td>
                       <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100">{formatQty(item.netNeed, item.packSize)}</td>
                       <td className="p-3 bg-indigo-50/50 border-l border-slate-100 text-center tooltip-container relative">
-                        <input type="number" min="0" className="w-16 border-b-2 border-indigo-300 bg-transparent p-1 text-center font-bold text-indigo-900 outline-none focus:bg-white focus:border-indigo-600 transition" value={item.requestMore || ''} onChange={e => updateRow(item.drugId, null, e.target.value)} placeholder="+0" />
-                        {item.packSize > 1 && item.requestMore > 0 && (
-                           <div className="tooltip-content hidden absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-max px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg">
-                              คุณระบุ {item.requestMore} = เบิกเพิ่มรวม {item.requestMore * item.packSize} หน่วย
+                        {!item.isUnlocked ? (
+                           <button onClick={() => {
+                              const newItems = items.map(i => i.drugId === item.drugId ? {...i, isUnlocked: true} : i);
+                              setItems(newItems);
+                           }} className="text-slate-400 hover:text-indigo-600 transition"><i className="fa-solid fa-lock"></i></button>
+                        ) : (
+                           <div className="flex flex-col items-center">
+                              <input type="number" min="0" className="w-16 border-b-2 border-indigo-300 bg-transparent p-1 text-center font-bold text-indigo-900 outline-none focus:bg-white focus:border-indigo-600 transition" value={item.requestMore || ''} onChange={e => updateRow(item.drugId, null, e.target.value)} placeholder="+0" />
+                              {(item.requestMore > 0 && item.type !== '32') && <span className="text-[9px] text-red-500 font-bold mt-1">รออนุมัติ</span>}
+                           </div>
+                        )}
+                        {item.packSize > 1 && item.requestMore > 0 && item.isUnlocked && (
+                           <div className="tooltip-content hidden absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-max px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg z-50">
+                              ต้องการเบิกเพิ่ม {item.requestMore * item.packSize} หน่วยย่อย
                            </div>
                         )}
                       </td>
@@ -1103,6 +1115,134 @@
                {isSubmitting ? 'กำลังส่งข้อมูล...' : 'ส่งใบเบิกเข้าระบบ VMI'}
             </button>
           </div>
+
+          {/* ⭐️ JHCIS Import Modal */}
+          {showImportModal && (
+            <Modal title="ตรวจสอบข้อมูลจาก รบ.301" isOpen={true} onClose={()=>setShowImportModal(false)} maxWidth="max-w-4xl">
+               <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-white p-4 rounded-xl border border-slate-200">
+                     <p className="text-xs text-slate-500 font-bold mb-1">รพ.สต. ในไฟล์</p>
+                     <p className="font-semibold text-slate-800 text-sm">{importData.hospInfo || 'ไม่พบข้อมูลในไฟล์'}</p>
+                     {!importData.hospInfo?.includes(ctx.appDb.hospitals.find(h=>h.hospital_id === hospId)?.hospital_name?.replace('รพ.สต. ', '')) && (
+                       <p className="text-xs text-amber-600 mt-1"><i className="fa-solid fa-triangle-exclamation"></i> ชื่ออาจไม่ตรงกับต้นสังกัด โปรดตรวจสอบ</p>
+                     )}
+                  </div>
+                  <div className={`bg-white p-4 rounded-xl border ${importData.isDateValid ? 'border-slate-200' : 'border-red-400 bg-red-50'}`}>
+                     <p className="text-xs text-slate-500 font-bold mb-1">ช่วงเวลาในไฟล์</p>
+                     <p className="font-semibold text-slate-800 text-sm">{importData.periodInfo || 'ไม่พบข้อมูล'}</p>
+                     {!importData.isDateValid && <p className="text-xs text-red-600 mt-1"><i className="fa-solid fa-calendar-xmark"></i> วันที่อาจไม่ถูกต้องตามรอบ (ปกติควรเริ่มและจบแถวๆ วันที่ 25)</p>}
+                  </div>
+               </div>
+
+               <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                 <table className="w-full text-left text-sm">
+                   <thead className="bg-slate-100 border-b">
+                     <tr>
+                        <th className="p-3">ชื่อยาจากระบบ JHCIS (ข้อมูลดิบ)</th>
+                        <th className="p-3">จับคู่กับยาในระบบ <span className="font-normal text-xs text-slate-500">(พิมพ์ค้นหาได้)</span></th>
+                        <th className="p-3 text-center w-24">ยอดใช้</th>
+                        <th className="p-3 text-center w-12">ข้าม</th>
+                     </tr>
+                   </thead>
+                   <tbody>
+                     {importData.items.map(item => (
+                        <tr key={item.id} className="border-b hover:bg-slate-50">
+                           <td className="p-3 font-medium text-slate-700">{item.rawName}</td>
+                           <td className="p-3">
+                              <input 
+                                list="drug-list" 
+                                className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-amber-300 bg-amber-50 text-amber-800'}`}
+                                value={item.mappedDrugId}
+                                onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
+                                placeholder="-- ไม่ทำการจับคู่ (ข้าม) --"
+                              />
+                              <datalist id="drug-list">
+                                 {ctx.appDb.drugs.sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>)}
+                              </datalist>
+                           </td>
+                           <td className="p-3">
+                              <input type="number" className="w-20 p-2 border rounded-lg text-center font-bold text-slate-700 outline-none focus:border-indigo-500" value={item.usage} onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, usage: Number(e.target.value) } : i)}))} />
+                           </td>
+                           <td className="p-3 text-center">
+                              <button onClick={() => setImportData(prev => ({...prev, items: prev.items.filter(i => i.id !== item.id)}))} className="text-slate-400 hover:text-red-500 transition"><i className="fa-solid fa-trash"></i></button>
+                           </td>
+                        </tr>
+                     ))}
+                   </tbody>
+                 </table>
+               </div>
+               <div className="mt-6 flex justify-end gap-3 shrink-0">
+                   <button onClick={() => setShowImportModal(false)} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">ยกเลิก</button>
+                   <button onClick={() => {
+                      let newItemsArr = [...items];
+                      let newAdded = false;
+                      
+                      importData.items.forEach(importItem => {
+                         if(importItem.mappedDrugId && importItem.usage > 0) {
+                            let existing = newItemsArr.find(i => i.drugId === importItem.mappedDrugId);
+                            if(!existing) {
+                               const d = ctx.appDb.drugs.find(x => x.drug_id === importItem.mappedDrugId);
+                               if(d) {
+                                  const isMed = d.type === '32';
+                                  existing = {
+                                     drugId: d.drug_id, name: d.drug_name, unit: d.unit_display_name,
+                                     packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
+                                     avgUsage: 0, prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
+                                     dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: false, requestMore: 0,
+                                     isUnlocked: false, isNewDrug: true, past5Months: [0,0,0,0,0]
+                                  };
+                                  newItemsArr.push(existing);
+                                  newAdded = true;
+                               }
+                            }
+                         }
+                      });
+
+                      if(newAdded) newItemsArr.sort(sortDrugs);
+                      
+                      const calcItems = newItemsArr.map(item => {
+                         const importItem = importData.items.find(i => i.mappedDrugId === item.drugId);
+                         if (importItem && importItem.usage > 0) {
+                            const usage = parseInt(importItem.usage) || 0;
+                            const requestMore = item.requestMore || 0;
+                            
+                            const past = item.past5Months || [0,0,0,0,0];
+                            const nonZeroUsages = [...past, usage].filter(u => u > 0);
+                            const count = nonZeroUsages.length || 1;
+                            const mean = nonZeroUsages.reduce((a,b)=>a+b, 0) / count;
+                            const variance = nonZeroUsages.reduce((a,b)=>a + Math.pow(b - mean, 2), 0) / (count === 1 ? 1 : count - 1);
+                            const SD = Math.sqrt(variance);
+                            const dynamicTargetVMI = Math.ceil(mean + (1.645 * SD));
+
+                            const currentBal = item.prevExcess - usage;
+                            let netNeed = dynamicTargetVMI - currentBal;
+                            if (netNeed <= 0) netNeed = 0;
+
+                            const totalNeed = netNeed + requestMore;
+                            
+                            let dispensePack=0, dispenseQty=0, newExcess=currentBal;
+                            if (totalNeed > 0) {
+                               if (item.isUnpacked) {
+                                  dispensePack = Math.ceil(totalNeed / item.packSize); dispenseQty = Math.ceil(totalNeed);
+                               } else {
+                                  dispensePack = Math.ceil(totalNeed / item.packSize); dispenseQty = dispensePack * item.packSize;
+                               }
+                               newExcess = currentBal + dispenseQty;
+                            }
+                            return { ...item, usage, netNeed, dispensePack, dispenseQty, newExcess, targetVMI: dynamicTargetVMI, avgUsage: mean.toFixed(2) };
+                         }
+                         return item;
+                      });
+
+                      setItems(calcItems);
+                      setShowImportModal(false);
+                      ctx.showToast('ดึงข้อมูลยอดใช้เข้าสู่ตารางเรียบร้อยแล้ว');
+                   }} className="px-8 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 flex items-center transition">
+                     <i className="fa-solid fa-file-import mr-2"></i> ยืนยันนำยอดไปใส่ในใบเบิก
+                   </button>
+               </div>
+            </Modal>
+          )}
         </div>
       );
     };
@@ -1136,6 +1276,20 @@
         try {
           const batch = db.batch(); batch.update(db.collection('requisitions').doc(req.id), { status: 'Completed', items: editableItems });
           editableItems.forEach(it => batch.set(db.collection('current_excess').doc(`${req.hospitalId}_${it.drugId}`), { hospital_id: req.hospitalId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+          
+          if(req.skipped_items) {
+             req.skipped_items.filter(s => s.mappedDrugId).forEach(s => {
+                const d = ctx.appDb.drugs.find(x => x.drug_id === s.mappedDrugId);
+                if(d) {
+                   const existingFuzzy = d.fuzzy ? d.fuzzy.split(',').map(f=>f.trim().toLowerCase()) : [];
+                   const rawLower = s.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
+                   if(!existingFuzzy.includes(rawLower)) {
+                      batch.update(db.collection('master_drugs').doc(d.drug_id), { fuzzy: d.fuzzy ? `${d.fuzzy},${s.rawName}` : s.rawName });
+                   }
+                }
+             });
+          }
+
           await batch.commit(); ctx.showToast('อนุมัติแล้ว'); await ctx.refreshData(); ctx.setCurrentView('dashboard');
         } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsApproving(false); }
       };
@@ -1144,7 +1298,9 @@
          setIsApproving(true);
          try {
             await db.collection('requisitions').doc(req.id).update({ status: 'Rejected' });
-            ctx.showToast('ไม่อนุมัติใบเบิก'); await ctx.refreshData(); ctx.setCurrentView('dashboard');
+            ctx.showToast('ไม่อนุมัติใบเบิก');
+            await ctx.refreshData();
+            ctx.setCurrentView('dashboard');
          } catch(e) { ctx.showToast(e.message, 'error'); setIsApproving(false); }
       };
 
@@ -1152,7 +1308,9 @@
          setIsApproving(true);
          try {
             await db.collection('requisitions').doc(req.id).delete();
-            ctx.showToast('ลบใบเบิกสำเร็จ'); await ctx.refreshData(); ctx.setCurrentView('dashboard');
+            ctx.showToast('ลบใบเบิกสำเร็จ');
+            await ctx.refreshData();
+            ctx.setCurrentView('dashboard');
          } catch(e) { ctx.showToast(e.message, 'error'); setIsApproving(false); }
       };
 
@@ -1167,6 +1325,7 @@
       typeKeys.forEach(k => groupedItems[k] = []);
       
       const itemsToDisplay = (isAdmin && isPending) ? editableItems : editableItems.filter(it => it.dispenseQty > 0 || it.requestMore > 0 || it.netNeed > 0 || (it.returnQty && it.returnQty > 0));
+
       itemsToDisplay.forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
       
       let grandTotalItems = 0;
@@ -1177,7 +1336,7 @@
       let returnTotal = 0;
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print:p-0 print:border-none print:shadow-none relative">
+        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print:p-0 print:border-none print:shadow-none w-full relative">
           
           {!isAdmin && isApprovalRequired && printMode === 'req' && (
              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50 print:block">
@@ -1209,6 +1368,25 @@
             </div>
           </div>
 
+          {isAdmin && isPending && req.skipped_items && req.skipped_items.length > 0 && (
+             <div className="mb-6 bg-amber-50 p-4 rounded-xl border border-amber-200 no-print">
+                <h3 className="font-bold text-amber-800 mb-2"><i className="fa-solid fa-triangle-exclamation mr-2"></i> รายการยาที่ รพ.สต. ข้ามไป (หาไม่เจอ)</h3>
+                <table className="w-full text-sm text-left">
+                   <thead><tr className="border-b border-amber-200"><th>ชื่อยา (ข้อมูลดิบ)</th><th>ยอดใช้</th></tr></thead>
+                   <tbody>
+                      {req.skipped_items.map((s, idx) => (
+                         <tr key={idx} className="border-b border-amber-100">
+                            <td className="py-2 text-amber-900">{s.rawName}</td>
+                            <td className="py-2 font-bold text-amber-700">{s.usage}</td>
+                         </tr>
+                      ))}
+                   </tbody>
+                </table>
+             </div>
+          )}
+
+          {isAdmin && isPending && <p className="text-amber-600 text-sm mb-4 font-bold bg-amber-50 p-2 rounded no-print"><i className="fa-solid fa-pen-to-square mr-1"></i> แอดมินสามารถคลิกแก้ตัวเลขในช่อง "จำนวนจ่าย" (สีเขียว) ได้</p>}
+
           <div className={`print-area font-sarabun w-full ${printMode === 'req' ? 'block' : 'hidden no-print'}`}>
              <div className="print-header mb-6 text-center">
                 <h1 className="text-lg font-bold mb-1">แบบเบิกเวชภัณฑ์สำหรับโรงพยาบาลส่งเสริมสุขภาพระดับตำบล (รพ.สต)</h1>
@@ -1219,7 +1397,7 @@
                 </div>
              </div>
 
-             <table className="official-table w-full text-[11px] border-collapse border border-black mb-2 relative">
+             <table className="official-table w-full text-[11px] border-collapse border border-black mb-2 relative w-full">
                 <thead>
                    <tr className="bg-gray-200">
                       <th className="w-8">ที่</th>
@@ -1300,7 +1478,7 @@
                 </table>
              </div>
 
-             <div className="mt-8 px-4 text-[13px] leading-relaxed break-inside-avoid w-full max-w-2xl mx-auto space-y-8">
+             <div className="mt-8 px-4 text-[13px] leading-relaxed break-inside-avoid w-full max-w-2xl mx-auto mb-2">
                  {[
                      `ผู้เบิก`,
                      `ผอ.รพ.สต.${hospNameClean}`,
@@ -1309,7 +1487,7 @@
                      `ผู้จ่าย`,
                      `ผู้รับ`
                  ].map((role, idx) => (
-                     <div key={idx} className="flex justify-between items-end w-full">
+                     <div key={idx} className="flex justify-between items-end w-full mb-3">
                          <div className="flex w-1/2 items-end">
                              <span className="w-12">ลงชื่อ</span>
                              <span className="flex-1 border-b border-dotted border-black inline-block text-center"></span>
@@ -1484,7 +1662,7 @@
                    <p className="text-lg">ประจำเดือน {THAI_MONTHS[filterMonth-1]} {filterYear + 543}</p>
                 </div>
 
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto w-full">
                    <table className="official-table w-full text-left text-[13px] whitespace-nowrap border-collapse">
                       <thead>
                          <tr className="bg-slate-200">
@@ -1676,7 +1854,7 @@
                   </select>
                   <span className="text-xs text-red-500 font-bold bg-red-50 p-2 rounded-lg"><i className="fa-solid fa-triangle-exclamation mr-1"></i> โหมดอันตราย (แก้ฐานข้อมูลโดยตรง) ช่อง Arrays/Objects จะแสดงเป็น JSON Format</span>
                </div>
-               <div className="overflow-x-auto border border-slate-300 rounded-xl max-h-[600px] overflow-y-auto w-full">
+               <div className="overflow-x-auto border border-slate-300 rounded-xl w-full">
                   <table className="w-full text-left text-[12px] whitespace-nowrap bg-white">
                      <thead className="bg-slate-800 text-white sticky top-0 z-10">
                         <tr>
@@ -1838,7 +2016,7 @@
                </button>
             </div>
 
-            <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto w-full">
+            <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
               <table className="w-full text-left text-sm border-collapse whitespace-nowrap">
                 <thead className="bg-slate-100 border-b sticky top-0 z-10">
                   <tr><th className="p-4">รหัส</th><th className="p-4">หมวด</th><th className="p-4">ชื่อยา</th><th className="p-4">ชื่อพ้อง (Fuzzy)</th><th className="p-4 text-center">Pack</th><th className="p-4 text-center">หน่วย</th><th className="p-4 text-center">แตกย่อย</th><th className="p-4 text-right">ราคา (฿)</th><th className="p-4 text-center">จัดการ</th></tr>
@@ -2024,7 +2202,7 @@
       };
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in relative">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in relative w-full">
           <div className="bg-slate-800 text-white p-6 flex justify-between items-center">
             <h2 className="text-2xl font-bold"><i className="fa-solid fa-server mr-2 text-emerald-400"></i> จัดการฐานข้อมูล (Admin Console)</h2>
             {isSaving && <div className="flex items-center text-emerald-400 font-bold animate-pulse"><i className="fa-solid fa-circle-notch fa-spin mr-2"></i> กำลังบันทึก...</div>}
@@ -2235,7 +2413,7 @@
             units: unitSnap.docs.map(d => d.data()),
             parLevels: parSnap.docs.map(d => d.data()),
             balances: balSnap.docs.map(d => d.data()),
-            requisitions: reqSnap.docs.map(d => ({id: d.id, ...d.data()})),
+            requisitions: reqSnap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => !r.isInitialSetup && r.created_by_name !== 'System (CSV Setup)'), // Exclude initial setup
             usersList: userSnap.docs.map(d => ({id: d.id, ...d.data()})),
             stockAdjustments: adjSnap.docs.map(d => ({id: d.id, ...d.data()})),
             drugTypes: configSnap.exists ? configSnap.data() : null
@@ -2278,7 +2456,7 @@
       const ctx = { appDb, currentUser, setCurrentView, showToast, refreshData, currentReqId, setCurrentReqId, editReqId, setEditReqId, setConfirmDialog, adminActiveTab, setAdminActiveTab, targetUploadHosp, setTargetUploadHosp, handleLogin };
 
       return (
-        <div className="flex flex-col min-h-screen lg:flex-row">
+        <div className="flex flex-col min-h-screen lg:flex-row w-full">
           <div className="w-full lg:w-72 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-10">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
@@ -2286,8 +2464,8 @@
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => setCurrentView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>
-              {currentUser?.role === 'hospital' && <button onClick={() => {setEditReqId(null); setCurrentView('create_req');}} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='create_req'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-packing w-6 text-center mr-2"></i> ทำเรื่องเติมยา</button>}
-              {currentUser?.role === 'admin' && <button onClick={() => setCurrentView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการระบบ</button>}
+              {currentUser?.role === 'hospital' && <button onClick={() => {setEditReqId(null); setCurrentView('create_req');}} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='create_req'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-packing w-6 text-center mr-2"></i> เบิกยา / เติมยา</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => setCurrentView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
               
               <div className="border-t border-slate-800 my-2 pt-2"></div>
               <button onClick={() => setCurrentView('profile_edit')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='profile_edit'?'bg-slate-700 text-white':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-user-pen w-6 text-center mr-2"></i> แก้ไขข้อมูลส่วนตัว</button>
@@ -2303,13 +2481,12 @@
               <button onClick={() => auth.signOut()} className="w-full text-left p-3 rounded-xl text-red-400 hover:bg-red-500/10 font-bold border border-red-500/30 transition flex items-center justify-center"><i className="fa-solid fa-power-off mr-2"></i> ออกจากระบบ</button>
             </div>
           </div>
-          <div className="flex-1 p-4 lg:p-10 overflow-auto bg-[#f8fafc] w-full relative">
-            <div className="max-w-7xl mx-auto pb-20">
+          <div className="flex-1 p-4 lg:p-10 bg-[#f8fafc] w-full min-w-0">
+            <div className="w-full pb-20">
               {currentView === 'dashboard' && <DashboardView ctx={ctx} />}
               {currentView === 'create_req' && <CreateReqView ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}
               {currentView === 'my_stock' && <MyStockView ctx={ctx} />}
-              {currentView === 'upload_csv' && <UploadCSVView ctx={ctx} />}
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}

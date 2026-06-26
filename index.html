@@ -321,7 +321,7 @@
 
               const ADU = total / 210;
               const SS = 1.645 * (sd / 30) * Math.sqrt(7);
-              const rawInitial = (ADU * 60) + SS;
+              const rawInitial = (ADU * 45) + SS;
               const ceilInitial = Math.ceil(rawInitial);
 
               const drug = ctx.appDb.drugs.find(d => d.drug_id === row.drug_id);
@@ -384,7 +384,7 @@
               <div className="overflow-x-auto border border-slate-200 rounded-xl mb-6 max-h-[500px] overflow-y-auto">
                 <table className="w-full text-left whitespace-nowrap text-sm">
                   <thead className="bg-slate-800 text-white sticky top-0 z-10">
-                    <tr><th className="p-3">รพ.สต.</th><th className="p-3">รหัสยา</th><th className="p-3 text-center">ยอดใช้<br/>(M1-M7)</th><th className="p-3 text-center bg-slate-700">ADU</th><th className="p-3 text-center bg-slate-700">SD</th><th className="p-3 text-center bg-slate-700">Safety<br/>Stock</th><th className="p-3 text-center text-amber-300 bg-slate-900">คำนวณ<br/>(60 วัน)</th><th className="p-3 text-center">Pack<br/>Size</th><th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(แพ็ค)</th><th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(หน่วยย่อย)</th></tr>
+                    <tr><th className="p-3">รพ.สต.</th><th className="p-3">รหัสยา</th><th className="p-3 text-center">ยอดใช้<br/>(M1-M7)</th><th className="p-3 text-center bg-slate-700">ADU</th><th className="p-3 text-center bg-slate-700">SD</th><th className="p-3 text-center bg-slate-700">Safety<br/>Stock</th><th className="p-3 text-center text-amber-300 bg-slate-900">คำนวณ<br/>(45 วัน)</th><th className="p-3 text-center">Pack<br/>Size</th><th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(แพ็ค)</th><th className="p-3 text-center text-emerald-400 bg-slate-900">แนะนำจัด<br/>(หน่วยย่อย)</th></tr>
                   </thead>
                   <tbody>
                     {parsedData.map((row, idx) => (
@@ -936,6 +936,7 @@
             </div>
             <div className="space-x-3 flex flex-wrap gap-y-2">
               {isAdmin && <button onClick={() => ctx.setCurrentView('summary_report')} className="bg-indigo-100 text-indigo-700 border border-indigo-200 px-6 py-3 rounded-xl font-bold shadow-sm hover:bg-indigo-200 transition"><i className="fa-solid fa-chart-bar mr-2"></i> รายงานสรุปยอด</button>}
+              {isAdmin && <button onClick={() => ctx.setCurrentView('upload_csv')} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition"><i className="fa-solid fa-file-csv mr-2"></i> Initial CSV</button>}
               {isHospital && <button onClick={() => ctx.setCurrentView('adjust_stock')} className="bg-white border-2 border-emerald-500 text-emerald-600 px-6 py-3 rounded-xl font-bold hover:bg-emerald-50 transition"><i className="fa-solid fa-boxes-stacked mr-2"></i> ขอปรับสต๊อก</button>}
               {isHospital && (
                 <button 
@@ -2038,7 +2039,7 @@
             let dynamicCSV = csvData;
             if (csvData) {
                 const SS = zScore * (csvData.sd / reviewPeriod) * Math.sqrt(leadTime);
-                const rawInitial = (csvData.adu * 60) + SS; 
+                const rawInitial = (csvData.adu * 45) + SS; 
                 const ceilInitial = Math.ceil(rawInitial);
                 let finalQty, finalPack;
                 if (d.unpacked) {
@@ -2057,6 +2058,159 @@
           );
         }, [ctx.appDb, selHosp, searchTerm, activeCSV, zScore, reviewPeriod, leadTime]);
 
+        const handleAdminUploadCSV = (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            ctx.setConfirmDialog({
+                title: 'ยืนยันอัปโหลดประวัติ 7 เดือน',
+                message: 'การอัปโหลดนี้จะแทนที่ข้อมูลประวัติการใช้ยาเดิมของ รพ.สต. ที่ระบุในไฟล์ทั้งหมด ยืนยันหรือไม่?',
+                icon: 'fa-file-csv',
+                confirmText: 'ยืนยันแทนที่',
+                onConfirm: () => {
+                    setIsSaving(true);
+                    Papa.parse(file, {
+                        header: true, skipEmptyLines: true,
+                        complete: async (results) => {
+                            try {
+                                const rawData = results.data;
+                                const grouped = {};
+                                rawData.forEach(row => {
+                                    const hospId = row.hospital_id;
+                                    if(!hospId) return;
+                                    if(!grouped[hospId]) grouped[hospId] = [];
+
+                                    const m = [ Number(row.usage_m1)||0, Number(row.usage_m2)||0, Number(row.usage_m3)||0, Number(row.usage_m4)||0, Number(row.usage_m5)||0, Number(row.usage_m6)||0, Number(row.usage_m7)||0 ];
+                                    const total = m.reduce((a,b)=>a+b, 0);
+                                    const mean = total / 7;
+                                    const variance = m.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / 6;
+                                    const sd = Math.sqrt(variance || 0);
+                                    const adu = total / 210;
+
+                                    const drug = ctx.appDb.drugs.find(d => d.drug_id === row.drug_id);
+                                    grouped[hospId].push({
+                                        hospital_id: hospId, drug_id: row.drug_id, 
+                                        m1: m[0], m2: m[1], m3: m[2], m4: m[3], m5: m[4], m6: m[5], m7: m[6],
+                                        total, adu: adu.toFixed(3), sd: sd.toFixed(3),
+                                        drugName: drug ? drug.drug_name : 'N/A'
+                                    });
+                                });
+
+                                const operations = [];
+                                for (const hospId in grouped) {
+                                    const existing = ctx.appDb.csvRequests.filter(r => r.hospital_id === hospId && r.status === 'Approved');
+                                    existing.forEach(ex => {
+                                        operations.push({ type: 'delete', ref: db.collection('csv_initial_requests').doc(ex.id) });
+                                    });
+
+                                    const newDocRef = db.collection('csv_initial_requests').doc();
+                                    operations.push({
+                                        type: 'set',
+                                        ref: newDocRef,
+                                        data: {
+                                            hospital_id: hospId,
+                                            items: grouped[hospId],
+                                            status: 'Approved',
+                                            created_at: firebase.firestore.FieldValue.serverTimestamp(),
+                                            user_name: 'Admin Override'
+                                        }
+                                    });
+                                }
+                                await executeBatchChunks(operations);
+                                ctx.showToast('อัปโหลดข้อมูลประวัติ 7 เดือนและแทนที่สำเร็จ');
+                                ctx.refreshData();
+                            } catch(err) {
+                                ctx.showToast(err.message, 'error');
+                            } finally {
+                                setIsSaving(false);
+                                e.target.value = null;
+                            }
+                        }
+                    });
+                }
+            });
+        };
+
+        const handleExportInitialStockXLSX = () => {
+            const hospName = ctx.appDb.hospitals.find(h => h.hospital_id === selHosp)?.hospital_name || selHosp;
+            const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+            
+            const wb = XLSX.utils.book_new();
+            const wsData = [];
+            wsData.push([`Initial Stock: รพ.สต. ${hospName.replace('รพ.สต.', '').trim()}`]);
+            wsData.push([]);
+            wsData.push(['ที่', 'ชื่อยา', 'หน่วย', 'Pack Size', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'ADU', 'SD', 'Target Stock (45 วัน)', 'ราคา', 'มูลค่า', 'รหัส']);
+            
+            let globalIndex = 1;
+            let grandTotalValue = 0;
+            
+            const grouped = {};
+            Object.keys(typesSource).forEach(k => grouped[k] = []);
+            
+            ctx.appDb.drugs.forEach(d => {
+                const csvData = activeCSV?.items?.find(it => it.drug_id === d.drug_id);
+                if (csvData && csvData.adu > 0) {
+                    const rawQty = (Number(csvData.adu) * 45) + (Number(csvData.sd) * zScore);
+                    const ceilQty = Math.ceil(rawQty);
+                    
+                    let finalQty = ceilQty;
+                    if (!d.unpacked) {
+                        const packSize = Number(d.pack_size) || 1;
+                        finalQty = Math.ceil(ceilQty / packSize) * packSize;
+                    }
+                    
+                    if (finalQty > 0) {
+                        const type = d.type || '1';
+                        if (grouped[type]) grouped[type].push({ ...d, calcQty: finalQty, csvData });
+                        else grouped['1'].push({ ...d, calcQty: finalQty, csvData });
+                    }
+                }
+            });
+
+            Object.keys(typesSource).forEach(typeKey => {
+                const items = grouped[typeKey];
+                if (!items || items.length === 0) return;
+                
+                wsData.push([`${typesSource[typeKey]}`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+                
+                let subTotalValue = 0;
+                items.sort((a,b) => a.drug_id.localeCompare(b.drug_id)).forEach(item => {
+                    const qty = item.calcQty;
+                    const packSize = Number(item.pack_size) || 1;
+                    const price = Number(item.price) || 0;
+                    
+                    let val = 0;
+                    if (item.unpacked) {
+                       val = (qty / packSize) * price;
+                    } else {
+                       val = (qty / packSize) * price;
+                    }
+                    
+                    subTotalValue += val;
+                    grandTotalValue += val;
+                    
+                    wsData.push([
+                        globalIndex++,
+                        item.drug_name,
+                        item.unit_display_name,
+                        packSize,
+                        item.csvData.m1, item.csvData.m2, item.csvData.m3, item.csvData.m4, item.csvData.m5, item.csvData.m6, item.csvData.m7,
+                        item.csvData.adu, item.csvData.sd,
+                        qty,
+                        price,
+                        val,
+                        item.drug_id
+                    ]);
+                });
+                wsData.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', 'รวม', subTotalValue, '']);
+            });
+            
+            wsData.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', 'รวมทั้งสิ้น', grandTotalValue, '']);
+            
+            const ws = XLSX.utils.aoa_to_sheet(wsData);
+            XLSX.utils.book_append_sheet(wb, ws, 'InitialStock');
+            XLSX.writeFile(wb, `InitialStock_${selHosp}.xlsx`);
+        };
+
         return (
           <div className="p-6">
             <div className="flex flex-col lg:flex-row gap-4 mb-6 items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-200">
@@ -2064,6 +2218,13 @@
                 <select className="border-2 border-emerald-300 text-emerald-800 rounded-lg p-2 font-bold w-full md:w-64 outline-none" value={selHosp} onChange={e=>setSelHosp(e.target.value)}>
                   {ctx.appDb.hospitals.map(h=><option key={h.id} value={h.hospital_id}>{h.hospital_name}</option>)}
                 </select>
+                <label className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold shadow transition flex items-center whitespace-nowrap cursor-pointer">
+                   <i className="fa-solid fa-upload mr-2"></i> อัปโหลด 7 ด. (แทนที่)
+                   <input type="file" accept=".csv" className="hidden" onChange={handleAdminUploadCSV} />
+                </label>
+                <button onClick={handleExportInitialStockXLSX} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold shadow transition flex items-center whitespace-nowrap">
+                   <i className="fa-solid fa-file-excel mr-2"></i> ส่งออก Initial Stock (XLSX)
+                </button>
               </div>
               
               <div className="flex gap-3 items-center bg-white p-2 rounded-lg border border-slate-200 w-full lg:w-auto overflow-x-auto">
@@ -2167,7 +2328,7 @@
                     </div>
                   </div>
                   <div className="p-6 bg-emerald-50 rounded-2xl border-2 border-emerald-200 text-center mt-6">
-                    <p className="text-sm font-bold text-emerald-800 mb-2">Target Stock (60 วัน) = (ADU × 60) + SS</p>
+                    <p className="text-sm font-bold text-emerald-800 mb-2">Target Stock (45 วัน) = (ADU × 45) + SS</p>
                     <p className="text-4xl font-black text-emerald-600 mb-2">{showFormula.finalQty} <span className="text-lg font-bold">{showFormula.unit}</span></p>
                     <p className="text-sm text-emerald-700 font-medium bg-emerald-100 inline-block px-3 py-1 rounded-full">
                        คำนวณได้ {showFormula.ceilInitial} ➔ ปัดเศษ ({showFormula.finalPack} Pack × {showFormula.packSize})
@@ -2226,7 +2387,7 @@
             <div className="flex justify-between items-center mb-4 gap-4">
                <div className="relative w-full max-w-sm">
                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
-                 <input type="text" placeholder="ค้นหารายยา..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:border-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                 <input type="text" placeholder="ค้นหารายการยา..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:border-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
                </div>
                <button onClick={()=>setEditTarget({ col: 'master_drugs', data: {}, isNew: true })} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shrink-0 hover:scale-105 transition">
                  <i className="fa-solid fa-plus mr-1"></i> เพิ่มรายการยา
@@ -2447,7 +2608,13 @@
             } catch(e) { ctx.showToast(e.message, 'error'); }
          };
 
-         if(data.length === 0) return <div className="p-6 text-center text-slate-500"><select value={selCol} onChange={e=>setSelCol(e.target.value)} className="mb-4 border p-2 rounded">{collections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select><br/>ไม่มีข้อมูลในตารางนี้</div>;
+         if(data.length === 0) return (
+            <div className="p-6 text-center text-slate-500">
+               <select value={selCol} onChange={e=>setSelCol(e.target.value)} className="mb-4 border p-2 rounded">
+                  {collections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+               </select><br/>ไม่มีข้อมูลในตารางนี้
+            </div>
+         );
 
          const keys = Object.keys(data[0]).filter(k => k !== '_docId');
 
@@ -2686,6 +2853,7 @@
             <TabBtn id="hospitals" icon="fa-hospital" label="รพ.สต." />
             <TabBtn id="stock" icon="fa-cubes" label="ตั้งค่า Target Stock" />
             <TabBtn id="approve_stock" icon="fa-check-to-slot" label="อนุมัติปรับสต๊อก" />
+            <TabBtn id="approve_csv" icon="fa-file-csv" label="อนุมัติ Initial CSV" />
             <TabBtn id="users" icon="fa-users" label="ผู้ใช้งาน" />
             <TabBtn id="raw_db" icon="fa-table" label="ฐานข้อมูลดิบ (Raw DB)" />
           </div>
@@ -2964,6 +3132,7 @@
               {currentView === 'create_req' && <CreateReqView ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}
               {currentView === 'adjust_stock' && <AdjustStockView ctx={ctx} />}
+              {currentView === 'upload_csv' && <UploadCSVView ctx={ctx} />}
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}

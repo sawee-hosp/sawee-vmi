@@ -268,15 +268,64 @@
     const RegisterView = ({ ctx }) => {
       const [formData, setFormData] = useState({ email: '', password: '', name: '', position: '', hospitalId: '' });
       const [isSubmitting, setIsSubmitting] = useState(false);
+      const [hospitalsList, setHospitalsList] = useState([]);
+
+      // ดึงรายชื่อ รพ.สต. เพื่อใช้ในหน้าลงทะเบียนก่อนล็อกอิน
+      useEffect(() => {
+         db.collection('master_hospitals').get().then(snap => {
+            setHospitalsList(snap.docs.map(d => ({id: d.id, ...d.data()})));
+         }).catch(e => console.log("Failed to fetch hospitals", e));
+      }, []);
+
       const handleRegister = async () => {
         if(!formData.hospitalId || !formData.name.trim() || !formData.position.trim()) return ctx.showToast('กรุณากรอกข้อมูลให้ครบ', 'error');
+        
+        // ตรวจสอบรูปแบบ Email
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(formData.email)) return ctx.showToast('รูปแบบอีเมลไม่ถูกต้อง', 'error');
+
+        // ตรวจสอบความยาว Password
+        if (formData.password.length < 4) return ctx.showToast('รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร', 'error');
+
         setIsSubmitting(true);
         try {
           const userCredential = await auth.createUserWithEmailAndPassword(formData.email, formData.password);
-          await db.collection('users').doc(userCredential.user.uid).set({ name: formData.name, position: formData.position, hospital_id: formData.hospitalId, role: 'hospital', created_at: firebase.firestore.FieldValue.serverTimestamp() });
-          ctx.showToast('ลงทะเบียนสำเร็จ');
-        } catch (error) { ctx.showToast(error.message, 'error'); } finally { setIsSubmitting(false); }
+          await db.collection('users').doc(userCredential.user.uid).set({ 
+              name: formData.name, 
+              position: formData.position, 
+              hospital_id: formData.hospitalId, 
+              role: 'hospital', 
+              created_at: firebase.firestore.FieldValue.serverTimestamp() 
+          });
+
+          // ส่ง Email ยืนยันของ Firebase พื้นฐาน
+          await userCredential.user.sendEmailVerification();
+
+          // ส่งข้อมูลรหัสผ่านไปยัง Email ผ่าน GAS
+          try {
+             if (GAS_DRIVE_URL && GAS_DRIVE_URL.includes('/exec')) {
+                 const hospName = hospitalsList.find(h => h.hospital_id === formData.hospitalId)?.hospital_name || formData.hospitalId;
+                 fetch(GAS_DRIVE_URL, {
+                     method: 'POST',
+                     body: JSON.stringify({
+                         action: 'sendEmail',
+                         to: formData.email,
+                         subject: 'Sawee VMI ลงทะเบียนสำเร็จ!',
+                         body: `เรียน คุณ ${formData.name}\n\nระบบ Sawee Rxfill (VMI) ได้รับการลงทะเบียนของคุณแล้ว\n\nข้อมูลการลงทะเบียน:\n- ชื่อ-นามสกุล: ${formData.name}\n- ตำแหน่ง: ${formData.position}\n- รพ.สต.: ${hospName}\n\nข้อมูลการเข้าสู่ระบบ:\n- อีเมล: ${formData.email}\n- รหัสผ่าน: ${formData.password}\n\nกรุณายืนยันอีเมลของคุณผ่านลิงก์ที่ระบบของ Firebase เพิ่งส่งไปให้\n\nขอบคุณครับ`
+                     })
+                 });
+             }
+          } catch(e) { console.log(e); }
+
+          ctx.showToast('ลงทะเบียนสำเร็จ! กรุณาตรวจสอบอีเมลของคุณ');
+          ctx.setCurrentView('login');
+        } catch (error) { 
+            ctx.showToast(error.message, 'error'); 
+        } finally { 
+            setIsSubmitting(false); 
+        }
       };
+
       return (
         <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100 w-full">
           <div className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md">
@@ -286,10 +335,10 @@
               <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="ตำแหน่ง (บังคับ)" onChange={e => setFormData({...formData, position: e.target.value})} />
               <select className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" onChange={e => setFormData({...formData, hospitalId: e.target.value})}>
                 <option value="">-- เลือก รพ.สต. ที่สังกัด --</option>
-                {ctx.appDb?.hospitals?.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
+                {hospitalsList.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
               </select>
               <input type="email" autoComplete="email" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="อีเมล (ใช้ล็อกอิน)" onChange={e => setFormData({...formData, email: e.target.value})} />
-              <input type="password" autoComplete="new-password" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="รหัสผ่าน" onChange={e => setFormData({...formData, password: e.target.value})} />
+              <input type="password" autoComplete="new-password" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="รหัสผ่าน (4 ตัวอักษรขึ้นไป)" onChange={e => setFormData({...formData, password: e.target.value})} />
               <button onClick={handleRegister} disabled={isSubmitting} className="w-full bg-gradient-main text-white rounded-xl p-4 font-bold shadow-lg mt-4">{isSubmitting ? 'กำลังบันทึก...' : 'ยืนยันลงทะเบียน'}</button>
               <button onClick={() => ctx.setCurrentView('login')} className="w-full text-slate-500 mt-2 hover:underline">กลับหน้าล็อกอิน</button>
             </div>
@@ -314,9 +363,9 @@
         <div className="bg-white rounded-2xl shadow-sm p-8 border max-w-lg mx-auto mt-10">
           <h2 className="text-2xl font-bold mb-6">แก้ไขข้อมูลส่วนตัว</h2>
           <div className="space-y-4">
-              <div><label className="text-sm font-bold text-slate-600">ชื่อ-นามสกุล</label><input type="text" className="w-full border p-3 rounded-lg outline-none mt-1" value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} /></div>
-              <div><label className="text-sm font-bold text-slate-600">ตำแหน่ง</label><input type="text" className="w-full border p-3 rounded-lg outline-none mt-1" value={formData.position} onChange={e=>setFormData({...formData, position: e.target.value})} /></div>
-              <div><label className="text-sm font-bold text-slate-600">รพ.สต. (แก้ไขผ่าน Admin)</label><input type="text" disabled className="w-full border p-3 rounded-lg bg-slate-100 text-slate-500 mt-1" value={ctx.appDb.hospitals.find(h=>h.hospital_id===ctx.currentUser?.hospital_id)?.hospital_name || ctx.currentUser?.hospital_id} /></div>
+             <div><label className="text-sm font-bold text-slate-600">ชื่อ-นามสกุล</label><input type="text" className="w-full border p-3 rounded-lg outline-none mt-1" value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} /></div>
+             <div><label className="text-sm font-bold text-slate-600">ตำแหน่ง</label><input type="text" className="w-full border p-3 rounded-lg outline-none mt-1" value={formData.position} onChange={e=>setFormData({...formData, position: e.target.value})} /></div>
+             <div><label className="text-sm font-bold text-slate-600">รพ.สต. (แก้ไขผ่าน Admin)</label><input type="text" disabled className="w-full border p-3 rounded-lg bg-slate-100 text-slate-500 mt-1" value={ctx.appDb.hospitals.find(h=>h.hospital_id===ctx.currentUser?.hospital_id)?.hospital_name || ctx.currentUser?.hospital_id} /></div>
           </div>
           <div className="flex justify-end gap-3 mt-8">
              <button onClick={()=>ctx.setCurrentView('dashboard')} className="px-6 py-2 bg-slate-100 rounded-xl font-bold text-slate-600">ยกเลิก</button>
@@ -333,7 +382,7 @@
       const [adminSelectedCard, setAdminSelectedCard] = useState('pending');
 
       const myReqs = isHospital ? ctx.appDb.requisitions.filter(r => r.hospitalId === ctx.currentUser?.hospital_id) : ctx.appDb.requisitions;
-      const validReqs = myReqs.filter(r => !r.id.startsWith('HIST-'));
+      const validReqs = myReqs; // Already filtered out CSV Setup in refreshData
 
       const today = new Date();
       const currentDay = today.getDate();
@@ -428,7 +477,7 @@
                     </select>
                   </div>
                 </div>
-                <div className="overflow-x-auto w-full">
+                <div className="w-full">
                    <table className="w-full text-left text-sm whitespace-nowrap">
                       <thead className="bg-slate-100 border-b">
                          <tr><th className="p-3">รพ.สต.</th><th className="p-3">วันที่ส่ง</th><th className="p-3 text-center">สถานะการเบิก</th><th className="p-3 text-center">พิมพ์ใบเบิก?</th><th className="p-3 text-center">จัดการ</th></tr>
@@ -470,9 +519,9 @@
           {(!isAdmin || (isAdmin && ['all','pending','completed'].includes(adminSelectedCard))) && (
              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in w-full">
                <div className="p-5 border-b border-slate-100 font-bold text-slate-800 bg-slate-50 flex justify-between items-center">
-                 <span><i className="fa-solid fa-list-ul text-emerald-500 mr-2"></i> ประวัติการเติมยา {adminSelectedCard === 'pending' && <span className="text-red-500 ml-2">(แสดงเฉพาะที่รออนุมัติ)</span>}</span>
+                  <span><i className="fa-solid fa-list-ul text-emerald-500 mr-2"></i> ประวัติการเติมยา {adminSelectedCard === 'pending' && <span className="text-red-500 ml-2">(แสดงเฉพาะที่รออนุมัติ)</span>}</span>
                </div>
-               <div className="overflow-x-auto w-full">
+               <div className="w-full">
                  <table className="w-full text-left border-collapse whitespace-nowrap">
                    <thead>
                      <tr className="border-b text-sm text-slate-500 bg-white">
@@ -593,7 +642,7 @@
       const myHistory = ctx.appDb.stockAdjustments.filter(a => a.hospital_id === hospId).sort((a,b) => (b.date?.seconds || 0) - (a.date?.seconds || 0));
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in relative min-h-[80vh]">
+        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in relative min-h-[80vh] w-full">
           <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
             <div>
                <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-boxes-stacked text-emerald-500 mr-2"></i> คลังยาของฉัน (My Stock)</h2>
@@ -626,49 +675,49 @@
                    ))}
                 </div>
 
-          <div className="flex flex-wrap justify-between items-center mb-4 gap-4">
-             <div className="relative w-full max-w-md">
-               <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
-               <input type="text" placeholder="ค้นหาชื่อหรือรหัสยา..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
-             </div>
-             <button onClick={() => { setEditItem({ isNew: true }); setShowModal(true); }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:scale-105 transition shrink-0"><i className="fa-solid fa-plus mr-2"></i> เพิ่มยาเข้าคลัง</button>
-          </div>
+                <div className="flex flex-wrap justify-between items-center mb-4 gap-4">
+                   <div className="relative w-full max-w-md">
+                     <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
+                     <input type="text" placeholder="ค้นหาชื่อหรือรหัสยา..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                   </div>
+                   <button onClick={() => { setEditItem({ isNew: true }); setShowModal(true); }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:scale-105 transition shrink-0"><i className="fa-solid fa-plus mr-2"></i> เพิ่มยาเข้าคลัง</button>
+                </div>
 
-          <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
-            <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
-              <thead className="bg-slate-100 text-slate-700">
-                <tr>
-                  <th className="p-3 font-bold border-b">รหัส</th>
-                  <th className="p-3 font-bold border-b">ชื่อรายการยา/เวชภัณฑ์</th>
-                  <th className="p-3 font-bold border-b">หมวดหมู่</th>
-                  <th className="p-3 text-center font-bold border-b">ขนาดบรรจุ</th>
-                  <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">Target (VMI)</th>
-                  <th className="p-3 text-center font-bold border-b text-amber-700 bg-amber-50">เครดิตค้าง (หน่วยย่อย)</th>
-                  <th className="p-3 text-center font-bold border-b">จัดการ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredList.map((item) => (
-                  <tr key={item.drugId} className="border-b border-slate-200 hover:bg-slate-50 transition">
-                    <td className="p-3 font-mono text-slate-500">{item.drugId}</td>
-                    <td className="p-3 font-bold text-slate-800">{item.name}</td>
-                    <td className="p-3 text-slate-600">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[item.type]}</td>
-                    <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
-                    <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.targetVMI}</td>
-                    <td className="p-3 text-center font-extrabold text-amber-600 bg-amber-50/30 text-[15px]">{item.currentBal}</td>
-                    <td className="p-3 text-center space-x-2">
-                       <button onClick={() => { setEditItem({ ...item, isNew: false }); setShowModal(true); }} className="bg-slate-200 text-slate-700 hover:bg-amber-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-sliders mr-1"></i> ปรับสต๊อก</button>
-                       <button onClick={() => ctx.setConfirmDialog({title:'ยืนยันนำออก', message:'คุณต้องการลบยานี้ออกจากคลัง รพ.สต. ใช่หรือไม่? (ประวัติการเบิกจะไม่หายไป)', iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600', onConfirm: ()=>handleDelete(item.drugId)})} className="bg-slate-200 text-slate-600 hover:bg-red-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-trash"></i></button>
-                    </td>
-                  </tr>
-                ))}
-                {filteredList.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่มีข้อมูลในคลัง</td></tr>}
-              </tbody>
-            </table>
-          </div>
-          </>
+                <div className="w-full border border-slate-200 rounded-xl">
+                  <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
+                    <thead className="bg-slate-100 text-slate-700">
+                      <tr>
+                        <th className="p-3 font-bold border-b">รหัส</th>
+                        <th className="p-3 font-bold border-b">ชื่อรายการยา/เวชภัณฑ์</th>
+                        <th className="p-3 font-bold border-b">หมวดหมู่</th>
+                        <th className="p-3 text-center font-bold border-b">ขนาดบรรจุ</th>
+                        <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">Target (VMI)</th>
+                        <th className="p-3 text-center font-bold border-b text-amber-700 bg-amber-50">เครดิตค้าง (หน่วยย่อย)</th>
+                        <th className="p-3 text-center font-bold border-b">จัดการ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredList.map((item) => (
+                        <tr key={item.drugId} className="border-b border-slate-200 hover:bg-slate-50 transition">
+                          <td className="p-3 font-mono text-slate-500">{item.drugId}</td>
+                          <td className="p-3 font-bold text-slate-800">{item.name}</td>
+                          <td className="p-3 text-slate-600">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[item.type]}</td>
+                          <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
+                          <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.targetVMI}</td>
+                          <td className="p-3 text-center font-extrabold text-amber-600 bg-amber-50/30 text-[15px]">{item.currentBal}</td>
+                          <td className="p-3 text-center space-x-2">
+                             <button onClick={() => { setEditItem({ ...item, isNew: false }); setShowModal(true); }} className="bg-slate-200 text-slate-700 hover:bg-amber-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-sliders mr-1"></i> ปรับสต๊อก</button>
+                             <button onClick={() => ctx.setConfirmDialog({title:'ยืนยันนำออก', message:'คุณต้องการลบยานี้ออกจากคลัง รพ.สต. ใช่หรือไม่? (ประวัติการเบิกจะไม่หายไป)', iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600', onConfirm: ()=>handleDelete(item.drugId)})} className="bg-slate-200 text-slate-600 hover:bg-red-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-trash"></i></button>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredList.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่มีข้อมูลในคลัง</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+             </>
           ) : (
-             <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
+             <div className="w-full border border-slate-200 rounded-xl">
                 <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
                    <thead className="bg-slate-100 text-slate-700">
                       <tr>
@@ -768,9 +817,8 @@
       
       const [manualAddSearch, setManualAddSearch] = useState('');
 
-      const [items, setItems] = useState(() => {
+      const getBaseVMIItems = () => {
         if (!ctx.appDb || !ctx.appDb.parLevels) return [];
-        
         let existingReqItems = [];
         if (ctx.editReqId) {
            const reqToEdit = ctx.appDb.requisitions.find(r => r.id === ctx.editReqId);
@@ -802,7 +850,6 @@
               const oldItem = oldReq.items.find(it => it.drugId === par.drug_id);
               if(oldItem) usage = Number(oldItem.usage);
             } else {
-               // Fallback to CSV Historical Usage
                const hist = ctx.appDb.historicalUsages?.find(h => h.hospital_id === hospId && h.drug_id === par.drug_id);
                if(hist && hist.history && hist.history.length >= i) {
                   usage = Number(hist.history[i-1]) || 0;
@@ -828,7 +875,9 @@
            if(!generatedList.find(g => g.drugId === ex.drugId)) generatedList.push({...ex, pastHistory: [0,0,0,0,0], requestMore: ex.requestMore || 0, isUnlocked: (ex.requestMore > 0)});
         });
         return generatedList.sort(sortDrugs);
-      });
+      };
+
+      const [items, setItems] = useState(getBaseVMIItems);
 
       const handleJHCISUpload = (e) => {
         const file = e.target.files[0];
@@ -911,7 +960,7 @@
             const count = activeUsages.length || 1;
             const mean = activeUsages.reduce((a,b)=>a+b, 0) / count;
             const variance = activeUsages.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (count === 1 ? 1 : count - 1);
-            const SD = Math.sqrt(variance);
+            const SD = Math.sqrt(variance || 0);
             const targetVMI = Math.ceil(mean + (1.645 * SD));
 
             const row = { ...item, usage, requestMore, targetVMI, isNewDrug: count === 1 && recent5.every(u=>u===0) };
@@ -1173,7 +1222,7 @@
                          {item.isNewDrug && <span className="ml-1 text-[10px] bg-red-100 text-red-600 px-1 rounded font-bold">ยาใหม่</span>}
                          {item.requestMore > 0 && <span className="text-xs text-blue-600 font-bold ml-2">(ขอเพิ่ม)</span>}
                       </td>
-                      <td className="p-3 text-center text-slate-600 border-l border-slate-100">{displayUnit}</td>
+                      <td className="p-3 text-center text-slate-500 border-l border-slate-100">{displayUnit}</td>
                       <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100">{item.packSize}</td>
                       <td className="p-3 text-center text-blue-600 font-bold bg-blue-50/20 border-l border-slate-100">{formatQty(item.prevExcess, item.packSize)}</td>
                       <td className="p-3 bg-amber-50/50 border-l border-slate-100 relative text-center">
@@ -1357,6 +1406,7 @@
       const req = ctx.appDb.requisitions.find(r => r.id === ctx.currentReqId);
       const [isApproving, setIsApproving] = useState(false);
       const [editableItems, setEditableItems] = useState(req?.items || []);
+      const [printMode, setPrintMode] = useState('req'); 
       const [showSkipped, setShowSkipped] = useState(false);
       const [skippedMapping, setSkippedMapping] = useState({});
       
@@ -1506,8 +1556,9 @@
          } catch(e) { ctx.showToast(e.message, 'error'); setIsApproving(false); }
       };
 
-      const handleTriggerPrint = () => {
-         db.collection('requisitions').doc(req.id).update({is_printed: true});
+      const handleTriggerPrint = (mode) => {
+         setPrintMode(mode);
+         if(mode === 'req') db.collection('requisitions').doc(req.id).update({is_printed: true});
          
          const originalTitle = document.title;
          document.title = `ใบเบิก ${hospNameClean} ${req.month}/${fiscalYear}`;
@@ -1617,7 +1668,7 @@
                 <thead>
                    <tr className="bg-gray-200">
                       <th style={{ width: '5%' }}>ที่</th>
-                      <th style={{ width: '31%' }}>ชื่อยา/เวชภัณฑ์</th>
+                      <th style={{ width: '31%' }} className="pdf-drug-col">ชื่อยา/เวชภัณฑ์</th>
                       <th style={{ width: '6%' }}>หน่วย</th>
                       <th style={{ width: '6%' }}>บรรจุ</th>
                       <th style={{ width: '6%' }}>Target Stock</th>
@@ -1662,7 +1713,7 @@
                             return (
                                <tr key={it.drugId}>
                                   <td className="text-center">{globalItemIndex}</td>
-                                  <td className="font-semibold text-left pl-1">
+                                  <td className="pdf-drug-col font-semibold text-left pl-1">
                                      {it.name} {it.requestMore > 0 && <span className="text-blue-600 font-bold ml-1">(ขอเพิ่ม)</span>}
                                   </td>
                                   <td className="text-center text-slate-700">{displayUnit}</td>
@@ -1739,8 +1790,10 @@
        const [filterYear, setFilterYear] = useState(today.getFullYear());
 
        const reportData = useMemo(() => {
-          if (!ctx.appDb) return { rows: [], grandSums: {}, grandTotal: 0 };
+          if (!ctx.appDb) return { rows: [], grandSums: {}, grandTotal: 0, mostUsed: [] };
           const reqs = ctx.appDb.requisitions.filter(r => r.month === filterMonth && r.year === filterYear && r.status === 'Completed');
+          
+          let itemStats = {};
 
           const hospTotals = ctx.appDb.hospitals.map(h => {
              const hReq = reqs.find(r => r.hospitalId === h.hospital_id);
@@ -1758,6 +1811,10 @@
                    if(sums[it.type] !== undefined) sums[it.type] += val;
                    else if(sums['1'] !== undefined) sums['1'] += val; 
                    total += val;
+
+                   if (!itemStats[it.drugId]) itemStats[it.drugId] = { name: it.name, type: it.type, qty: 0, val: 0, unit: it.unit, packSize: it.packSize };
+                   itemStats[it.drugId].qty += it.dispenseQty;
+                   itemStats[it.drugId].val += val;
                 });
              }
              return { hospital_id: h.hospital_id, hospital_name: h.hospital_name, sums, total, hasReq: !!hReq };
@@ -1776,7 +1833,9 @@
              grandTotal += h.total;
           });
 
-          return { rows: hospTotals, grandSums, grandTotal };
+          const mostUsed = Object.values(itemStats).sort((a,b) => b.val - a.val).slice(0, 15);
+
+          return { rows: hospTotals, grandSums, grandTotal, mostUsed };
        }, [ctx.appDb, filterMonth, filterYear]);
 
        const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
@@ -1805,37 +1864,64 @@
                    <p className="text-lg">ประจำเดือน {THAI_MONTHS[filterMonth-1]} {filterYear + 543}</p>
                 </div>
 
-                <div className="overflow-x-auto w-full">
-                   <table className="official-table w-full text-left text-[13px] whitespace-nowrap border-collapse">
-                      <thead>
-                         <tr className="bg-slate-200">
+                <div className="overflow-x-auto w-full border border-slate-200 rounded-xl print:border-none">
+                   <table className="official-table w-full text-[13px] border-collapse bg-white">
+                      <thead className="bg-slate-100">
+                         <tr>
                             <th className="p-3 border border-slate-300 text-center w-12">ลำดับ</th>
                             <th className="p-3 border border-slate-300">รพ.สต.</th>
                             {Object.keys(typesSource).map(k => <th key={k} className="p-3 border border-slate-300 text-right">{typesSource[k]}</th>)}
-                            <th className="p-3 border border-slate-300 text-right bg-slate-300 font-bold">รวมทั้งสิ้น (บาท)</th>
+                            <th className="p-3 border border-slate-300 text-right font-bold text-indigo-800">รวมทั้งสิ้น (บาท)</th>
                          </tr>
                       </thead>
                       <tbody>
                          {reportData.rows.map((row, idx) => (
-                            <tr key={row.hospital_id} className={`border-b border-slate-200 ${!row.hasReq ? 'text-slate-400 bg-slate-50/50' : 'text-slate-800 hover:bg-slate-50'}`}>
+                            <tr key={row.hospital_id} className={`border-b border-slate-100 hover:bg-slate-50 transition ${!row.hasReq ? 'opacity-50' : ''}`}>
                                <td className="p-3 border border-slate-300 text-center">{idx + 1}</td>
-                               <td className="p-3 border border-slate-300 font-semibold">{row.hospital_name} {!row.hasReq && <span className="text-[10px] ml-1">(ยังไม่มีข้อมูล)</span>}</td>
+                               <td className="p-3 border border-slate-300 font-semibold">{row.hospital_name} {!row.hasReq && <span className="text-[10px] ml-1">(ไม่มีข้อมูล)</span>}</td>
                                {Object.keys(typesSource).map(k => (
                                   <td key={k} className="p-3 border border-slate-300 text-right">{row.sums[k] > 0 ? row.sums[k].toLocaleString(undefined, {minimumFractionDigits:2}) : '-'}</td>
                                ))}
-                               <td className="p-3 border border-slate-300 text-right font-bold bg-slate-100">{row.total > 0 ? row.total.toLocaleString(undefined, {minimumFractionDigits:2}) : '-'}</td>
+                               <td className="p-3 border border-slate-300 text-right font-bold bg-slate-50">{row.total > 0 ? row.total.toLocaleString(undefined, {minimumFractionDigits:2}) : '-'}</td>
                             </tr>
                          ))}
                       </tbody>
                       <tfoot>
-                         <tr className="bg-indigo-100 text-indigo-900 font-bold text-[14px]">
-                            <td colSpan="2" className="p-4 border border-indigo-200 text-right">รวมทั้งเครือข่าย</td>
+                         <tr className="bg-indigo-100 text-indigo-900 font-bold">
+                            <td colSpan="2" className="p-3 border border-indigo-200 text-right">รวมทั้งเครือข่าย</td>
                             {Object.keys(typesSource).map(k => (
-                               <td key={k} className="p-4 border border-indigo-200 text-right">{reportData.grandSums[k].toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                               <td key={k} className="p-3 border border-indigo-200 text-right">{reportData.grandSums[k].toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                             ))}
-                            <td className="p-4 border border-indigo-300 text-right bg-indigo-200 text-indigo-900 text-[16px]">{reportData.grandTotal.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                            <td className="p-3 border border-indigo-300 text-right text-[15px]">{reportData.grandTotal.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                          </tr>
                       </tfoot>
+                   </table>
+                </div>
+
+                <div className="mt-12 page-break-auto">
+                   <h3 className="font-bold text-lg mb-4 text-slate-800">สรุป 15 อันดับ รายการที่มูลค่าการจ่ายสูงสุดในเดือนนี้</h3>
+                   <table className="official-table w-full text-[12px] border-collapse border border-slate-300">
+                      <thead className="bg-slate-100">
+                         <tr>
+                            <th className="p-2 border border-slate-300 text-center">อันดับ</th>
+                            <th className="p-2 border border-slate-300">ชื่อรายการยา/เวชภัณฑ์</th>
+                            <th className="p-2 border border-slate-300 text-center">หมวดหมู่</th>
+                            <th className="p-2 border border-slate-300 text-center">จำนวนจ่ายรวม</th>
+                            <th className="p-2 border border-slate-300 text-right">มูลค่ารวม (บาท)</th>
+                         </tr>
+                      </thead>
+                      <tbody>
+                         {reportData.mostUsed.map((item, idx) => (
+                            <tr key={idx}>
+                               <td className="p-2 border border-slate-300 text-center">{idx + 1}</td>
+                               <td className="p-2 border border-slate-300 font-semibold">{item.name}</td>
+                               <td className="p-2 border border-slate-300 text-center">{typesSource[item.type]}</td>
+                               <td className="p-2 border border-slate-300 text-center font-bold text-indigo-700">{formatQty(item.qty, item.packSize)} <span className="text-[10px] font-normal text-slate-500">แพ็ค(ย่อย)</span></td>
+                               <td className="p-2 border border-slate-300 text-right font-bold">{item.val.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                            </tr>
+                         ))}
+                         {reportData.mostUsed.length === 0 && <tr><td colSpan="5" className="text-center p-4">ไม่มีข้อมูล</td></tr>}
+                      </tbody>
                    </table>
                 </div>
              </div>
@@ -1938,8 +2024,8 @@
                    <p className="text-sm mt-1">กรองโดย: {filterHosp === 'all' ? 'รวมทุก รพ.สต.' : ctx.appDb.hospitals.find(h=>h.hospital_id===filterHosp)?.hospital_name} | {filterType === 'all' ? 'รวมทุกหมวดยา' : typesSource[filterType]}</p>
                 </div>
 
-                <div className="overflow-x-auto w-full border border-slate-200 rounded-xl print:border-none">
-                   <table className="official-table w-full text-[13px] border-collapse bg-white">
+                <div className="w-full border border-slate-200 rounded-xl print:border-none overflow-x-auto">
+                   <table className="official-table w-full text-[13px] border-collapse bg-white whitespace-nowrap">
                       <thead className="bg-slate-100">
                          <tr>
                             <th className="p-3 border border-slate-300 text-center w-12">ลำดับ</th>
@@ -2002,7 +2088,6 @@
                         const oldItem = oldReq.items.find(it => it.drugId === d.drug_id);
                         if(oldItem) usage = Number(oldItem.usage);
                     } else {
-                        // Check Historical Data
                         const hist = ctx.appDb.historicalUsages?.find(h => h.hospital_id === selHosp && h.drug_id === d.drug_id);
                         if(hist && hist.history && hist.history.length >= i) usage = Number(hist.history[i-1]) || 0;
                     }
@@ -2025,7 +2110,7 @@
                     result.push({
                         drug_id: d.drug_id, drug_name: d.drug_name, type: d.type, unit: unitName,
                         m_usages: m_usages.reverse(), 
-                        mean, sd, sdz, adu
+                        mean, sd, sdz, adu, target: Math.ceil(mean + sdz)
                     });
                 }
             });
@@ -2035,7 +2120,7 @@
         const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
 
         return (
-            <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100">
+            <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 w-full">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 pb-4 border-b gap-4">
                     <div>
                         <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-chart-line text-blue-500 mr-2"></i> ประวัติการใช้ยา (VMI Stats)</h2>
@@ -2050,14 +2135,14 @@
 
                 <div className="mb-4 p-4 bg-indigo-50 border border-indigo-200 rounded-xl">
                     <ul className="flex flex-wrap gap-x-8 gap-y-2 text-sm text-indigo-800">
-                        <li><b>ADU:</b> ยอดใช้รายวัน (Average Daily Use)</li>
-                        <li><b>AMU:</b> ยอดใช้รายเดือน (Average Monthly Use)</li>
-                        <li><b>SD*1.645:</b> ยอดเผื่อความผันผวน (Safety Stock)</li>
-                        <li className="text-amber-600"><b>หมายเหตุ:</b> คิดจากประวัติการเบิกรอบ 6 เดือนล่าสุด (รวมประวัติเก่า CSV) หารเฉลี่ยเฉพาะเดือนที่ใช้จริง</li>
+                        <li><b>ADU:</b> ยอดใช้รายวัน</li>
+                        <li><b>AMU:</b> ยอดใช้รายเดือน</li>
+                        <li><b>SD*Z:</b> ยอดเผื่อความผันผวน</li>
+                        <li className="text-amber-600"><b>หมายเหตุ:</b> คิดจากประวัติการส่งเบิก 6 เดือนล่าสุด (ดึงจาก CSV ด้วยถ้าเดือนนั้นยังไม่เคยส่งบิล) โดยหารเฉลี่ยเฉพาะเดือนที่มียอดใช้ > 0</li>
                     </ul>
                 </div>
 
-                <div className="overflow-x-auto w-full border border-slate-200 rounded-xl">
+                <div className="w-full border border-slate-200 rounded-xl overflow-x-auto">
                     <table className="w-full text-left text-[13px] whitespace-nowrap border-collapse">
                         <thead className="bg-slate-100 sticky top-0 z-10 shadow-sm border-b">
                             <tr>
@@ -2065,7 +2150,7 @@
                                 <th className="p-3" rowSpan="2">ชื่อยา/เวชภัณฑ์</th>
                                 <th className="p-3" rowSpan="2">หมวด</th>
                                 <th className="p-3 text-center border-x border-slate-300" colSpan="6">ประวัติยอดใช้ (ย้อนหลัง 6 เดือน)</th>
-                                <th className="p-3 text-center text-blue-800 bg-blue-100/80 font-bold border-r border-blue-200" colSpan="4">VMI Parameters</th>
+                                <th className="p-3 text-center text-blue-800 bg-blue-100/80 font-bold border-r border-blue-200" colSpan="5">VMI Parameters</th>
                             </tr>
                             <tr className="bg-slate-50 text-[11px] text-slate-500 text-center border-b">
                                 {historyData.length > 0 && historyData[0].m_usages.map((m, i) => (
@@ -2073,10 +2158,11 @@
                                 ))}
                                 {historyData.length === 0 && <th colSpan="6" className="p-2">ไม่พบประวัติ</th>}
                                 
-                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">ADU<br/><span className="text-[9px] font-normal">(รายวัน)</span></th>
-                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">AMU<br/><span className="text-[9px] font-normal">(รายเดือน)</span></th>
-                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">SD<br/><span className="text-[9px] font-normal">(ส่วนเบี่ยงเบน)</span></th>
-                                <th className="p-2 bg-blue-50/50 text-amber-700">SD*1.645<br/><span className="text-[9px] font-normal">(เผื่อผันผวน)</span></th>
+                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">ADU<br/><span className="text-[10px] font-normal">(ยอดใช้รายวัน)</span></th>
+                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">AMU<br/><span className="text-[10px] font-normal">(ยอดใช้รายเดือน)</span></th>
+                                <th className="p-2 bg-blue-50/50 border-r border-blue-100">SD<br/><span className="text-[10px] font-normal">(ความผันผวน)</span></th>
+                                <th className="p-2 bg-blue-50/50 border-r border-blue-100 text-amber-700">SD*Z<br/><span className="text-[10px] font-normal">(ยอดเผื่อ)</span></th>
+                                <th className="p-2 bg-blue-50/50 text-emerald-700">Target<br/><span className="text-[10px] font-normal">(รวมยอดควรมี)</span></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -2092,9 +2178,10 @@
                                     <td className="p-2 text-center font-bold text-blue-700 bg-blue-50/30 border-l border-blue-100">{row.mean.toFixed(2)}</td>
                                     <td className="p-2 text-center font-bold text-slate-600 border-l border-blue-100">{row.sd.toFixed(2)}</td>
                                     <td className="p-2 text-center font-bold text-amber-600 border-l border-blue-100">{row.sdz.toFixed(2)}</td>
+                                    <td className="p-2 text-center font-bold text-emerald-700 border-l border-blue-100">{row.target}</td>
                                 </tr>
                             ))}
-                            {historyData.length === 0 && <tr><td colSpan="13" className="p-8 text-center text-slate-400">ยังไม่มีประวัติการใช้ยาสำหรับหน่วยงานนี้</td></tr>}
+                            {historyData.length === 0 && <tr><td colSpan="14" className="p-8 text-center text-slate-400">ยังไม่มีประวัติการใช้ยาสำหรับหน่วยงานนี้</td></tr>}
                         </tbody>
                     </table>
                 </div>
@@ -2155,12 +2242,12 @@
       const TypeManager = () => {
          const types = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
          return (
-            <div className="p-6">
+            <div className="p-6 w-full">
                <div className="flex justify-between items-center mb-4">
                   <h3 className="font-bold text-lg text-slate-800">จัดการหมวดหมู่ยา</h3>
                   <button onClick={()=>setEditTarget({ col: 'master_drug_types', data: {}, isNew: true })} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold shadow-lg hover:scale-105 transition"><i className="fa-solid fa-plus mr-1"></i> เพิ่มหมวดหมู่ใหม่</button>
                </div>
-               <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+               <div className="w-full border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                  <table className="w-full text-left text-sm border-collapse">
                    <thead className="bg-slate-50 border-b"><tr><th className="p-4">รหัสหมวด (Type ID)</th><th className="p-4">ชื่อหมวดหมู่</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                    <tbody>
@@ -2212,7 +2299,7 @@
         ).sort(sortDrugs);
 
         return (
-          <div className="p-6">
+          <div className="p-6 w-full">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-indigo-50 p-4 rounded-xl mb-6 gap-4 border border-indigo-100">
               <div>
                 <h3 className="font-bold text-indigo-800">นำเข้า/อัปเดตยาด้วยไฟล์ CSV</h3>
@@ -2233,7 +2320,7 @@
                </button>
             </div>
 
-            <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
+            <div className="w-full border border-slate-200 rounded-xl shadow-sm">
               <table className="w-full text-left text-sm border-collapse whitespace-nowrap">
                 <thead className="bg-slate-100 border-b sticky top-0 z-10">
                   <tr><th className="p-4">รหัส</th><th className="p-4">หมวด</th><th className="p-4">ชื่อยา</th><th className="p-4">ชื่อพ้อง (Fuzzy)</th><th className="p-4 text-center">Pack</th><th className="p-4 text-center">หน่วย</th><th className="p-4 text-center">แตกย่อย</th><th className="p-4 text-right">ราคา (฿)</th><th className="p-4 text-center">จัดการ</th></tr>
@@ -2246,12 +2333,7 @@
                       <td className="p-4 font-bold text-slate-800">{d.drug_name}</td>
                       <td className="p-4 text-xs text-slate-500 max-w-[150px] truncate" title={d.fuzzy}>{d.fuzzy || '-'}</td>
                       <td className="p-4 text-center font-medium text-slate-600">{d.pack_size}</td>
-                      <td className="p-4 text-center">
-                         {(() => {
-                            const unitObj = ctx.appDb.units.find(u => String(u.unit_id) === String(d.unit_id));
-                            return unitObj ? unitObj.unit_name : (d.unit_id || '-');
-                         })()}
-                      </td>
+                      <td className="p-4 text-center">{d.unit_display_name}</td>
                       <td className="p-4 text-center">{d.unpacked ? <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-bold text-xs">TRUE</span> : '-'}</td>
                       <td className="p-4 text-right text-emerald-600 font-bold">{d.price || 0}</td>
                       <td className="p-4 text-center space-x-2">
@@ -2314,7 +2396,7 @@
         );
 
         return (
-          <div className="p-6">
+          <div className="p-6 w-full">
             <div className="flex justify-between items-center bg-red-50 p-4 rounded-xl mb-6 border border-red-100">
               <div>
                  <h3 className="font-bold text-red-800"><i className="fa-solid fa-triangle-exclamation mr-2"></i> ลบข้อมูลเดิม และนำเข้า CSV หน่วยนับใหม่</h3>
@@ -2333,7 +2415,7 @@
                  <i className="fa-solid fa-plus mr-1"></i> เพิ่มหน่วยนับ
                </button>
             </div>
-            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="w-full border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <table className="w-full text-left text-sm border-collapse">
                 <thead className="bg-slate-50 border-b"><tr><th className="p-4">รหัสหน่วย</th><th className="p-4">ชื่อหน่วย</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                 <tbody>
@@ -2362,7 +2444,7 @@
           (h.hospital_id || '').toLowerCase().includes(searchTerm.toLowerCase())
         );
         return (
-          <div className="p-6">
+          <div className="p-6 w-full">
             <div className="flex justify-between items-center mb-4 gap-4">
                <div className="relative w-full max-w-sm">
                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
@@ -2372,7 +2454,7 @@
                  <i className="fa-solid fa-plus mr-1"></i> เพิ่ม รพ.สต.
                </button>
             </div>
-            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="w-full border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <table className="w-full text-left text-sm border-collapse">
                 <thead className="bg-slate-50 border-b"><tr><th className="p-4">รหัส</th><th className="p-4">สังกัด</th><th className="p-4">ชื่อ รพ.สต.</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                 <tbody>
@@ -2396,8 +2478,8 @@
 
       const UserManager = () => {
         return (
-          <div className="p-6">
-            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="p-6 w-full">
+            <div className="w-full border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <table className="w-full text-left text-sm border-collapse">
                 <thead className="bg-slate-50 border-b"><tr><th className="p-4">ชื่อผู้ใช้งาน</th><th className="p-4">อีเมล</th><th className="p-4">ตำแหน่ง</th><th className="p-4">รพ.สต. ที่สังกัด</th><th className="p-4">ระดับสิทธิ์</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                 <tbody>
@@ -2432,7 +2514,8 @@
             { id: 'master_hospitals', name: 'รพ.สต.' },
             { id: 'users', name: 'ผู้ใช้งาน' },
             { id: 'historical_usages', name: 'ประวัติเก่า (7 เดือน)' },
-            { id: 'stock_adjustments', name: 'คำขอปรับสต๊อก' }
+            { id: 'stock_adjustments', name: 'คำขอปรับสต๊อก' },
+            { id: 'csv_initial_requests', name: 'ประวัติการใช้ 7 เดือน (CSV เก่า)' }
          ];
          const [selCol, setSelCol] = useState(collections[0].id);
          const [data, setData] = useState([]);
@@ -2454,7 +2537,7 @@
          };
 
          if(data.length === 0) return (
-            <div className="p-6 text-center text-slate-500">
+            <div className="p-6 text-center text-slate-500 w-full">
                <select value={selCol} onChange={e=>setSelCol(e.target.value)} className="mb-4 border p-2 rounded">
                   {collections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
                </select><br/>ไม่มีข้อมูลในตารางนี้
@@ -2464,7 +2547,7 @@
          const keys = Object.keys(data[0]).filter(k => k !== '_docId');
 
          return (
-            <div className="p-6">
+            <div className="p-6 w-full">
                <div className="flex items-center gap-4 mb-4">
                   <span className="font-bold text-slate-700">เลือกตาราง:</span>
                   <select value={selCol} onChange={e=>setSelCol(e.target.value)} className="border border-slate-300 bg-slate-50 p-2 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-indigo-700">
@@ -2472,7 +2555,7 @@
                   </select>
                   <span className="text-xs text-red-500 font-bold bg-red-50 p-2 rounded-lg"><i className="fa-solid fa-triangle-exclamation mr-1"></i> โหมดอันตราย (แก้ฐานข้อมูลโดยตรง) ช่อง Arrays/Objects จะแสดงเป็น JSON Format</span>
                </div>
-               <div className="overflow-x-auto border border-slate-300 rounded-xl max-h-[600px] overflow-y-auto">
+               <div className="overflow-x-auto w-full border border-slate-300 rounded-xl">
                   <table className="w-full text-left text-[12px] whitespace-nowrap bg-white">
                      <thead className="bg-slate-800 text-white sticky top-0 z-10">
                         <tr>
@@ -2482,7 +2565,7 @@
                      </thead>
                      <tbody>
                         {data.map((row) => (
-                           <tr key={row._docId} className="hover:bg-amber-50 group">
+                           <tr key={row._docId} className="hover:bg-amber-50 group border-b">
                               <td className="p-2 border border-slate-200 font-mono text-slate-500 bg-slate-50">{row._docId}</td>
                               {keys.map(k => {
                                  let displayVal = row[k];
@@ -2538,8 +2621,8 @@
         };
 
         return (
-          <div className="p-6">
-            <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="p-6 w-full">
+            <div className="w-full border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <table className="w-full text-left border-collapse text-sm">
                 <thead className="bg-slate-50 text-slate-600 border-b">
                   <tr>
@@ -2655,7 +2738,7 @@
          };
 
          return (
-            <div className="p-6 space-y-6">
+            <div className="p-6 space-y-6 w-full">
                 <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-200">
                     <h3 className="font-bold text-indigo-800 text-lg mb-2"><i className="fa-solid fa-file-csv mr-2"></i> อัปโหลดฐานข้อมูลการใช้ยาย้อนหลัง (7 เดือน)</h3>
                     <p className="text-sm text-indigo-600 mb-4">อัปโหลดไฟล์ CSV ฐานข้อมูลการเบิกจ่ายเก่า (format: hospital_id, drug_id, usage_m1, ..., usage_m7) ข้อมูลนี้จะถูกเก็บไว้เป็นฐานสำหรับคำนวณ Target VMI หากเดือนนั้นๆ ยังไม่มีบิลเบิกในระบบ</p>
@@ -2743,7 +2826,7 @@
          };
 
          return (
-            <div className="p-6">
+            <div className="p-6 w-full">
                 <div className="flex justify-between items-center bg-indigo-50 p-4 rounded-xl mb-6 border border-indigo-100">
                    <div>
                        <h3 className="font-bold text-indigo-800"><i className="fa-solid fa-history mr-2"></i> จัดการฐานข้อมูลประวัติเก่า (Fallback History)</h3>
@@ -2758,7 +2841,7 @@
                        </button>
                    </div>
                 </div>
-                <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
+                <div className="w-full border border-slate-200 rounded-xl shadow-sm">
                    <table className="w-full text-left text-[13px] border-collapse whitespace-nowrap bg-white">
                       <thead className="bg-slate-100 border-b sticky top-0 z-10 shadow-sm">
                          <tr>
@@ -2796,7 +2879,7 @@
       };
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in relative">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in relative w-full">
           <div className="bg-slate-800 text-white p-6 flex justify-between items-center">
             <h2 className="text-2xl font-bold"><i className="fa-solid fa-server mr-2 text-emerald-400"></i> จัดการฐานข้อมูล (Admin Console)</h2>
             {isSaving && <div className="flex items-center text-emerald-400 font-bold animate-pulse"><i className="fa-solid fa-circle-notch fa-spin mr-2"></i> กำลังบันทึก...</div>}
@@ -3012,7 +3095,8 @@
             units: unitSnap.docs.map(d => d.data()),
             parLevels: parSnap.docs.map(d => d.data()),
             balances: balSnap.docs.map(d => d.data()),
-            requisitions: reqSnap.docs.map(d => ({id: d.id, ...d.data()})),
+            // Filter out 'System (CSV Setup)' requisitions logically
+            requisitions: reqSnap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => r.created_by_name !== 'System (CSV Setup)' && !r.id.startsWith('HIST-')),
             usersList: userSnap.docs.map(d => ({id: d.id, ...d.data()})),
             stockAdjustments: adjSnap.docs.map(d => ({id: d.id, ...d.data()})),
             drugTypes: configSnap.exists ? configSnap.data() : null,

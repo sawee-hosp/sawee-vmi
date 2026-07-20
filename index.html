@@ -268,9 +268,20 @@
       );
     };
 
-    const RegisterView = ({ ctx }) => {
+const RegisterView = ({ ctx }) => {
       const [formData, setFormData] = useState({ email: '', password: '', name: '', position: '', hospitalId: '' });
       const [isSubmitting, setIsSubmitting] = useState(false);
+      const [hospList, setHospList] = useState(ctx.appDb?.hospitals || []);
+
+      // ดึงรายชื่อ รพ.สต. ทันทีเมื่อเปิดหน้าลงทะเบียน (แม้ยังไม่ล็อกอิน)
+      useEffect(() => {
+        if (!hospList || hospList.length === 0) {
+          db.collection('master_hospitals').get().then(snap => {
+            setHospList(snap.docs.map(d => ({id: d.id, ...d.data()})));
+          }).catch(err => console.error("Error fetching hospitals:", err));
+        }
+      }, []);
+
       const handleRegister = async () => {
         if(!formData.hospitalId || !formData.name.trim() || !formData.position.trim()) return ctx.showToast('กรุณากรอกข้อมูลให้ครบ', 'error');
         setIsSubmitting(true);
@@ -280,6 +291,7 @@
           ctx.showToast('ลงทะเบียนสำเร็จ');
         } catch (error) { ctx.showToast(error.message, 'error'); } finally { setIsSubmitting(false); }
       };
+
       return (
         <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100 w-full">
           <div className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md">
@@ -289,7 +301,7 @@
               <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="ตำแหน่ง (บังคับ)" onChange={e => setFormData({...formData, position: e.target.value})} />
               <select className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" onChange={e => setFormData({...formData, hospitalId: e.target.value})}>
                 <option value="">-- เลือก รพ.สต. ที่สังกัด --</option>
-                {ctx.appDb?.hospitals?.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
+                {hospList.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
               </select>
               <input type="email" autoComplete="email" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="อีเมล (ใช้ล็อกอิน)" onChange={e => setFormData({...formData, email: e.target.value})} />
               <input type="password" autoComplete="new-password" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="รหัสผ่าน" onChange={e => setFormData({...formData, password: e.target.value})} />
@@ -300,7 +312,6 @@
         </div>
       );
     };
-
     const ProfileEditView = ({ ctx }) => {
       const [formData, setFormData] = useState({ name: ctx.currentUser?.name || '', position: ctx.currentUser?.position || '' });
       const [isSaving, setIsSaving] = useState(false);
@@ -3219,7 +3230,7 @@
       );
     };
 
-    const App = () => {
+const App = () => {
       const [currentView, setCurrentView] = useState('login');
       const [toast, setToast] = useState(null);
       const [confirmDialog, setConfirmDialog] = useState(null);
@@ -3344,6 +3355,7 @@
               {currentView === 'create_req' && <CreateReqView ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}
               {currentView === 'my_stock' && <MyStockView ctx={ctx} />}
+              {currentView === 'return_drug' && <ReturnDrugView ctx={ctx} />}
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}

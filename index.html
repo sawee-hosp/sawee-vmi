@@ -113,7 +113,7 @@
       measurementId: "G-XFL0L1L213"
     };
 
-    const GAS_DRIVE_URL = "https://script.google.com/macros/s/AKfycbyxqnZlYJKW22S_DO9PnYFQYsxs6SMbUVI5ckB7yZCDC6KhlqKpE8incdkzmuyVILCd/exec"; 
+    const GAS_DRIVE_URL = "https://script.google.com/macros/s/AKfycbyEXNTj0se5egi1TrX_4Ew47HgfUNGc2fvjf00FpGtQYpi6toSZH-1QMnWLeQopJx-IPA/exec"; 
 
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
@@ -1197,7 +1197,7 @@ const RegisterView = ({ ctx }) => {
          setItems([newItem, ...items].sort(sortDrugs)); setManualAddSearch(''); ctx.showToast(`เพิ่ม ${drug.drug_name} ลงในใบเบิกแล้ว`);
       };
 
-      const executeSubmit = async () => {
+const executeSubmit = async () => {
          const processSave = async (fileUrl) => {
             const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: i.rawName, usage: i.usage }));
             
@@ -1234,7 +1234,10 @@ const RegisterView = ({ ctx }) => {
                   sanitizedItems.forEach(it => batch.set(db.collection('current_excess').doc(`${hospId}_${it.drugId}`), { hospital_id: hospId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
                }
                await batch.commit();
-               ctx.showToast(isAdmin ? 'อัปเดตใบเบิกสำเร็จ (จัดยาแล้ว)' : 'อัปเดตใบเบิกสำเร็จ');
+               
+               if(excelFile && !fileUrl) ctx.showToast('บันทึกยอดสำเร็จ แต่ไม่สามารถอัปโหลดไฟล์ รบ.301 ลง Google Drive ได้ (โปรดเช็คโค้ดฝั่ง GAS)', 'error');
+               else ctx.showToast(isAdmin ? 'อัปเดตใบเบิกสำเร็จ (จัดยาแล้ว)' : 'อัปเดตใบเบิกสำเร็จ');
+
             } else {
                const newId = `REQ-${currentYear}-${String(currentMonth).padStart(2, '0')}-${Math.floor(Math.random()*1000).toString().padStart(3, '0')}`;
                const batch = db.batch();
@@ -1258,7 +1261,9 @@ const RegisterView = ({ ctx }) => {
                   sanitizedItems.forEach(it => batch.set(db.collection('current_excess').doc(`${hospId}_${it.drugId}`), { hospital_id: hospId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
                }
                await batch.commit();
-               ctx.showToast(isAdmin ? 'อนุมัติจ่ายอัตโนมัติสำเร็จ' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา');
+               
+               if(excelFile && !fileUrl) ctx.showToast('ส่งข้อมูลสำเร็จ แต่ไม่สามารถอัปโหลดไฟล์ รบ.301 ลง Google Drive ได้ (โปรดเช็คโค้ดฝั่ง GAS)', 'error');
+               else ctx.showToast(isAdmin ? 'อนุมัติจ่ายอัตโนมัติสำเร็จ' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา');
             }
             await ctx.refreshData(); ctx.setEditReqId(null); ctx.setTargetUploadHosp(null); ctx.setCurrentView('dashboard');
          };
@@ -1268,13 +1273,20 @@ const RegisterView = ({ ctx }) => {
             reader.onload = async (event) => {
                const base64Str = event.target.result.split(',')[1];
                let fileUrl = "";
-               if(GAS_DRIVE_URL.includes('/exec')) {
-               const uploadRes = await fetch(GAS_DRIVE_URL, {
-                  method: 'POST',
-                  body: JSON.stringify({ filename: `Rxfill_${hospId}_${currentMonth}_${currentYear}.xlsx`, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', base64: base64Str })
-               });
-               const uploadData = await uploadRes.json();
-               if(uploadData.status === 'success') fileUrl = uploadData.url || "";
+               try {
+                  if(GAS_DRIVE_URL.includes('/exec')) {
+                     const uploadRes = await fetch(GAS_DRIVE_URL, {
+                        method: 'POST',
+                        // แก้ไข CORS Issue โดยบังคับใช้ text/plain แทน application/json
+                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                        body: JSON.stringify({ filename: `Rxfill_${hospId}_${currentMonth}_${currentYear}.xlsx`, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', base64: base64Str })
+                     });
+                     const uploadData = await uploadRes.json();
+                     if(uploadData.status === 'success') fileUrl = uploadData.url || "";
+                     else console.error("GAS Upload Error Response:", uploadData);
+                  }
+               } catch(err) {
+                  console.error("Fetch GAS Failed:", err);
                }
                processSave(fileUrl);
             };

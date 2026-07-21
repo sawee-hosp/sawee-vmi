@@ -1027,7 +1027,7 @@ const CreateReqView = ({ ctx }) => {
       const [searchTerm, setSearchTerm] = useState(''); 
       const [filterType, setFilterType] = useState('all'); 
       const [showUsedOnly, setShowUsedOnly] = useState(false); 
-      const [showCalc, setShowCalc] = useState(false); // ⭐️ สถานะซ่อน/แสดงวิธีการคำนวณ
+      const [showCalc, setShowCalc] = useState(false); 
       
       const [excelFile, setExcelFile] = useState(null);
       const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1241,7 +1241,9 @@ const CreateReqView = ({ ctx }) => {
                };
             });
 
-            const finalStatus = isAdmin ? 'Completed' : 'Pending';
+            // ⭐️ ปรับให้สถานะเป็น Pending เสมอ ไม่ว่า รพ.สต. จะเบิกเอง หรือแอดมินอัปโหลดแทน
+            // จะแก้เป็น Completed (ล็อก) ก็ต่อเมื่อแอดมินกดยืนยันในหน้า ViewReqView เท่านั้น
+            const finalStatus = 'Pending'; 
 
             if (ctx.editReqId) {
                const payload = { items: sanitizedItems, skipped_items: skipped, updated_at: firebase.firestore.FieldValue.serverTimestamp(), status: finalStatus };
@@ -1260,13 +1262,11 @@ const CreateReqView = ({ ctx }) => {
                      }
                   }
                });
-               if(finalStatus === 'Completed') {
-                  sanitizedItems.forEach(it => batch.set(db.collection('current_excess').doc(`${hospId}_${it.drugId}`), { hospital_id: hospId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
-               }
+               
                await batch.commit();
                
                if(excelFile && !fileUrl) ctx.showToast('บันทึกยอดสำเร็จ แต่ไม่สามารถอัปโหลดไฟล์ รบ.301 ลง Google Drive ได้', 'error');
-               else ctx.showToast(isAdmin ? 'อัปเดตใบเบิกสำเร็จ (จัดยาแล้ว)' : 'อัปเดตใบเบิกสำเร็จ');
+               else ctx.showToast('อัปเดตใบเบิกสำเร็จ');
 
             } else {
                const newId = `REQ-${currentYear}-${String(currentMonth).padStart(2, '0')}-${Math.floor(Math.random()*1000).toString().padStart(3, '0')}`;
@@ -1276,7 +1276,7 @@ const CreateReqView = ({ ctx }) => {
                  hospitalId: hospId, month: currentMonth, year: currentYear, status: finalStatus, is_printed: false,
                  excel_url: fileUrl || "", items: sanitizedItems, skipped_items: skipped, 
                  created_by_name: ctx.currentUser?.name || 'System', 
-                 created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่', // ⭐️ บันทึกตำแหน่งไปด้วย
+                 created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่', 
                  created_at: firebase.firestore.FieldValue.serverTimestamp() 
                });
                importData.items.filter(i => i.mappedDrugId !== '').forEach(item => {
@@ -1290,13 +1290,11 @@ const CreateReqView = ({ ctx }) => {
                      }
                   }
                });
-               if(finalStatus === 'Completed') {
-                  sanitizedItems.forEach(it => batch.set(db.collection('current_excess').doc(`${hospId}_${it.drugId}`), { hospital_id: hospId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
-               }
+               
                await batch.commit();
                
                if(excelFile && !fileUrl) ctx.showToast('ส่งข้อมูลสำเร็จ แต่ไม่สามารถอัปโหลดไฟล์ รบ.301 ลง Google Drive ได้', 'error');
-               else ctx.showToast(isAdmin ? 'อนุมัติจ่ายอัตโนมัติสำเร็จ' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา');
+               else ctx.showToast(isAdmin ? 'อัปโหลดแทน รพ.สต. สำเร็จ (รอตรวจสอบ)' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา');
             }
             await ctx.refreshData(); ctx.setEditReqId(null); ctx.setTargetUploadHosp(null); ctx.setCurrentView('dashboard');
          };
@@ -1362,7 +1360,6 @@ const CreateReqView = ({ ctx }) => {
         );
       }
 
-      // ⭐️ จับจำนวนรายการที่ยังไม่ Match สำหรับแสดงกล่องเหลือง
       const unmatchedCount = importData.items.filter(i => !i.mappedDrugId).length;
 
       return (
@@ -1438,7 +1435,6 @@ const CreateReqView = ({ ctx }) => {
              </label>
           </div>
 
-          {/* ⭐️ คำอธิบายสีแดง และ ปุ่ม Toggle Show Calc */}
           <div className="mb-4 space-y-3">
              <div className="text-red-500 font-bold text-sm leading-relaxed bg-red-50 p-3 rounded-xl border border-red-200">
                 <i className="fa-solid fa-circle-info mr-2"></i>
@@ -1484,7 +1480,6 @@ const CreateReqView = ({ ctx }) => {
                       <td className="p-3 text-center text-slate-600 border-l border-slate-100">{displayUnit}</td>
                       <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100">{item.packSize}</td>
                       
-                      {/* ⭐️ Conditional Columns */}
                       {showCalc && <td className="p-3 text-center text-blue-600 font-bold bg-blue-50/20 border-l border-slate-100">{formatQty(item.prevExcess, item.packSize)}</td>}
                       {showCalc && <td className="p-3 bg-amber-50/50 border-l border-slate-100 relative text-center">
                         <input type="number" min="0" className="w-20 border-b-2 border-amber-300 bg-transparent p-1 text-center font-bold text-amber-900 outline-none focus:bg-white focus:border-amber-600 transition disabled:opacity-50" value={item.usage || ''} onChange={e => updateRow(item.drugId, e.target.value, null)} placeholder="0" disabled={isVaccine} />
@@ -1526,7 +1521,6 @@ const CreateReqView = ({ ctx }) => {
 
           {showImportModal && (
             <Modal title="ตรวจสอบข้อมูลจาก รบ.301" isOpen={true} onClose={()=>setShowImportModal(false)} maxWidth="max-w-4xl">
-               {/* ⭐️ แจ้งเตือนถ้ายาไม่ Match ครบ */}
                {unmatchedCount > 0 && (
                    <div className="bg-yellow-50 border border-yellow-300 p-4 rounded-xl mb-4 flex items-start gap-3">
                       <i className="fa-solid fa-triangle-exclamation text-yellow-600 text-xl mt-0.5"></i>
@@ -1592,7 +1586,6 @@ const CreateReqView = ({ ctx }) => {
                <div className="mt-6 flex justify-end gap-3 shrink-0">
                    <button onClick={() => setShowImportModal(false)} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">ยกเลิก</button>
                    <button onClick={() => {
-                      // ⭐️ ดักจับถ้ายา Match ไม่ครบ
                       const remainingUnmatched = importData.items.filter(i => !i.mappedDrugId).length;
                       if (remainingUnmatched > 0) {
                          ctx.showToast(`มียา ${remainingUnmatched} รายการที่ยังไม่จับคู่ กรุณาจับคู่ยาให้เสร็จสิ้นก่อน โดยค้นหาจากฐานข้อมูลคลังยา`, 'error');

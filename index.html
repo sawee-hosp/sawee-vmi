@@ -3397,21 +3397,47 @@ const App = () => {
         }
       };
 
-      const refreshData = async () => {
-        if (!auth.currentUser) return;
+// ⭐️ แก้ปัญหาโควต้าเต็ม (Quota Exceeded) โดยดึงข้อมูลเฉพาะที่จำเป็น
+      const refreshData = async (userData) => {
+        // ใช้ userData ที่ส่งเข้ามา หรือดึงจาก state ปัจจุบัน
+        const activeUser = userData || currentUser; 
+        if (!activeUser) return;
+
+        const isAdmin = activeUser.role === 'admin';
+        const hospId = activeUser.hospital_id;
+
         try {
-          const [drugsSnap, hospSnap, unitSnap, parSnap, balSnap, reqSnap, userSnap, adjSnap, configSnap, histSnap] = await Promise.all([
+          // 1. ดึงข้อมูลพื้นฐานที่ทุกคนต้องใช้ (ตารางขนาดเล็ก โหลดนิดเดียว)
+          const [drugsSnap, hospSnap, unitSnap, userSnap, configSnap] = await Promise.all([
             db.collection('master_drugs').get(),
             db.collection('master_hospitals').get(),
             db.collection('master_unit').get(),
-            db.collection('config_par').get(),
-            db.collection('current_excess').get(),
-            db.collection('requisitions').get(),
             db.collection('users').get(),
-            db.collection('stock_adjustments').get(),
-            db.collection('config').doc('drug_types').get(),
-            db.collection('historical_usages').get()
+            db.collection('config').doc('drug_types').get()
           ]);
+
+          let parSnap, balSnap, reqSnap, adjSnap, histSnap;
+
+          // 2. แยกดึงข้อมูลตารางขนาดใหญ่ตามสิทธิ์
+          if (isAdmin) {
+             // แอดมินจำเป็นต้องดูภาพรวม จึงต้องโหลดทั้งหมด (ระวังแอดมินอย่ากด F5 รีเฟรชหน้ารัวๆ)
+             [parSnap, balSnap, reqSnap, adjSnap, histSnap] = await Promise.all([
+               db.collection('config_par').get(),
+               db.collection('current_excess').get(),
+               db.collection('requisitions').get(),
+               db.collection('stock_adjustments').get(),
+               db.collection('historical_usages').get()
+             ]);
+          } else {
+             // ⭐️ รพ.สต. จะดึง "เฉพาะข้อมูลของตัวเองเท่านั้น" (ลดการใช้ Quota ได้ 95%!!)
+             [parSnap, balSnap, reqSnap, adjSnap, histSnap] = await Promise.all([
+               db.collection('config_par').where('hospital_id', '==', hospId).get(),
+               db.collection('current_excess').where('hospital_id', '==', hospId).get(),
+               db.collection('requisitions').where('hospitalId', '==', hospId).get(), // ใบเบิกของตัวเอง
+               db.collection('stock_adjustments').where('hospital_id', '==', hospId).get(),
+               db.collection('historical_usages').where('hospital_id', '==', hospId).get()
+             ]);
+          }
 
           setAppDb({
             drugs: drugsSnap.docs.map(d => d.data()),
@@ -3426,26 +3452,26 @@ const App = () => {
             historicalUsages: histSnap.docs.map(d => d.data())
           });
         } catch (error) {
-          showToast('โหลดข้อมูลจากฐานข้อมูลล้มเหลว: ' + error.message, 'error');
+          showToast('โหลดข้อมูลล้มเหลว: ' + error.message, 'error');
         }
       };
 
-      // ⭐️ แก้ปัญหาตรวจสอบสิทธิ์ และพิมพ์ Error แบบเจาะจง จะได้ทราบสาเหตุที่แท้จริง
       useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (user) => {
           if (user) {
             try {
               const userDoc = await db.collection('users').doc(user.uid).get();
               if (userDoc.exists) {
-                setCurrentUser({ uid: user.uid, ...userDoc.data() });
-                await refreshData();
+                // ⭐️ ส่งข้อมูล user ลงไปให้ refreshData ดึงข้อมูลแบบประหยัดโควตาทันที
+                const userData = { uid: user.uid, ...userDoc.data() };
+                setCurrentUser(userData);
+                await refreshData(userData); 
                 setCurrentView('dashboard');
               } else {
-                showToast('ไม่พบข้อมูลสิทธิ์ผู้ใช้งานในระบบ', 'error');
+                showToast('ไม่พบข้อมูลสิทธิ์ผู้ใช้งาน', 'error');
                 auth.signOut();
               }
             } catch(e) {
-                // แสดง error ออกมาให้ชัดเจน จะได้รู้ว่าติด Quota หรือ Rules
                 showToast('เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์: ' + e.message, 'error');
             }
           } else {

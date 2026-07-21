@@ -271,15 +271,28 @@
 const RegisterView = ({ ctx }) => {
       const [formData, setFormData] = useState({ email: '', password: '', name: '', position: '', hospitalId: '' });
       const [isSubmitting, setIsSubmitting] = useState(false);
-      const [hospList, setHospList] = useState(ctx.appDb?.hospitals || []);
+      const [hospList, setHospList] = useState([]);
+      const [isLoadingHosp, setIsLoadingHosp] = useState(true);
 
-      // ดึงรายชื่อ รพ.สต. ทันทีเมื่อเปิดหน้าลงทะเบียน (แม้ยังไม่ล็อกอิน)
+      // ⭐️ [NOTE สำหรับแก้ปัญหารายชื่อ รพ.สต. ถาวร]
+      // 1. ระบบจะดึงข้อมูลทันทีที่โหลดหน้าลงทะเบียน (แม้ยังไม่ Login)
+      // 2. หากรายชื่อยังไม่ขึ้น แปลว่าฐานข้อมูล Firestore บล็อกการดึงข้อมูลก่อน Login 
+      // 3. วิธีแก้ที่ Firebase: ไปที่เมนู Firestore Database -> Rules -> เพิ่มบรรทัดนี้:
+      //    match /master_hospitals/{document} { allow read: if true; }
       useEffect(() => {
-        if (!hospList || hospList.length === 0) {
-          db.collection('master_hospitals').get().then(snap => {
-            setHospList(snap.docs.map(d => ({id: d.id, ...d.data()})));
-          }).catch(err => console.error("Error fetching hospitals:", err));
-        }
+        const fetchHospitals = async () => {
+          try {
+             const snap = await db.collection('master_hospitals').get();
+             const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+             setHospList(list);
+          } catch (err) {
+             console.error("Fetch hospitals error:", err);
+             ctx.showToast('ไม่สามารถดึงรายชื่อ รพ.สต. ได้ (โปรดเช็คสิทธิ์ Firebase Rules)', 'error');
+          } finally {
+             setIsLoadingHosp(false);
+          }
+        };
+        fetchHospitals();
       }, []);
 
       const handleRegister = async () => {
@@ -287,9 +300,23 @@ const RegisterView = ({ ctx }) => {
         setIsSubmitting(true);
         try {
           const userCredential = await auth.createUserWithEmailAndPassword(formData.email, formData.password);
-          await db.collection('users').doc(userCredential.user.uid).set({ name: formData.name, position: formData.position, hospital_id: formData.hospitalId, role: 'hospital', created_at: firebase.firestore.FieldValue.serverTimestamp() });
-          ctx.showToast('ลงทะเบียนสำเร็จ');
-        } catch (error) { ctx.showToast(error.message, 'error'); } finally { setIsSubmitting(false); }
+          await db.collection('users').doc(userCredential.user.uid).set({ 
+              name: formData.name, 
+              position: formData.position, 
+              hospital_id: formData.hospitalId, 
+              role: 'hospital', 
+              created_at: firebase.firestore.FieldValue.serverTimestamp() 
+          });
+          ctx.showToast('ลงทะเบียนสำเร็จ กรุณาล็อกอิน');
+          ctx.setCurrentView('login');
+        } catch (error) { 
+          let errorMsg = error.message;
+          if (error.code === 'auth/email-already-in-use') errorMsg = 'อีเมลนี้มีในระบบแล้ว';
+          else if (error.code === 'auth/weak-password') errorMsg = 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร';
+          ctx.showToast('ลงทะเบียนไม่สำเร็จ: ' + errorMsg, 'error'); 
+        } finally { 
+          setIsSubmitting(false); 
+        }
       };
 
       return (
@@ -299,13 +326,15 @@ const RegisterView = ({ ctx }) => {
             <div className="space-y-4">
               <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="คำนำหน้า ชื่อ-นามสกุล (เต็ม)" onChange={e => setFormData({...formData, name: e.target.value})} />
               <input type="text" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="ตำแหน่ง (บังคับ)" onChange={e => setFormData({...formData, position: e.target.value})} />
-              <select className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" onChange={e => setFormData({...formData, hospitalId: e.target.value})}>
-                <option value="">-- เลือก รพ.สต. ที่สังกัด --</option>
+              
+              <select className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" onChange={e => setFormData({...formData, hospitalId: e.target.value})} disabled={isLoadingHosp}>
+                <option value="">{isLoadingHosp ? 'กำลังโหลดรายชื่อ รพ.สต...' : '-- เลือก รพ.สต. ที่สังกัด --'}</option>
                 {hospList.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
               </select>
+
               <input type="email" autoComplete="email" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="อีเมล (ใช้ล็อกอิน)" onChange={e => setFormData({...formData, email: e.target.value})} />
               <input type="password" autoComplete="new-password" className="w-full bg-slate-50 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-emerald-500" placeholder="รหัสผ่าน" onChange={e => setFormData({...formData, password: e.target.value})} />
-              <button onClick={handleRegister} disabled={isSubmitting} className="w-full bg-gradient-main text-white rounded-xl p-4 font-bold shadow-lg mt-4">{isSubmitting ? 'กำลังบันทึก...' : 'ยืนยันลงทะเบียน'}</button>
+              <button onClick={handleRegister} disabled={isSubmitting || isLoadingHosp} className="w-full bg-gradient-main text-white rounded-xl p-4 font-bold shadow-lg mt-4 disabled:opacity-50">{isSubmitting ? 'กำลังบันทึก...' : 'ยืนยันลงทะเบียน'}</button>
               <button onClick={() => ctx.setCurrentView('login')} className="w-full text-slate-500 mt-2 hover:underline">กลับหน้าล็อกอิน</button>
             </div>
           </div>
@@ -3348,12 +3377,23 @@ const App = () => {
 
       const showToast = (message, type = 'success') => setToast({ message, type });
 
+      // ⭐️ แก้ปัญหาการแจ้งเตือน Error Code ตอน Login ให้เป็นภาษาไทยที่อ่านรู้เรื่อง
       const handleLogin = async (email, password, rememberMe) => {
         try {
           await auth.setPersistence(rememberMe ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION);
           await auth.signInWithEmailAndPassword(email, password);
         } catch (error) {
-          showToast(error.message, 'error');
+          let msg = 'เกิดข้อผิดพลาด: ' + error.message;
+          if (error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found') {
+             msg = 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+          } else if (error.code === 'auth/too-many-requests') {
+             msg = 'ล็อกอินล้มเหลวหลายครั้งเกินไป กรุณารอสักครู่แล้วลองใหม่';
+          } else if (error.code === 'auth/quota-exceeded') {
+             msg = 'โควต้าเต็ม (Quota Exceeded) กรุณาตรวจสอบ Firebase';
+          } else if (error.code === 'auth/network-request-failed') {
+             msg = 'ไม่สามารถเชื่อมต่ออินเทอร์เน็ตได้';
+          }
+          showToast(msg, 'error');
         }
       };
 
@@ -3386,10 +3426,11 @@ const App = () => {
             historicalUsages: histSnap.docs.map(d => d.data())
           });
         } catch (error) {
-          showToast('โหลดข้อมูลจากฐานข้อมูลล้มเหลว', 'error');
+          showToast('โหลดข้อมูลจากฐานข้อมูลล้มเหลว: ' + error.message, 'error');
         }
       };
 
+      // ⭐️ แก้ปัญหาตรวจสอบสิทธิ์ และพิมพ์ Error แบบเจาะจง จะได้ทราบสาเหตุที่แท้จริง
       useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (user) => {
           if (user) {
@@ -3400,11 +3441,12 @@ const App = () => {
                 await refreshData();
                 setCurrentView('dashboard');
               } else {
-                showToast('ไม่พบข้อมูลสิทธิ์ผู้ใช้งาน', 'error');
+                showToast('ไม่พบข้อมูลสิทธิ์ผู้ใช้งานในระบบ', 'error');
                 auth.signOut();
               }
             } catch(e) {
-                showToast('เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์', 'error');
+                // แสดง error ออกมาให้ชัดเจน จะได้รู้ว่าติด Quota หรือ Rules
+                showToast('เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์: ' + e.message, 'error');
             }
           } else {
             setCurrentUser(null);

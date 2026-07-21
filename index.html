@@ -11,7 +11,7 @@
   
   <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.jsCreateReqView"></script>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -1241,8 +1241,6 @@ const CreateReqView = ({ ctx }) => {
                };
             });
 
-            // ⭐️ ปรับให้สถานะเป็น Pending เสมอ ไม่ว่า รพ.สต. จะเบิกเอง หรือแอดมินอัปโหลดแทน
-            // จะแก้เป็น Completed (ล็อก) ก็ต่อเมื่อแอดมินกดยืนยันในหน้า ViewReqView เท่านั้น
             const finalStatus = 'Pending'; 
 
             if (ctx.editReqId) {
@@ -1557,29 +1555,48 @@ const CreateReqView = ({ ctx }) => {
                      </tr>
                    </thead>
                    <tbody>
-                     {importData.items.map(item => (
-                        <tr key={item.id} className="border-b hover:bg-slate-50">
-                           <td className="p-3 font-medium text-slate-700">{item.rawName}</td>
-                           <td className="p-3">
-                              <input 
-                                list="drug-list" 
-                                className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-yellow-400 bg-yellow-50 text-yellow-800'}`}
-                                value={item.mappedDrugId}
-                                onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
-                                placeholder="-- กรุณาจับคู่ --"
-                              />
-                              <datalist id="drug-list">
-                                 {ctx.appDb.drugs.sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>)}
-                              </datalist>
-                           </td>
-                           <td className="p-3">
-                              <input type="number" className="w-20 p-2 border rounded-lg text-center font-bold text-slate-700 outline-none focus:border-indigo-500" value={item.usage} onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, usage: Number(e.target.value) } : i)}))} />
-                           </td>
-                           <td className="p-3 text-center">
-                              <button onClick={() => setImportData(prev => ({...prev, items: prev.items.filter(i => i.id !== item.id)}))} className="text-slate-400 hover:text-red-500 transition"><i className="fa-solid fa-trash"></i></button>
-                           </td>
-                        </tr>
-                     ))}
+                     {importData.items.map(item => {
+                        // ⭐️ เช็คว่ารายการยานี้ถูกจับคู่ซ้ำเกิน 1 ครั้งหรือไม่
+                        const mappedCount = item.mappedDrugId ? importData.items.filter(i => i.mappedDrugId === item.mappedDrugId).length : 0;
+                        const isDuplicate = mappedCount > 1;
+                        const mappedDrugObj = ctx.appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
+
+                        return (
+                           <tr key={item.id} className="border-b hover:bg-slate-50">
+                              <td className="p-3 font-medium text-slate-700">{item.rawName}</td>
+                              <td className="p-3">
+                                 <div className="relative flex items-center gap-2">
+                                    <input 
+                                      list="drug-list" 
+                                      className={`w-full p-2 border rounded-lg outline-none font-medium ${item.mappedDrugId ? (isDuplicate ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-emerald-300 bg-emerald-50 text-emerald-800') : 'border-yellow-400 bg-yellow-50 text-yellow-800'}`}
+                                      value={item.mappedDrugId}
+                                      onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, mappedDrugId: e.target.value } : i)}))}
+                                      placeholder="-- กรุณาจับคู่ --"
+                                    />
+                                    {isDuplicate && (
+                                       <span className="bg-amber-100 text-amber-700 border border-amber-300 text-[11px] px-2 py-0.5 rounded font-bold shrink-0">
+                                          (ซ้ำ)
+                                       </span>
+                                    )}
+                                 </div>
+                                 {mappedDrugObj && (
+                                    <div className="text-xs text-slate-500 mt-1 font-semibold">
+                                       {mappedDrugObj.drug_name} {isDuplicate && <span className="text-amber-600 font-bold ml-1">(ซ้ำ - จะนำยอดไปรวมกัน)</span>}
+                                    </div>
+                                 )}
+                                 <datalist id="drug-list">
+                                    {ctx.appDb.drugs.sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>)}
+                                 </datalist>
+                              </td>
+                              <td className="p-3">
+                                 <input type="number" className="w-20 p-2 border rounded-lg text-center font-bold text-slate-700 outline-none focus:border-indigo-500" value={item.usage} onChange={(e) => setImportData(prev => ({...prev, items: prev.items.map(i => i.id === item.id ? { ...i, usage: Number(e.target.value) } : i)}))} />
+                              </td>
+                              <td className="p-3 text-center">
+                                 <button onClick={() => setImportData(prev => ({...prev, items: prev.items.filter(i => i.id !== item.id)}))} className="text-slate-400 hover:text-red-500 transition"><i className="fa-solid fa-trash"></i></button>
+                              </td>
+                           </tr>
+                        );
+                     })}
                    </tbody>
                  </table>
                </div>
@@ -1592,28 +1609,34 @@ const CreateReqView = ({ ctx }) => {
                          return;
                       }
 
+                      // ⭐️ รวมยอดใช้ (Usage) ของรายการที่ถูกจับคู่รหัสยาซ้ำกัน
+                      const aggregatedUsages = {};
+                      importData.items.forEach(i => {
+                         if (i.mappedDrugId && i.usage > 0) {
+                            aggregatedUsages[i.mappedDrugId] = (aggregatedUsages[i.mappedDrugId] || 0) + Number(i.usage);
+                         }
+                      });
+
                       let newItemsArr = [...items];
                       let newAdded = false;
                       
-                      importData.items.forEach(importItem => {
-                         if(importItem.mappedDrugId && importItem.usage > 0) {
-                            let existing = newItemsArr.find(i => i.drugId === importItem.mappedDrugId);
-                            if(!existing) {
-                               const d = ctx.appDb.drugs.find(x => x.drug_id === importItem.mappedDrugId);
-                               if(d) {
-                                  const unitObj = ctx.appDb.units.find(u => String(u.unit_id) === String(d.unit_id));
-                                  const unitDisplay = unitObj ? unitObj.unit_name : (d.unit_id || '');
+                      Object.keys(aggregatedUsages).forEach(mappedDrugId => {
+                         let existing = newItemsArr.find(i => i.drugId === mappedDrugId);
+                         if(!existing) {
+                            const d = ctx.appDb.drugs.find(x => x.drug_id === mappedDrugId);
+                            if(d) {
+                               const unitObj = ctx.appDb.units.find(u => String(u.unit_id) === String(d.unit_id));
+                               const unitDisplay = unitObj ? unitObj.unit_name : (d.unit_id || '');
 
-                                  existing = {
-                                     drugId: d.drug_id, name: d.drug_name, unit: unitDisplay,
-                                     packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
-                                     prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
-                                     dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: false, requestMore: 0,
-                                     isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
-                                  };
-                                  newItemsArr.push(existing);
-                                  newAdded = true;
-                               }
+                               existing = {
+                                  drugId: d.drug_id, name: d.drug_name, unit: unitDisplay,
+                                  packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
+                                  prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
+                                  dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: false, requestMore: 0,
+                                  isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
+                               };
+                               newItemsArr.push(existing);
+                               newAdded = true;
                             }
                          }
                       });
@@ -1621,9 +1644,9 @@ const CreateReqView = ({ ctx }) => {
                       if(newAdded) newItemsArr.sort(sortDrugs);
                       
                       const calcItems = newItemsArr.map(item => {
-                         const importItem = importData.items.find(i => i.mappedDrugId === item.drugId);
-                         if (importItem && importItem.usage > 0) {
-                            const usage = parseInt(importItem.usage) || 0;
+                         const totalImportUsage = aggregatedUsages[item.drugId];
+                         if (totalImportUsage !== undefined && totalImportUsage > 0) {
+                            const usage = parseInt(totalImportUsage) || 0;
                             const requestMore = item.requestMore || 0;
                             
                             const recent5 = item.pastHistory ? item.pastHistory.slice(0, 5) : [0,0,0,0,0];
@@ -1659,7 +1682,7 @@ const CreateReqView = ({ ctx }) => {
 
                       setItems(calcItems);
                       setShowImportModal(false);
-                      ctx.showToast('ดึงข้อมูลยอดใช้เข้าสู่ตารางเรียบร้อยแล้ว');
+                      ctx.showToast('ดึงข้อมูลยอดใช้เข้าสู่ตารางเรียบร้อยแล้ว (รวมยอดรายการซ้ำให้อัตโนมัติ)');
                    }} className="px-8 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 flex items-center transition">
                      <i className="fa-solid fa-file-import mr-2"></i> ยืนยันนำยอดไปใส่ในใบเบิก
                    </button>

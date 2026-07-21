@@ -3456,13 +3456,12 @@ const App = () => {
         }
       };
 
-      useEffect(() => {
+useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (user) => {
           if (user) {
             try {
               const userDoc = await db.collection('users').doc(user.uid).get();
               if (userDoc.exists) {
-                // ⭐️ ส่งข้อมูล user ลงไปให้ refreshData ดึงข้อมูลแบบประหยัดโควตาทันที
                 const userData = { uid: user.uid, ...userDoc.data() };
                 setCurrentUser(userData);
                 await refreshData(userData); 
@@ -3472,7 +3471,11 @@ const App = () => {
                 auth.signOut();
               }
             } catch(e) {
+                // ⭐️ แก้ไขตรงนี้: ถ้าระบบอ่านข้อมูลไม่ได้ (ติด Permission) ให้เตะออกไปหน้าล็อกอิน ไม่ให้ค้าง
                 showToast('เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์: ' + e.message, 'error');
+                auth.signOut(); 
+                setCurrentUser(null);
+                setCurrentView('login');
             }
           } else {
             setCurrentUser(null);

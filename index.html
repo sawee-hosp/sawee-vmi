@@ -573,7 +573,7 @@ const RegisterView = ({ ctx }) => {
     };
 
     // Component ใหม่: สำหรับหน้าจอคืนยา
-    const ReturnDrugView = ({ ctx }) => {
+const ReturnDrugView = ({ ctx }) => {
       const hospId = ctx.currentUser.hospital_id;
       const isAdmin = ctx.currentUser.role === 'admin';
 
@@ -581,6 +581,9 @@ const RegisterView = ({ ctx }) => {
       const [searchTerm, setSearchTerm] = useState('');
       const [isSubmitting, setIsSubmitting] = useState(false);
       const [printData, setPrintData] = useState(null);
+      
+      const [returnTab, setReturnTab] = useState('new'); // ⭐️ แท็บ สลับหน้าคืนยา กับ หน้าประวัติ
+      const [historyList, setHistoryList] = useState([]);
 
       useEffect(() => {
           const myBal = ctx.appDb.balances.filter(b => b.hospital_id === hospId);
@@ -589,24 +592,29 @@ const RegisterView = ({ ctx }) => {
               const unitObj = drug ? ctx.appDb.units.find(u => String(u.unit_id) === String(drug.unit_id)) : null;
               const unitName = unitObj ? unitObj.unit_name : (drug?.unit_id || '');
               return {
-                  drugId: b.drug_id,
-                  name: drug ? drug.drug_name : 'N/A',
-                  unit: unitName,
-                  packSize: drug ? Number(drug.pack_size) : 1,
-                  price: drug ? drug.price : 0,
-                  currentBal: Number(b.excess_balance),
-                  actualBal: '',
-                  returnQty: 0,
-                  selected: false
+                  drugId: b.drug_id, name: drug ? drug.drug_name : 'N/A', unit: unitName,
+                  packSize: drug ? Number(drug.pack_size) : 1, price: drug ? drug.price : 0,
+                  currentBal: Number(b.excess_balance), actualBal: '', returnQty: 0, selected: false
               };
           }).filter(i => i.currentBal > 0).sort((a,b) => a.drugId.localeCompare(b.drugId));
           setItems(list);
       }, [ctx.appDb.balances, hospId]);
 
+      // ⭐️ โหลดประวัติเมื่อเปลี่ยนแท็บ
+      useEffect(() => {
+          if (returnTab === 'history') {
+             db.collection('stock_returns').where('hospital_id', '==', hospId).get().then(snap => {
+                 const data = snap.docs.map(d => d.data());
+                 setHistoryList(data.sort((a,b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)));
+             });
+          }
+      }, [returnTab, hospId]);
+
       const handleActualChange = (drugId, val) => {
           const actual = val === '' ? '' : Number(val);
           setItems(prev => prev.map(item => {
               if (item.drugId === drugId) {
+                  // ⭐️ ลบการจำกัดค่าสูงสุดออก กรอกเกินเครดิตได้
                   const returnQty = actual === '' ? 0 : Math.max(0, item.currentBal - actual);
                   return { ...item, actualBal: actual, returnQty, selected: returnQty > 0 };
               }
@@ -628,11 +636,9 @@ const RegisterView = ({ ctx }) => {
               const returnId = `RET-${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}-${Math.floor(Math.random()*1000).toString().padStart(3,'0')}`;
               
               const returnDoc = {
-                  id: returnId,
-                  hospital_id: hospId,
+                  id: returnId, hospital_id: hospId,
                   hospital_name: ctx.appDb.hospitals.find(h=>h.hospital_id === hospId)?.hospital_name || hospId,
-                  created_by: ctx.currentUser.name,
-                  created_at: firebase.firestore.FieldValue.serverTimestamp(),
+                  created_by: ctx.currentUser.name, created_at: firebase.firestore.FieldValue.serverTimestamp(),
                   items: toReturn.map(i => ({
                       drugId: i.drugId, name: i.name, unit: i.unit, packSize: i.packSize, price: i.price,
                       currentBal: i.currentBal, actualBal: i.actualBal, returnQty: i.returnQty,
@@ -642,14 +648,10 @@ const RegisterView = ({ ctx }) => {
                   status: 'Completed'
               };
 
-              // สามารถบันทึกลงคอลเลกชันใหม่ได้เลย Firestore จะสร้างให้เมื่อมีการ push ข้อมูลครั้งแรก
               batch.set(db.collection('stock_returns').doc(returnId), returnDoc);
-
-              // Update balances
               toReturn.forEach(i => {
                   batch.set(db.collection('current_excess').doc(`${hospId}_${i.drugId}`), {
-                      excess_balance: i.currentBal - i.returnQty,
-                      last_updated: firebase.firestore.FieldValue.serverTimestamp()
+                      excess_balance: i.currentBal - i.returnQty, last_updated: firebase.firestore.FieldValue.serverTimestamp()
                   }, { merge: true });
               });
 
@@ -657,20 +659,16 @@ const RegisterView = ({ ctx }) => {
               ctx.showToast('บันทึกการคืนยาสำเร็จ ระบบตัดสต๊อกเรียบร้อยแล้ว');
               await ctx.refreshData();
               setPrintData({...returnDoc, created_at_date: new Date()});
-          } catch(e) {
-              ctx.showToast(e.message, 'error');
-          } finally {
-              setIsSubmitting(false);
-          }
+          } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSubmitting(false); }
       };
 
       if (printData) {
           return (
               <div className="bg-white p-8 print:p-0 rounded-2xl print-safe-wrapper border shadow-sm relative">
                   <div className="no-print flex justify-between items-center mb-6 pb-4 border-b">
-                      <h2 className="text-2xl font-bold text-slate-800">ส่งคืนสำเร็จ</h2>
+                      <h2 className="text-2xl font-bold text-slate-800">เอกสารการส่งคืนเวชภัณฑ์</h2>
                       <div className="flex gap-2">
-                        <button onClick={() => { setPrintData(null); ctx.setCurrentView('my_stock'); }} className="bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-bold hover:bg-slate-300 transition">กลับหน้าคลังยา</button>
+                        <button onClick={() => setPrintData(null)} className="bg-slate-200 text-slate-700 px-4 py-2 rounded-xl font-bold hover:bg-slate-300 transition">ปิดเอกสาร</button>
                         <button onClick={() => window.print()} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold shadow-lg hover:bg-blue-700 transition"><i className="fa-solid fa-print mr-2"></i> พิมพ์ใบรับคืน</button>
                       </div>
                   </div>
@@ -678,7 +676,7 @@ const RegisterView = ({ ctx }) => {
                       <div className="text-center mb-6">
                           <h2 className="text-xl font-bold mb-1">ใบสรุปการส่งคืนยาและเวชภัณฑ์ระบบ VMI</h2>
                           <p>หน่วยงาน: {printData.hospital_name} | รหัสอ้างอิง: {printData.id}</p>
-                          <p>ผู้ทำรายการ: {printData.created_by} | วันที่: {printData.created_at_date.toLocaleString('th-TH')}</p>
+                          <p>ผู้ทำรายการ: {printData.created_by} | วันที่: {printData.created_at_date ? printData.created_at_date.toLocaleString('th-TH') : new Date(printData.created_at.seconds * 1000).toLocaleString('th-TH')}</p>
                       </div>
                       <table className="official-table w-full text-[12px] border-collapse border border-black mb-4">
                           <thead className="bg-slate-200">
@@ -738,56 +736,96 @@ const RegisterView = ({ ctx }) => {
              <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
                <div>
                  <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-right-left text-red-500 mr-2"></i> ระบบเช็คสต็อกและคืนยา</h2>
-                 <p className="text-slate-500 mt-1">ใสช่ยอดมีจริงในคลัง ระบบจะคำนวณยอดคืนและตัดสต็อกให้ทันที</p>
+                 <p className="text-slate-500 mt-1">ใส่ยอดมีจริงในคลัง ระบบจะคำนวณยอดคืนและตัดสต็อกให้ทันที</p>
                </div>
                <button onClick={() => ctx.setCurrentView('my_stock')} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">กลับหน้าคลังยา</button>
              </div>
 
-             <div className="flex justify-between items-center mb-4 gap-4">
-                <div className="relative w-full max-w-md">
-                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
-                  <input type="text" placeholder="ค้นหาชื่อยาเพื่อคืน..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
-                </div>
-                <button onClick={handleSubmit} disabled={isSubmitting} className="bg-red-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-red-200 hover:scale-105 transition shrink-0 disabled:opacity-50">
-                  {isSubmitting ? 'กำลังบันทึก...' : <><i className="fa-solid fa-check mr-2"></i> บันทึกการคืนยาและออกใบเสร็จ</>}
-                </button>
+             <div className="flex gap-2 mb-6">
+                <button onClick={()=>setReturnTab('new')} className={`px-6 py-2 rounded-xl font-bold transition ${returnTab==='new'?'bg-red-600 text-white shadow-lg':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>ทำรายการคืนยา</button>
+                <button onClick={()=>setReturnTab('history')} className={`px-6 py-2 rounded-xl font-bold transition ${returnTab==='history'?'bg-red-600 text-white shadow-lg':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>ประวัติส่งคืนย้อนหลัง</button>
              </div>
 
-             <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
-               <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
-                 <thead className="bg-slate-100 text-slate-700 sticky top-0">
-                   <tr>
-                     <th className="p-3 font-bold border-b w-12 text-center">เลือก</th>
-                     <th className="p-3 font-bold border-b">รหัส</th>
-                     <th className="p-3 font-bold border-b">ชื่อรายการยา/เวชภัณฑ์</th>
-                     <th className="p-3 text-center font-bold border-b">หน่วย</th>
-                     <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">เครดิตที่มี (หน่วยย่อย)</th>
-                     <th className="p-3 text-center font-bold border-b bg-amber-50 text-amber-700">ยอดมีจริง (Input)</th>
-                     <th className="p-3 text-center font-bold border-b text-red-700 bg-red-50">ผลการคำนวณ (ยอดคืน)</th>
-                   </tr>
-                 </thead>
-                 <tbody>
-                   {filteredItems.map((item) => (
-                     <tr key={item.drugId} className={`border-b border-slate-200 transition ${item.selected ? 'bg-red-50' : 'hover:bg-slate-50'}`}>
-                       <td className="p-3 text-center border-r border-slate-100">
-                          <input type="checkbox" className="w-5 h-5 accent-red-600 cursor-pointer" checked={item.selected} onChange={() => handleToggle(item.drugId)} disabled={item.returnQty <= 0} />
-                       </td>
-                       <td className="p-3 font-mono text-slate-500">{item.drugId}</td>
-                       <td className="p-3 font-bold text-slate-800">{item.name}</td>
-                       <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
-                       <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.currentBal}</td>
-                       <td className="p-3 bg-amber-50/50 text-center relative w-32">
-                         <input type="number" min="0" max={item.currentBal} className="w-full bg-transparent border-b-2 border-amber-300 p-1 text-center font-bold text-amber-900 outline-none focus:bg-white focus:border-amber-600" value={item.actualBal} onChange={e => handleActualChange(item.drugId, e.target.value)} placeholder="ระบุยอดมีจริง" />
-                       </td>
-                       <td className="p-3 text-center font-extrabold text-red-600 bg-red-50/30 text-[15px]">
-                         {item.returnQty > 0 ? item.returnQty : '-'}
-                       </td>
-                     </tr>
-                   ))}
-                   {filteredItems.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่มีข้อมูลยาในคลังให้คืน</td></tr>}
-                 </tbody>
-               </table>
-             </div>
+             {returnTab === 'new' ? (
+                <>
+                   <div className="flex justify-between items-center mb-4 gap-4">
+                      <div className="relative w-full max-w-md">
+                        <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
+                        <input type="text" placeholder="ค้นหาชื่อยาเพื่อคืน..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                      </div>
+                      <button onClick={handleSubmit} disabled={isSubmitting} className="bg-red-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-red-200 hover:scale-105 transition shrink-0 disabled:opacity-50">
+                        {isSubmitting ? 'กำลังบันทึก...' : <><i className="fa-solid fa-check mr-2"></i> บันทึกการคืนยาและออกใบเสร็จ</>}
+                      </button>
+                   </div>
+
+                   <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
+                     <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
+                       <thead className="bg-slate-100 text-slate-700 sticky top-0">
+                         <tr>
+                           <th className="p-3 font-bold border-b w-12 text-center">เลือก</th>
+                           <th className="p-3 font-bold border-b">รหัส</th>
+                           <th className="p-3 font-bold border-b">ชื่อรายการยา/เวชภัณฑ์</th>
+                           <th className="p-3 text-center font-bold border-b">หน่วย</th>
+                           <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">เครดิตที่มี (หน่วยย่อย)</th>
+                           <th className="p-3 text-center font-bold border-b bg-amber-50 text-amber-700">ยอดมีจริง (Input)</th>
+                           <th className="p-3 text-center font-bold border-b text-red-700 bg-red-50">ผลการคำนวณ (ยอดคืน)</th>
+                         </tr>
+                       </thead>
+                       <tbody>
+                         {filteredItems.map((item) => (
+                           <tr key={item.drugId} className={`border-b border-slate-200 transition ${item.selected ? 'bg-red-50' : 'hover:bg-slate-50'}`}>
+                             <td className="p-3 text-center border-r border-slate-100">
+                                <input type="checkbox" className="w-5 h-5 accent-red-600 cursor-pointer" checked={item.selected} onChange={() => handleToggle(item.drugId)} disabled={item.returnQty <= 0} />
+                             </td>
+                             <td className="p-3 font-mono text-slate-500">{item.drugId}</td>
+                             <td className="p-3 font-bold text-slate-800">{item.name}</td>
+                             <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
+                             <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.currentBal}</td>
+                             <td className="p-3 bg-amber-50/50 text-center relative w-32">
+                               {/* ⭐️ เอา max ออก สามารถกรอกยอดเกินได้ */}
+                               <input type="number" min="0" className="w-full bg-transparent border-b-2 border-amber-300 p-1 text-center font-bold text-amber-900 outline-none focus:bg-white focus:border-amber-600" value={item.actualBal} onChange={e => handleActualChange(item.drugId, e.target.value)} placeholder="ระบุยอดมีจริง" />
+                             </td>
+                             <td className="p-3 text-center font-extrabold text-red-600 bg-red-50/30 text-[15px]">
+                               {item.returnQty > 0 ? item.returnQty : '-'}
+                             </td>
+                           </tr>
+                         ))}
+                         {filteredItems.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่มีข้อมูลยาในคลังให้คืน</td></tr>}
+                       </tbody>
+                     </table>
+                   </div>
+                </>
+             ) : (
+                <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
+                  <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
+                     <thead className="bg-slate-100 text-slate-700">
+                        <tr>
+                           <th className="p-3 font-bold border-b">รหัสเอกสาร</th>
+                           <th className="p-3 font-bold border-b">วันที่ส่งคืน</th>
+                           <th className="p-3 font-bold border-b">ผู้ส่งมอบ</th>
+                           <th className="p-3 text-center font-bold border-b">จำนวนยาที่คืน</th>
+                           <th className="p-3 text-right font-bold border-b">มูลค่ารวม (บาท)</th>
+                           <th className="p-3 text-center font-bold border-b">พิมพ์ย้อนหลัง</th>
+                        </tr>
+                     </thead>
+                     <tbody>
+                        {historyList.map(h => (
+                           <tr key={h.id} className="border-b hover:bg-slate-50">
+                              <td className="p-3 font-bold text-slate-700">{h.id}</td>
+                              <td className="p-3 text-slate-600">{new Date(h.created_at?.seconds * 1000).toLocaleString('th-TH')}</td>
+                              <td className="p-3 text-slate-600">{h.created_by}</td>
+                              <td className="p-3 text-center text-red-600 font-bold">{h.items?.length || 0} รายการ</td>
+                              <td className="p-3 text-right font-bold text-slate-800">{h.totalValue?.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                              <td className="p-3 text-center">
+                                 <button onClick={() => setPrintData(h)} className="bg-blue-100 text-blue-700 px-4 py-1.5 rounded-lg font-bold hover:bg-blue-200 transition"><i className="fa-solid fa-print"></i> เปิดเพื่อพิมพ์</button>
+                              </td>
+                           </tr>
+                        ))}
+                        {historyList.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-400">ไม่มีประวัติการส่งคืนยา</td></tr>}
+                     </tbody>
+                  </table>
+                </div>
+             )}
           </div>
       );
     };
@@ -1034,7 +1072,7 @@ const CreateReqView = ({ ctx }) => {
 
       const [showImportModal, setShowImportModal] = useState(false);
       const [importData, setImportData] = useState({ hospInfo: '', periodInfo: '', isDateValid: true, items: [] });
-      const [showZeroImport, setShowZeroImport] = useState(false); // ⭐️ Toggle ยอดใช้=0 ใน Modal
+      const [showZeroImport, setShowZeroImport] = useState(false);
       
       const [manualAddSearch, setManualAddSearch] = useState('');
 
@@ -1179,7 +1217,7 @@ const CreateReqView = ({ ctx }) => {
             const SD = Math.sqrt(variance);
             const targetVMI = Math.ceil(mean + (1.645 * SD));
 
-            const row = { ...item, usage, requestMore, targetVMI, isNewDrug: count === 1 && recent5.every(u=>u===0) };
+            const row = { ...item, usage, requestMore, targetVMI, isNewDrug: item.isNewDrug || (count === 1 && recent5.every(u=>u===0)), isAdjusted: requestMore > 0 };
             
             let currentBal = row.prevExcess - usage;
             let netNeed = targetVMI - currentBal;
@@ -1209,6 +1247,22 @@ const CreateReqView = ({ ctx }) => {
         setItems(newItems);
       };
 
+      // ⭐️ ฟังก์ชันลบรายการออกจากใบเบิก (ไม่ลบคลัง)
+      const handleDeleteItem = (drugId) => {
+         ctx.setConfirmDialog({
+           title: 'ยืนยันลบออกจากใบเบิก',
+           message: 'ปุ่มนี้คือลบออกจากใบเบิกและรีเซ็ตจำนวนเบิกยานี้เป็น 0 แต่ยาจะยังคงอยู่ในคลังของคุณ ยืนยันหรือไม่?',
+           icon: 'fa-trash',
+           iconColor: 'text-red-500',
+           confirmBtnClass: 'bg-red-600 hover:bg-red-700',
+           confirmText: 'ลบออกจากใบเบิก',
+           onConfirm: () => {
+              setItems(prev => prev.filter(i => i.drugId !== drugId));
+              ctx.showToast('ลบรายการยาออกจากตารางแล้ว (จะไม่ปรากฏในใบเบิก)');
+           }
+         });
+      };
+
       const handleManualAdd = () => {
          if(!manualAddSearch) return;
          const drug = ctx.appDb.drugs.find(d => d.drug_id === manualAddSearch);
@@ -1220,9 +1274,9 @@ const CreateReqView = ({ ctx }) => {
 
          const newItem = {
             drugId: drug.drug_id, name: drug.drug_name, unit: unitDisplay,
-            packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type, price: drug.price,
+            packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
             prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0,
-            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
+            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: true
          };
          setItems([newItem, ...items].sort(sortDrugs)); setManualAddSearch(''); ctx.showToast(`เพิ่ม ${drug.drug_name} ลงในใบเบิกแล้ว`);
       };
@@ -1237,7 +1291,7 @@ const CreateReqView = ({ ctx }) => {
                   packSize: item.packSize || 1, isUnpacked: !!item.isUnpacked, type: item.type || '1', price: item.price || 0,
                   prevExcess: item.prevExcess || 0, usage: item.usage || 0, targetVMI: item.targetVMI || 0, netNeed: item.netNeed || 0,
                   dispensePack: item.dispensePack || 0, dispenseQty: item.dispenseQty || 0, newExcess: item.newExcess || 0,
-                  isSpecial: false, requestMore: item.requestMore || 0
+                  isSpecial: false, requestMore: item.requestMore || 0, isNewDrug: !!item.isNewDrug, isAdjusted: !!item.isAdjusted
                };
             });
 
@@ -1358,7 +1412,7 @@ const CreateReqView = ({ ctx }) => {
         );
       }
 
-      const unmatchedCount = importData.items.filter(i => !i.mappedDrugId).length;
+      const unmatchedCount = importData.items.filter(i => (showZeroImport || i.usage > 0) && !i.mappedDrugId).length;
 
       return (
         <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 border border-slate-100 animate-fade-in relative w-full print-safe-wrapper">
@@ -1457,6 +1511,7 @@ const CreateReqView = ({ ctx }) => {
                   {showCalc && <th className="p-3 text-center border-l border-slate-600 text-amber-300 font-bold">ยอดต้องเติม<br/>เต็มหน่วย</th>}
                   <th className="p-3 text-center border-l border-slate-600 bg-indigo-900 text-white font-bold w-24">ขอเพิ่ม(ย่อย)</th>
                   <th className="p-3 text-center border-l border-slate-600 bg-emerald-900 text-emerald-300 font-extrabold text-[14px]">ยอดเบิกรอบนี้<br/>แพ็ค(ย่อย)</th>
+                  {/* ⭐️ ปุ่มถังขยะ */}
                   <th className="p-3 text-center border-l border-slate-600 bg-red-900 text-white font-bold w-12"><i className="fa-solid fa-trash"></i></th>
                 </tr>
               </thead>
@@ -1473,7 +1528,8 @@ const CreateReqView = ({ ctx }) => {
                       <td className="p-3 font-bold text-slate-800">
                          {item.name} 
                          <span className="text-xs font-normal text-slate-400 ml-1">[{item.drugId}]</span>
-                         {item.isNewDrug && <span className="ml-1 text-[10px] bg-red-100 text-red-600 px-1 rounded font-bold">ยาใหม่</span>}
+                         {/* ⭐️ ป้าย (ขอเพิ่ม) สีแดง */}
+                         {(item.requestMore > 0 || item.isNewDrug || item.isAdjusted) && <span className="text-red-600 font-bold ml-1 text-[11px] border border-red-200 bg-red-50 px-1 rounded">(ขอเพิ่ม)</span>}
                          {isVaccine && <span className="ml-2 text-xs font-bold text-red-500 border border-red-200 bg-white px-2 py-0.5 rounded"><i className="fa-solid fa-ban"></i> ไม่ร่วมรายการ</span>}
                       </td>
                       <td className="p-3 text-center text-slate-600 border-l border-slate-100">{displayUnit}</td>
@@ -1501,8 +1557,9 @@ const CreateReqView = ({ ctx }) => {
                       <td className="p-3 text-center font-black text-emerald-700 bg-emerald-50/30 border-l border-slate-100 text-[15px]">
                          {isVaccine ? '0' : formatQty(item.dispenseQty, item.packSize)}
                       </td>
+                      {/* ⭐️ ปุ่มลบออกจากใบเบิก (ไม่ลบออกจากคลัง) */}
                       <td className="p-3 text-center bg-red-50/20 border-l border-slate-100">
-                         <button onClick={() => setItems(items.filter(i => i.drugId !== item.drugId))} className="text-slate-400 hover:text-red-600 transition p-1.5 rounded hover:bg-red-100"><i className="fa-solid fa-trash"></i></button>
+                         <button onClick={() => handleDeleteItem(item.drugId)} className="text-slate-400 hover:text-red-600 transition p-1.5 rounded hover:bg-red-100"><i className="fa-solid fa-trash"></i></button>
                       </td>
                     </tr>
                   )
@@ -1548,7 +1605,6 @@ const CreateReqView = ({ ctx }) => {
                   </div>
                </div>
 
-               {/* ⭐️ ส่วนควบคุมแสดงยอด=0 */}
                <div className="flex justify-between items-center mb-2 bg-slate-50 p-2 rounded-lg border">
                   <span className="text-sm font-bold text-slate-700"><i className="fa-solid fa-list mr-2"></i>รายการยาทั้งหมดจากไฟล์</span>
                   <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-slate-600 bg-white px-3 py-1 border rounded shadow-sm hover:bg-slate-100">
@@ -1643,7 +1699,7 @@ const CreateReqView = ({ ctx }) => {
                                   packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
                                   prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
                                   dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: false, requestMore: 0,
-                                  isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
+                                  isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: false
                                };
                                newItemsArr.push(existing);
                                newAdded = true;
@@ -1719,7 +1775,7 @@ const ViewReqView = ({ ctx }) => {
       const [reqName, setReqName] = useState(req?.created_by_name || '');
       const [reqPosition, setReqPosition] = useState(req?.created_by_position || userInfo?.position || 'เจ้าหน้าที่');
       
-      const [manualAddSearch, setManualAddSearch] = useState(''); // ⭐️ ตัวแปรสำหรับค้นหายาเพิ่ม
+      const [manualAddSearch, setManualAddSearch] = useState('');
 
       useEffect(() => { if(req) setEditableItems(req.items); }, [req]);
       if(!req) return null;
@@ -1737,11 +1793,21 @@ const ViewReqView = ({ ctx }) => {
 
       // ⭐️ ฟังก์ชันลบรายการยาออกจากใบเบิก (ไม่เอาไปรวมในเอกสาร)
       const handleDeleteItem = (drugId) => {
-         setEditableItems(prev => prev.filter(i => i.drugId !== drugId));
-         ctx.showToast('ลบรายการยาออกจากตารางแล้ว');
+         ctx.setConfirmDialog({
+           title: 'ยืนยันลบออกจากใบเบิก',
+           message: 'ปุ่มนี้คือลบออกจากใบเบิกและรีเซ็ตจำนวนเบิกยานี้เป็น 0 แต่ยาจะยังคงอยู่ในคลังของคุณ ยืนยันหรือไม่?',
+           icon: 'fa-trash',
+           iconColor: 'text-red-500',
+           confirmBtnClass: 'bg-red-600 hover:bg-red-700',
+           confirmText: 'ลบออกจากใบเบิก',
+           onConfirm: () => {
+              setEditableItems(prev => prev.filter(i => i.drugId !== drugId));
+              ctx.showToast('ลบรายการยาออกจากตารางแล้ว (จะไม่ปรากฏในใบเบิก)');
+           }
+         });
       };
 
-      // ⭐️ ฟังก์ชันเพิ่มรายการยาในหน้า Preview
+      // ⭐️ ฟังก์ชันเพิ่มรายการยาในหน้า Preview แบบ Realtime
       const handleManualAdd = () => {
          if(!manualAddSearch) return;
          const drug = ctx.appDb.drugs.find(d => d.drug_id === manualAddSearch);
@@ -1757,7 +1823,7 @@ const ViewReqView = ({ ctx }) => {
             drugId: drug.drug_id, name: drug.drug_name, unit: unitDisplay,
             packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
             prevExcess: prevExcess, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess,
-            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
+            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: true
          };
          setEditableItems([newItem, ...editableItems].sort(sortDrugs)); 
          setManualAddSearch(''); 
@@ -1813,7 +1879,7 @@ const ViewReqView = ({ ctx }) => {
               drugId: mappedDrugId, name: drug.drug_name, unit: unitDisplay,
               packSize, isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
               prevExcess, usage, targetVMI, netNeed, dispensePack, dispenseQty, newExcess,
-              isSpecial: false, requestMore: 0
+              isSpecial: false, requestMore: 0, isNewDrug: true, isAdjusted: true
           };
 
           setEditableItems(prev => {
@@ -1837,6 +1903,7 @@ const ViewReqView = ({ ctx }) => {
                   arr[existingIdx].dispensePack = dPack;
                   arr[existingIdx].dispenseQty = dQty;
                   arr[existingIdx].newExcess = nExcess;
+                  arr[existingIdx].isAdjusted = true;
                   return arr;
               }
               return [...prev, newItem].sort(sortDrugs);
@@ -1959,25 +2026,11 @@ const ViewReqView = ({ ctx }) => {
               {req.excel_url && <a href={req.excel_url} target="_blank" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
               <button onClick={() => { handleTriggerPrint(); }} className={`text-white px-4 py-2 rounded-xl font-bold shadow-lg flex items-center transition bg-blue-600 hover:bg-blue-700`}><i className="fa-solid fa-print mr-2"></i> พิมพ์เอกสารเบิก</button>
               
-{/* ⭐️ ปรับให้ รพ.สต. (User) ลบใบเบิกตัวเองได้ (เฉพาะตอนที่ยัง Pending) พร้อมข้อความแจ้งเตือนที่กำหนด */}
               {(isAdmin || (isHospital && isPending)) && (
-                 <button 
-                   onClick={() => ctx.setConfirmDialog({ 
-                     title: 'ยืนยันลบใบเบิก', 
-                     message: `ลบใบเบิก เดือน ${THAI_MONTHS[req.month - 1]} ของ ${hosp?.hospital_name} แล้วข้อมูลจะหายไป และโปรดเบิกเข้ามาใหม่อีก`, 
-                     icon: 'fa-triangle-exclamation', 
-                     iconColor: 'text-red-500', 
-                     confirmBtnClass: 'bg-red-600 hover:bg-red-700 shadow-lg', 
-                     confirmText: 'รับทราบ ลบทิ้ง', 
-                     onConfirm: handleDeleteReq 
-                   })} 
-                   disabled={isApproving} 
-                   className="bg-red-100 text-red-700 px-4 py-2 rounded-xl font-bold shadow-sm flex items-center hover:bg-red-200 transition"
-                 >
+                 <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันลบใบเบิก', message: `ลบใบเบิก เดือน ${THAI_MONTHS[req.month - 1]} ของ ${hosp?.hospital_name} แล้วข้อมูลจะหายไป และโปรดเบิกเข้ามาใหม่อีก`, icon: 'fa-triangle-exclamation', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700 shadow-lg', confirmText: 'รับทราบ ลบทิ้ง', onConfirm: handleDeleteReq })} disabled={isApproving} className="bg-red-100 text-red-700 px-4 py-2 rounded-xl font-bold shadow-sm flex items-center hover:bg-red-200 transition">
                    <i className="fa-solid fa-trash mr-2"></i> ลบใบเบิกทิ้ง
                  </button>
               )}
-
               
               {isAdmin && isPending && (
                  <>
@@ -2117,7 +2170,8 @@ const ViewReqView = ({ ctx }) => {
                                   <td className="text-center">{globalItemIndex}</td>
                                   <td className="font-semibold text-left pl-1">
                                      {it.name} 
-                                     {it.requestMore > 0 && <span className="text-blue-600 font-bold ml-1">(ขอเพิ่ม)</span>}
+                                     {/* ⭐️ ป้าย (ขอเพิ่ม) สีแดง */}
+                                     {(it.requestMore > 0 || it.isNewDrug || it.isAdjusted) && <span className="text-red-600 font-bold ml-1 text-[11px] border border-red-200 bg-red-50 px-1 rounded">(ขอเพิ่ม)</span>}
                                      {isVaccine && <span className="text-red-500 font-bold ml-1 text-[9px] border border-red-200 rounded px-1 no-print">ไม่ร่วมรายการ</span>}
                                   </td>
                                   <td className="text-center text-slate-700">{displayUnit}</td>
@@ -2134,7 +2188,7 @@ const ViewReqView = ({ ctx }) => {
                                   <td></td>
                                   <td className="text-center font-mono text-gray-600">{it.drugId}</td>
                                   
-                                  {/* ⭐️ ปุ่มลบ (แสดงเฉพาะตอนที่สามารถแก้ไขได้) */}
+                                  {/* ⭐️ ปุ่มลบ (แสดงเฉพาะตอนแก้ไข ไม่แสดงตอนพิมพ์) */}
                                   {canEdit && (
                                      <td className="text-center no-print border-l border-black bg-red-50/30">
                                         <button onClick={() => handleDeleteItem(it.drugId)} className="text-slate-400 hover:text-red-600 p-1 transition"><i className="fa-solid fa-times"></i></button>
@@ -2613,8 +2667,20 @@ const ViewReqView = ({ ctx }) => {
         <button onClick={()=>setActiveTab(id)} className={`px-4 py-3 font-bold rounded-t-xl transition border-b-4 ${activeTab === id ? 'bg-white text-emerald-700 border-emerald-500' : 'bg-slate-100 text-slate-500 border-transparent hover:bg-slate-200'}`}><i className={`fa-solid ${icon} mr-2`}></i> {label}</button>
       );
 
-      const TypeManager = () => {
+const TypeManager = () => {
          const types = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+
+         // ⭐️ ฟังก์ชันสำหรับลบหมวดยา
+         const deleteType = async (typeId) => {
+             try {
+                 await db.collection('config').doc('drug_types').update({
+                     [typeId]: firebase.firestore.FieldValue.delete()
+                 });
+                 ctx.showToast('ลบหมวดหมู่สำเร็จ');
+                 ctx.refreshData();
+             } catch(e) { ctx.showToast(e.message, 'error'); }
+         };
+
          return (
             <div className="p-6">
                <div className="flex justify-between items-center mb-4">
@@ -2629,8 +2695,10 @@ const ViewReqView = ({ ctx }) => {
                        <tr key={k} className="border-b hover:bg-slate-50">
                          <td className="p-4 font-mono font-bold text-indigo-600">{k}</td>
                          <td className="p-4 font-bold text-slate-800">{types[k]}</td>
-                         <td className="p-4 text-center">
+                         <td className="p-4 text-center space-x-2">
                            <button onClick={()=>setEditTarget({ col: 'master_drug_types', data: {type_id: k, type_name: types[k]}, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
+                           {/* ⭐️ ปุ่มลบหมวดยา */}
+                           <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบหมวดหมู่ ${types[k]} ใช่หรือไม่?`, onConfirm: ()=>deleteType(k), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                          </td>
                        </tr>
                      ))}

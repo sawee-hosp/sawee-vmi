@@ -1034,6 +1034,7 @@ const CreateReqView = ({ ctx }) => {
 
       const [showImportModal, setShowImportModal] = useState(false);
       const [importData, setImportData] = useState({ hospInfo: '', periodInfo: '', isDateValid: true, items: [] });
+      const [showZeroImport, setShowZeroImport] = useState(false); // ⭐️ Toggle ยอดใช้=0 ใน Modal
       
       const [manualAddSearch, setManualAddSearch] = useState('');
 
@@ -1119,7 +1120,7 @@ const CreateReqView = ({ ctx }) => {
             if (compacted.length >= 6 && /^\d+\.?$/.test(compacted[0])) {
                const rawName = compacted[1]; const usageStr = compacted[6]; 
                const usageNum = parseFloat(usageStr?.replace(/,/g, ''));
-               if (!isNaN(usageNum) && usageNum > 0 && rawName && !rawName.includes('รวม')) {
+               if (!isNaN(usageNum) && usageNum >= 0 && rawName && !rawName.includes('รวม')) {
                    extracted.push({ id: Math.random().toString(), rawName, usage: usageNum, mappedDrugId: '' });
                }
             }
@@ -1456,6 +1457,7 @@ const CreateReqView = ({ ctx }) => {
                   {showCalc && <th className="p-3 text-center border-l border-slate-600 text-amber-300 font-bold">ยอดต้องเติม<br/>เต็มหน่วย</th>}
                   <th className="p-3 text-center border-l border-slate-600 bg-indigo-900 text-white font-bold w-24">ขอเพิ่ม(ย่อย)</th>
                   <th className="p-3 text-center border-l border-slate-600 bg-emerald-900 text-emerald-300 font-extrabold text-[14px]">ยอดเบิกรอบนี้<br/>แพ็ค(ย่อย)</th>
+                  <th className="p-3 text-center border-l border-slate-600 bg-red-900 text-white font-bold w-12"><i className="fa-solid fa-trash"></i></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1499,11 +1501,14 @@ const CreateReqView = ({ ctx }) => {
                       <td className="p-3 text-center font-black text-emerald-700 bg-emerald-50/30 border-l border-slate-100 text-[15px]">
                          {isVaccine ? '0' : formatQty(item.dispenseQty, item.packSize)}
                       </td>
+                      <td className="p-3 text-center bg-red-50/20 border-l border-slate-100">
+                         <button onClick={() => setItems(items.filter(i => i.drugId !== item.drugId))} className="text-slate-400 hover:text-red-600 transition p-1.5 rounded hover:bg-red-100"><i className="fa-solid fa-trash"></i></button>
+                      </td>
                     </tr>
                   )
                 })}
                 {filteredItems.length === 0 && (
-                  <tr><td colSpan="9" className="p-12 text-center text-slate-400 font-bold">ไม่พบรายการยา</td></tr>
+                  <tr><td colSpan="10" className="p-12 text-center text-slate-400 font-bold">ไม่พบรายการยา</td></tr>
                 )}
               </tbody>
             </table>
@@ -1543,6 +1548,14 @@ const CreateReqView = ({ ctx }) => {
                   </div>
                </div>
 
+               {/* ⭐️ ส่วนควบคุมแสดงยอด=0 */}
+               <div className="flex justify-between items-center mb-2 bg-slate-50 p-2 rounded-lg border">
+                  <span className="text-sm font-bold text-slate-700"><i className="fa-solid fa-list mr-2"></i>รายการยาทั้งหมดจากไฟล์</span>
+                  <label className="flex items-center gap-2 cursor-pointer font-bold text-xs text-slate-600 bg-white px-3 py-1 border rounded shadow-sm hover:bg-slate-100">
+                     <input type="checkbox" className="w-4 h-4 accent-indigo-500" checked={showZeroImport} onChange={e=>setShowZeroImport(e.target.checked)} /> แสดงรายการที่ยอดใช้ = 0 ด้วย
+                  </label>
+               </div>
+
                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                  <table className="w-full text-left text-sm">
                    <thead className="bg-slate-100 border-b">
@@ -1554,8 +1567,7 @@ const CreateReqView = ({ ctx }) => {
                      </tr>
                    </thead>
                    <tbody>
-                     {importData.items.map(item => {
-                        // ⭐️ เช็คว่ารายการยานี้ถูกจับคู่ซ้ำเกิน 1 ครั้งหรือไม่
+                     {importData.items.filter(item => showZeroImport || item.usage > 0).map(item => {
                         const mappedCount = item.mappedDrugId ? importData.items.filter(i => i.mappedDrugId === item.mappedDrugId).length : 0;
                         const isDuplicate = mappedCount > 1;
                         const mappedDrugObj = ctx.appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
@@ -1602,16 +1614,15 @@ const CreateReqView = ({ ctx }) => {
                <div className="mt-6 flex justify-end gap-3 shrink-0">
                    <button onClick={() => setShowImportModal(false)} className="px-6 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition">ยกเลิก</button>
                    <button onClick={() => {
-                      const remainingUnmatched = importData.items.filter(i => !i.mappedDrugId).length;
+                      const remainingUnmatched = importData.items.filter(i => (showZeroImport || i.usage > 0) && !i.mappedDrugId).length;
                       if (remainingUnmatched > 0) {
-                         ctx.showToast(`มียา ${remainingUnmatched} รายการที่ยังไม่จับคู่ กรุณาจับคู่ยาให้เสร็จสิ้นก่อน โดยค้นหาจากฐานข้อมูลคลังยา`, 'error');
+                         ctx.showToast(`มียา ${remainingUnmatched} รายการที่ยังไม่จับคู่ กรุณาจับคู่ยาให้เสร็จสิ้นก่อน หรือกดรูปถังขยะเพื่อข้ามรายการนั้น`, 'error');
                          return;
                       }
 
-                      // ⭐️ รวมยอดใช้ (Usage) ของรายการที่ถูกจับคู่รหัสยาซ้ำกัน
                       const aggregatedUsages = {};
                       importData.items.forEach(i => {
-                         if (i.mappedDrugId && i.usage > 0) {
+                         if (i.mappedDrugId && (showZeroImport || i.usage > 0)) {
                             aggregatedUsages[i.mappedDrugId] = (aggregatedUsages[i.mappedDrugId] || 0) + Number(i.usage);
                          }
                       });
@@ -1644,7 +1655,7 @@ const CreateReqView = ({ ctx }) => {
                       
                       const calcItems = newItemsArr.map(item => {
                          const totalImportUsage = aggregatedUsages[item.drugId];
-                         if (totalImportUsage !== undefined && totalImportUsage > 0) {
+                         if (totalImportUsage !== undefined) {
                             const usage = parseInt(totalImportUsage) || 0;
                             const requestMore = item.requestMore || 0;
                             
@@ -1702,12 +1713,13 @@ const ViewReqView = ({ ctx }) => {
       const isHospital = ctx.currentUser?.role === 'hospital';
       const isAdmin = ctx.currentUser?.role === 'admin';
       const isPending = req?.status === 'Pending';
-      const canEdit = isPending && (isAdmin || isHospital); // ⭐️ อนุญาตให้แก้ไขได้หากยัง Pending
+      const canEdit = isPending && (isAdmin || isHospital); 
       
-      // ⭐️ State สำหรับแก้ไขชื่อผู้เบิก
       const userInfo = ctx.appDb.usersList.find(u => u.name === req?.created_by_name) || { position: 'เจ้าหน้าที่', role: '' };
       const [reqName, setReqName] = useState(req?.created_by_name || '');
       const [reqPosition, setReqPosition] = useState(req?.created_by_position || userInfo?.position || 'เจ้าหน้าที่');
+      
+      const [manualAddSearch, setManualAddSearch] = useState(''); // ⭐️ ตัวแปรสำหรับค้นหายาเพิ่ม
 
       useEffect(() => { if(req) setEditableItems(req.items); }, [req]);
       if(!req) return null;
@@ -1721,6 +1733,35 @@ const ViewReqView = ({ ctx }) => {
         const qty = parseInt(val) || 0; const newItems = [...editableItems];
         newItems[idx] = { ...newItems[idx], dispenseQty: qty, dispensePack: Math.ceil(qty / newItems[idx].packSize), newExcess: (newItems[idx].prevExcess - newItems[idx].usage) + qty, isAdjusted: true };
         setEditableItems(newItems);
+      };
+
+      // ⭐️ ฟังก์ชันลบรายการยาออกจากใบเบิก (ไม่เอาไปรวมในเอกสาร)
+      const handleDeleteItem = (drugId) => {
+         setEditableItems(prev => prev.filter(i => i.drugId !== drugId));
+         ctx.showToast('ลบรายการยาออกจากตารางแล้ว');
+      };
+
+      // ⭐️ ฟังก์ชันเพิ่มรายการยาในหน้า Preview
+      const handleManualAdd = () => {
+         if(!manualAddSearch) return;
+         const drug = ctx.appDb.drugs.find(d => d.drug_id === manualAddSearch);
+         if(!drug) return ctx.showToast('ไม่พบรหัสยานี้ในระบบ', 'error');
+         if(editableItems.find(i => i.drugId === drug.drug_id)) return ctx.showToast('มีรายการนี้ในใบเบิกอยู่แล้ว', 'error');
+
+         const unitObj = ctx.appDb.units.find(u => String(u.unit_id) === String(drug.unit_id));
+         const unitDisplay = unitObj ? unitObj.unit_name : (drug.unit_id || '');
+         const bal = ctx.appDb.balances.find(b => String(b.hospital_id) === String(req.hospitalId) && String(b.drug_id) === drug.drug_id);
+         const prevExcess = bal ? Number(bal.excess_balance) : 0;
+
+         const newItem = {
+            drugId: drug.drug_id, name: drug.drug_name, unit: unitDisplay,
+            packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
+            prevExcess: prevExcess, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess,
+            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0]
+         };
+         setEditableItems([newItem, ...editableItems].sort(sortDrugs)); 
+         setManualAddSearch(''); 
+         ctx.showToast(`เพิ่ม ${drug.drug_name} ลงในใบเบิกแล้ว`);
       };
 
       const handleAddMappedSkipped = (idx, mappedDrugId, usage) => {
@@ -1807,7 +1848,6 @@ const ViewReqView = ({ ctx }) => {
           ctx.showToast(`นำยา ${drug.drug_name} เข้ารายการแล้ว`);
       };
 
-      // ⭐️ ฟังก์ชันสำหรับบันทึกการแก้ไข (รพ.สต. และ แอดมิน)
       const handleSaveChanges = async () => {
           setIsApproving(true);
           try {
@@ -1822,7 +1862,6 @@ const ViewReqView = ({ ctx }) => {
           setIsApproving(false);
       };
 
-      // ⭐️ ฟังก์ชันสำหรับอนุมัติและล็อกบิล (แอดมินเท่านั้น)
       const handleApprove = async () => {
         setIsApproving(true);
         try {
@@ -1831,7 +1870,7 @@ const ViewReqView = ({ ctx }) => {
               status: 'Completed', 
               items: editableItems, 
               skipped_items: req.skipped_items || [],
-              created_by_name: reqName,           // เซฟข้อมูลคนเบิกไปด้วยเผื่อแก้
+              created_by_name: reqName,
               created_by_position: reqPosition
           });
           
@@ -1900,7 +1939,8 @@ const ViewReqView = ({ ctx }) => {
       const typeKeys = Object.keys(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES);
       typeKeys.forEach(k => groupedItems[k] = []);
       
-      const itemsToDisplay = editableItems.filter(it => it.dispenseQty > 0 || it.requestMore > 0 || it.netNeed > 0 || it.type === '6');
+      // ⭐️ ระบุเงื่อนไข: หากจำนวนยาเบิกเหลือ 0 จะไม่ปรากฏในใบเบิก
+      const itemsToDisplay = editableItems.filter(it => it.dispenseQty > 0 || it.type === '6');
 
       itemsToDisplay.forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
       
@@ -1908,7 +1948,6 @@ const ViewReqView = ({ ctx }) => {
       let grandTotalPrice = 0;
       let globalItemIndex = 0;
 
-      // ⭐️ กำหนดการแสดงผลชื่อ ผอ.
       const directorText = hosp?.affiliation === 'OPT' ? `ผอ.${hospNameClean}` : `ผอ.รพ.สต.${hospNameClean}`;
 
       return (
@@ -1920,11 +1959,25 @@ const ViewReqView = ({ ctx }) => {
               {req.excel_url && <a href={req.excel_url} target="_blank" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
               <button onClick={() => { handleTriggerPrint(); }} className={`text-white px-4 py-2 rounded-xl font-bold shadow-lg flex items-center transition bg-blue-600 hover:bg-blue-700`}><i className="fa-solid fa-print mr-2"></i> พิมพ์เอกสารเบิก</button>
               
-              {isAdmin && (
-                 <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันลบใบเบิก', message: 'คุณต้องการลบใบเบิกนี้ทิ้งใช่หรือไม่?', icon: 'fa-trash', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700', confirmText: 'ลบทิ้ง', onConfirm: handleDeleteReq })} disabled={isApproving} className="bg-red-100 text-red-700 px-4 py-2 rounded-xl font-bold shadow-sm flex items-center hover:bg-red-200 transition">
+{/* ⭐️ ปรับให้ รพ.สต. (User) ลบใบเบิกตัวเองได้ (เฉพาะตอนที่ยัง Pending) พร้อมข้อความแจ้งเตือนที่กำหนด */}
+              {(isAdmin || (isHospital && isPending)) && (
+                 <button 
+                   onClick={() => ctx.setConfirmDialog({ 
+                     title: 'ยืนยันลบใบเบิก', 
+                     message: `ลบใบเบิก เดือน ${THAI_MONTHS[req.month - 1]} ของ ${hosp?.hospital_name} แล้วข้อมูลจะหายไป และโปรดเบิกเข้ามาใหม่อีก`, 
+                     icon: 'fa-triangle-exclamation', 
+                     iconColor: 'text-red-500', 
+                     confirmBtnClass: 'bg-red-600 hover:bg-red-700 shadow-lg', 
+                     confirmText: 'รับทราบ ลบทิ้ง', 
+                     onConfirm: handleDeleteReq 
+                   })} 
+                   disabled={isApproving} 
+                   className="bg-red-100 text-red-700 px-4 py-2 rounded-xl font-bold shadow-sm flex items-center hover:bg-red-200 transition"
+                 >
                    <i className="fa-solid fa-trash mr-2"></i> ลบใบเบิกทิ้ง
                  </button>
               )}
+
               
               {isAdmin && isPending && (
                  <>
@@ -1935,7 +1988,6 @@ const ViewReqView = ({ ctx }) => {
             </div>
           </div>
 
-          {/* ⭐️ แก้ไขชื่อ ตำแหน่ง ผู้ทำรายการเบิก (หากยังเป็น Pending) */}
           {canEdit && (
             <div className="mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200 no-print flex flex-col md:flex-row gap-4 items-end">
                <div className="w-full md:w-1/3">
@@ -1951,6 +2003,20 @@ const ViewReqView = ({ ctx }) => {
                   {isApproving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไขข้อมูล'}
                </button>
             </div>
+          )}
+
+          {/* ⭐️ ส่วนเพิ่มยาในหน้า Preview ขั้นตอนสุดท้าย */}
+          {canEdit && (
+              <div className="flex flex-col md:flex-row gap-4 mb-6 items-center bg-slate-50 p-4 rounded-xl border border-slate-200 no-print">
+                 <div className="font-bold text-slate-700 w-full md:w-auto shrink-0"><i className="fa-solid fa-plus-circle text-blue-500 mr-2"></i> เพิ่มยาเข้ารายการเบิก</div>
+                 <div className="flex flex-grow w-full gap-2">
+                   <input list="all-drugs-view" className="border border-slate-300 rounded-lg p-2 flex-grow outline-none focus:border-blue-500" placeholder="พิมพ์ชื่อหรือรหัส..." value={manualAddSearch} onChange={e=>setManualAddSearch(e.target.value)} />
+                   <datalist id="all-drugs-view">
+                      {ctx.appDb.drugs.map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type]}]</option>)}
+                   </datalist>
+                   <button onClick={handleManualAdd} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700">เพิ่ม</button>
+                 </div>
+              </div>
           )}
 
           {isAdmin && isPending && req.skipped_items && req.skipped_items.length > 0 && (
@@ -2011,6 +2077,8 @@ const ViewReqView = ({ ctx }) => {
                       <th style={{ width: '9%' }}>มูลค่า (บาท)</th>
                       <th style={{ width: '4%' }}>คงเหลือ</th>
                       <th style={{ width: '6%' }}>รหัส</th>
+                      {/* ⭐️ ช่องปุ่มลบ (แสดงเฉพาะตอนแก้ไข ไม่แสดงตอนพิมพ์) */}
+                      {canEdit && <th style={{ width: '4%' }} className="no-print text-red-500"><i className="fa-solid fa-trash"></i></th>}
                    </tr>
                 </thead>
                 {typeKeys.map((typeKey) => {
@@ -2027,7 +2095,7 @@ const ViewReqView = ({ ctx }) => {
                    return (
                       <tbody key={typeKey}>
                          <tr className="highlight-row">
-                            <td colSpan="12" className="font-bold text-left px-2 py-1 border-y border-black">
+                            <td colSpan={canEdit ? "13" : "12"} className="font-bold text-left px-2 py-1 border-y border-black">
                                <div className="flex justify-between w-full">
                                    <span>{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]}</span>
                                    <span className="pr-1">{subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})} บาท</span>
@@ -2065,6 +2133,13 @@ const ViewReqView = ({ ctx }) => {
                                   <td className="text-right pr-1 font-semibold">{itemValue.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                                   <td></td>
                                   <td className="text-center font-mono text-gray-600">{it.drugId}</td>
+                                  
+                                  {/* ⭐️ ปุ่มลบ (แสดงเฉพาะตอนที่สามารถแก้ไขได้) */}
+                                  {canEdit && (
+                                     <td className="text-center no-print border-l border-black bg-red-50/30">
+                                        <button onClick={() => handleDeleteItem(it.drugId)} className="text-slate-400 hover:text-red-600 p-1 transition"><i className="fa-solid fa-times"></i></button>
+                                     </td>
+                                  )}
                                </tr>
                             )
                          })}
@@ -2091,7 +2166,7 @@ const ViewReqView = ({ ctx }) => {
              <div className="flex flex-col text-[9pt] px-4 w-full break-inside-avoid mt-4 print:mt-4">
                  {[
                      `ผู้เบิก`,
-                     directorText, // ⭐️ ใช้ตัวแปรที่คำนวณแยกตาม สธ. หรือ อปท. ไว้แล้ว
+                     directorText,
                      hosp?.affiliation === 'OPT' ? 'รักษาการแทน นายก อบจ.ชุมพร' : 'สาธารณสุขอำเภอสวี',
                      `ผู้อนุมัติ`,
                      `ผู้จ่าย`,

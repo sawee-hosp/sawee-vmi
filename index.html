@@ -2748,6 +2748,7 @@ const AdminConfigView = ({ ctx }) => {
           });
         };
 
+        // ⭐️ แก้ไขให้ระบบค้นหายา ใช้ค่า fuzzy มาร่วมค้นหาด้วย
         const filteredDrugs = ctx.appDb.drugs.filter(d => 
           (d.drug_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
           (d.drug_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -2789,7 +2790,7 @@ const AdminConfigView = ({ ctx }) => {
                       <td className="p-4 font-bold text-slate-800">{d.drug_name}</td>
                       <td className="p-4 whitespace-normal">
                         <div className="flex flex-wrap gap-1 max-w-[250px]">
-                           {/* ⭐️ ปรับแสดง Fuzzy แบบป้ายในตาราง */}
+                           {/* ⭐️ แสดง Fuzzy แบบป้ายในตาราง */}
                            {d.fuzzy ? d.fuzzy.split(',').filter(f=>f.trim()!=='').map((f, i) => <span key={i} className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded border border-slate-200">{f.trim()}</span>) : '-'}
                         </div>
                       </td>
@@ -2808,6 +2809,7 @@ const AdminConfigView = ({ ctx }) => {
                       </td>
                     </tr>
                   ))}
+                  {filteredDrugs.length === 0 && <tr><td colSpan="9" className="text-center p-8 text-slate-400 font-bold">ไม่พบข้อมูลยา</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -3563,7 +3565,7 @@ const AdminConfigView = ({ ctx }) => {
         </div>
       );
     };
-
+    
 const App = () => {
       const [currentView, setCurrentView] = useState('login');
       const [toast, setToast] = useState(null);

@@ -1164,22 +1164,30 @@ const CreateReqView = ({ ctx }) => {
             }
           });
 
+          // ⭐️ อัปเกรดระบบ Fuzzy Logic ให้รัดกุมขึ้น
           const normalize = (str) => String(str).toLowerCase().replace(/[\s\-\.\(\)]/g, '');
           extracted = extracted.map(item => {
             const normRaw = normalize(item.rawName);
             let mappedId = '';
+            
+            // 1. ตรวจสอบแบบ Exact Match ก่อน (ปลอดภัยที่สุด)
             let matched = ctx.appDb.drugs.find(d => {
                const normSys = normalize(d.drug_name);
-               const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize) : [];
+               const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize).filter(f => f !== '') : [];
                return normSys === normRaw || fuzzyArr.includes(normRaw);
             });
+            
+            // 2. ถ้าไม่เจอแบบ Exact Match ถึงจะยอมให้ใช้ Partial Match แต่มีเงื่อนไขว่าความยาวต้อง > 5 อักษร
             if (!matched) {
               matched = ctx.appDb.drugs.find(d => {
                  const normSys = normalize(d.drug_name);
-                 const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize) : [];
-                 return normSys.includes(normRaw) || normRaw.includes(normSys) || fuzzyArr.some(f => normRaw.includes(f));
+                 const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize).filter(f => f !== '') : [];
+                 
+                 if (normSys.length > 5 && (normRaw.includes(normSys) || normSys.includes(normRaw))) return true;
+                 return fuzzyArr.some(f => f.length > 5 && (normRaw.includes(f) || f.includes(normRaw)));
               });
             }
+            
             if (matched) mappedId = matched.drug_id; 
             return { ...item, mappedDrugId: mappedId };
           });
@@ -1247,7 +1255,6 @@ const CreateReqView = ({ ctx }) => {
         setItems(newItems);
       };
 
-      // ⭐️ ฟังก์ชันลบรายการออกจากใบเบิก (ไม่ลบคลัง)
       const handleDeleteItem = (drugId) => {
          ctx.setConfirmDialog({
            title: 'ยืนยันลบออกจากใบเบิก',
@@ -1307,7 +1314,7 @@ const CreateReqView = ({ ctx }) => {
                   const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
                   const drugObj = ctx.appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
                   if(drugObj) {
-                     const existingFuzzy = drugObj.fuzzy ? drugObj.fuzzy.split(',').map(f=>f.trim().toLowerCase()) : [];
+                     const existingFuzzy = drugObj.fuzzy ? String(drugObj.fuzzy).split(',').map(f=>f.trim().toLowerCase()) : [];
                      const rawLower = item.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
                      if(!existingFuzzy.includes(rawLower)) {
                         batch.update(drugRef, { fuzzy: drugObj.fuzzy ? `${drugObj.fuzzy},${item.rawName}` : item.rawName });
@@ -1335,7 +1342,7 @@ const CreateReqView = ({ ctx }) => {
                   const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
                   const drugObj = ctx.appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
                   if(drugObj) {
-                     const existingFuzzy = drugObj.fuzzy ? drugObj.fuzzy.split(',').map(f=>f.trim().toLowerCase()) : [];
+                     const existingFuzzy = drugObj.fuzzy ? String(drugObj.fuzzy).split(',').map(f=>f.trim().toLowerCase()) : [];
                      const rawLower = item.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
                      if(!existingFuzzy.includes(rawLower)) {
                         batch.update(drugRef, { fuzzy: drugObj.fuzzy ? `${drugObj.fuzzy},${item.rawName}` : item.rawName });
@@ -1511,7 +1518,6 @@ const CreateReqView = ({ ctx }) => {
                   {showCalc && <th className="p-3 text-center border-l border-slate-600 text-amber-300 font-bold">ยอดต้องเติม<br/>เต็มหน่วย</th>}
                   <th className="p-3 text-center border-l border-slate-600 bg-indigo-900 text-white font-bold w-24">ขอเพิ่ม(ย่อย)</th>
                   <th className="p-3 text-center border-l border-slate-600 bg-emerald-900 text-emerald-300 font-extrabold text-[14px]">ยอดเบิกรอบนี้<br/>แพ็ค(ย่อย)</th>
-                  {/* ⭐️ ปุ่มถังขยะ */}
                   <th className="p-3 text-center border-l border-slate-600 bg-red-900 text-white font-bold w-12"><i className="fa-solid fa-trash"></i></th>
                 </tr>
               </thead>
@@ -1528,7 +1534,6 @@ const CreateReqView = ({ ctx }) => {
                       <td className="p-3 font-bold text-slate-800">
                          {item.name} 
                          <span className="text-xs font-normal text-slate-400 ml-1">[{item.drugId}]</span>
-                         {/* ⭐️ ป้าย (ขอเพิ่ม) สีแดง */}
                          {(item.requestMore > 0 || item.isNewDrug || item.isAdjusted) && <span className="text-red-600 font-bold ml-1 text-[11px] border border-red-200 bg-red-50 px-1 rounded">(ขอเพิ่ม)</span>}
                          {isVaccine && <span className="ml-2 text-xs font-bold text-red-500 border border-red-200 bg-white px-2 py-0.5 rounded"><i className="fa-solid fa-ban"></i> ไม่ร่วมรายการ</span>}
                       </td>
@@ -1557,7 +1562,6 @@ const CreateReqView = ({ ctx }) => {
                       <td className="p-3 text-center font-black text-emerald-700 bg-emerald-50/30 border-l border-slate-100 text-[15px]">
                          {isVaccine ? '0' : formatQty(item.dispenseQty, item.packSize)}
                       </td>
-                      {/* ⭐️ ปุ่มลบออกจากใบเบิก (ไม่ลบออกจากคลัง) */}
                       <td className="p-3 text-center bg-red-50/20 border-l border-slate-100">
                          <button onClick={() => handleDeleteItem(item.drugId)} className="text-slate-400 hover:text-red-600 transition p-1.5 rounded hover:bg-red-100"><i className="fa-solid fa-trash"></i></button>
                       </td>
@@ -2617,12 +2621,22 @@ const ViewReqView = ({ ctx }) => {
         );
     };
 
-    const AdminConfigView = ({ ctx }) => {
+const AdminConfigView = ({ ctx }) => {
       const [activeTab, setActiveTab] = useState(ctx.adminActiveTab || 'drugs');
       const [editTarget, setEditTarget] = useState(null); 
       const [isSaving, setIsSaving] = useState(false);
+      
+      const [fuzzyList, setFuzzyList] = useState([]); // ⭐️ State สำหรับระบบ Badge ของ Fuzzy
 
       useEffect(() => { ctx.setAdminActiveTab(activeTab); }, [activeTab]);
+
+      // ⭐️ ดึง Fuzzy เข้า State แยกต่างหากเมื่อเปิดกล่องแก้ข้อมูลยา
+      useEffect(() => {
+         if (editTarget && editTarget.col === 'master_drugs') {
+             const existingFuzzy = editTarget.data.fuzzy ? String(editTarget.data.fuzzy).split(',').map(f => f.trim()).filter(f => f !== '') : [];
+             setFuzzyList([...new Set(existingFuzzy)]);
+         }
+      }, [editTarget]);
 
       const executeDelete = async (col, id) => {
         try {
@@ -2648,7 +2662,9 @@ const ViewReqView = ({ ctx }) => {
         
         if (editTarget.col === 'master_drugs') {
            docId = data.drug_id;
-           payload = { drug_id: data.drug_id, drug_name: data.drug_name, type: data.type, pack_size: Number(data.pack_size) || 1, price: Number(data.price) || 0, unit_id: data.unit_id, unpacked: data.unpacked === "true", fuzzy: data.fuzzy || '' };
+           // ⭐️ กรองคำพ้องที่ว่างและคำซ้ำออกก่อนเซฟ
+           const finalFuzzy = [...new Set(fuzzyList.map(f=>f.trim()).filter(f=>f!==''))].join(',');
+           payload = { drug_id: data.drug_id, drug_name: data.drug_name, type: data.type, pack_size: Number(data.pack_size) || 1, price: Number(data.price) || 0, unit_id: data.unit_id, unpacked: data.unpacked === "true", fuzzy: finalFuzzy };
         } else if (editTarget.col === 'master_unit') {
            docId = data.unit_id; payload = { unit_id: data.unit_id, unit_name: data.unit_name };
         } else if (editTarget.col === 'master_drug_types') {
@@ -2667,10 +2683,9 @@ const ViewReqView = ({ ctx }) => {
         <button onClick={()=>setActiveTab(id)} className={`px-4 py-3 font-bold rounded-t-xl transition border-b-4 ${activeTab === id ? 'bg-white text-emerald-700 border-emerald-500' : 'bg-slate-100 text-slate-500 border-transparent hover:bg-slate-200'}`}><i className={`fa-solid ${icon} mr-2`}></i> {label}</button>
       );
 
-const TypeManager = () => {
+      const TypeManager = () => {
          const types = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
 
-         // ⭐️ ฟังก์ชันสำหรับลบหมวดยา
          const deleteType = async (typeId) => {
              try {
                  await db.collection('config').doc('drug_types').update({
@@ -2697,7 +2712,6 @@ const TypeManager = () => {
                          <td className="p-4 font-bold text-slate-800">{types[k]}</td>
                          <td className="p-4 text-center space-x-2">
                            <button onClick={()=>setEditTarget({ col: 'master_drug_types', data: {type_id: k, type_name: types[k]}, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                           {/* ⭐️ ปุ่มลบหมวดยา */}
                            <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบหมวดหมู่ ${types[k]} ใช่หรือไม่?`, onConfirm: ()=>deleteType(k), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                          </td>
                        </tr>
@@ -2755,7 +2769,7 @@ const TypeManager = () => {
             <div className="flex justify-between items-center mb-4 gap-4">
                <div className="relative w-full max-w-sm">
                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
-                 <input type="text" placeholder="ค้นหารายการยา..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:border-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                 <input type="text" placeholder="ค้นหารายการยา หรือ พิมพ์คำพ้อง (Fuzzy)..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:border-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
                </div>
                <button onClick={()=>setEditTarget({ col: 'master_drugs', data: {}, isNew: true })} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shrink-0 hover:scale-105 transition">
                  <i className="fa-solid fa-plus mr-1"></i> เพิ่มรายการยา
@@ -2773,7 +2787,12 @@ const TypeManager = () => {
                       <td className="p-4 font-mono text-slate-500">{d.drug_id}</td>
                       <td className="p-4 font-bold text-slate-600">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type] || DEFAULT_DRUG_TYPES['1']}</td>
                       <td className="p-4 font-bold text-slate-800">{d.drug_name}</td>
-                      <td className="p-4 text-xs text-slate-500 max-w-[150px] truncate" title={d.fuzzy}>{d.fuzzy || '-'}</td>
+                      <td className="p-4 whitespace-normal">
+                        <div className="flex flex-wrap gap-1 max-w-[250px]">
+                           {/* ⭐️ ปรับแสดง Fuzzy แบบป้ายในตาราง */}
+                           {d.fuzzy ? d.fuzzy.split(',').filter(f=>f.trim()!=='').map((f, i) => <span key={i} className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded border border-slate-200">{f.trim()}</span>) : '-'}
+                        </div>
+                      </td>
                       <td className="p-4 text-center font-medium text-slate-600">{d.pack_size}</td>
                       <td className="p-4 text-center">
                          {(() => {
@@ -3390,10 +3409,38 @@ const TypeManager = () => {
                         <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อยา</label>
                         <input name="drug_name" defaultValue={editTarget.data.drug_name} placeholder="ชื่อยา" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                       </div>
+                      
+                      {/* ⭐️ แก้ไข UI สำหรับเพิ่ม/ลบ Fuzzy ทีละคำ */}
                       <div>
-                        <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อพ้อง (Fuzzy) - คั่นด้วยลูกน้ำ</label>
-                        <input name="fuzzy" defaultValue={editTarget.data.fuzzy} placeholder="เช่น พารา, paracetamol tab" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" />
+                        <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อพ้อง (Fuzzy)</label>
+                        <div className="p-3 border rounded-xl bg-slate-50 focus-within:ring-2 focus-within:ring-emerald-500 flex flex-wrap gap-2 items-center">
+                           {fuzzyList.map((f, idx) => (
+                              <span key={idx} className="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-1 rounded flex items-center gap-1 border border-emerald-200">
+                                 {f}
+                                 <button type="button" onClick={() => setFuzzyList(prev => prev.filter((_, i) => i !== idx))} className="text-emerald-600 hover:text-red-500 focus:outline-none"><i className="fa-solid fa-xmark"></i></button>
+                              </span>
+                           ))}
+                           <input 
+                              type="text" 
+                              placeholder="พิมพ์คำค้นหาแล้วกด Enter..." 
+                              className="flex-grow bg-transparent outline-none min-w-[150px] text-sm" 
+                              onKeyDown={(e) => {
+                                 if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    const val = e.target.value.trim();
+                                    if (val && !fuzzyList.includes(val)) {
+                                       setFuzzyList([...fuzzyList, val]);
+                                       e.target.value = '';
+                                    }
+                                 }
+                              }}
+                           />
+                        </div>
+                        {/* ⭐️ Hidden Input ส่งค่า Fuzzy ที่ร้อยด้วยเครื่องหมายลูกน้ำ กลับไปยัง Form */}
+                        <input type="hidden" name="fuzzy" value={fuzzyList.join(',')} />
+                        <p className="text-[10px] text-slate-400 mt-1">พิมพ์ข้อความแล้วกด Enter เพื่อเพิ่มคำ, กดเครื่องหมาย <i className="fa-solid fa-xmark"></i> เพื่อลบคำที่ไม่ต้องการ</p>
                       </div>
+                      
                       <div className="flex gap-4">
                         <div className="w-1/2">
                           <label className="text-sm font-bold text-slate-600 block mb-1">หมวดหมู่</label>

@@ -152,7 +152,8 @@
        return `${p}(${r})`;
     };
 
-    const APP_SCHEMA_VERSION = 4;
+    const APP_SCHEMA_VERSION = 5;
+    const APP_VERSION = '3.4.0-production';
     const MAX_BATCH_WRITES = 400;
     let fuzzyAutoCleanDone = false;
     const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -164,31 +165,42 @@
 
     const toNonNegativeNumber = (value, fallback = 0) => Math.max(0, toSafeNumber(value, fallback));
     const toNonNegativeInt = (value, fallback = 0) => Math.max(0, Math.round(toSafeNumber(value, fallback)));
-    const safePackSize = (value) => Math.max(1, toSafeNumber(value, 1));
+    const safePackSize = (value) => Math.max(1, Math.round(toSafeNumber(value, 1)));
     const safeText = (value, fallback = '') => String(value ?? fallback).trim();
-    const normalizeForMatch = (value) => String(value ?? '').toLowerCase().replace(/[\s\-\.\(\)]/g, '');
 
-    // ล้าง fuzzy ซ้ำโดยคงคำแรกไว้ (ตัดช่องว่างหัว/ท้าย และเทียบแบบไม่สนตัวพิมพ์ใหญ่/เล็ก)
-    const cleanFuzzyAliases = (aliases) => {
+    // Normalization กลางสำหรับ fuzzy/matching: ไม่สนตัวพิมพ์เล็ก-ใหญ่, ช่องว่าง และเครื่องหมายคั่นทั่วไป
+    // แต่ยังคงตัวอักษร/ตัวเลขไว้ จึงไม่รวมความแรงยา 20 mg กับ 250 mg เข้าด้วยกัน
+    const normalizeForMatch = (value) => String(value ?? '')
+      .normalize('NFKC')
+      .toLocaleLowerCase('th-TH')
+      .replace(/\s+/g, '')
+      .replace(/[\-_.()\/\\]+/g, '');
+
+    // ล้าง fuzzy ซ้ำโดยคงคำแรกไว้ และตัด alias ที่ซ้ำกับชื่อยาหลักเพราะค้นจาก drug_name ได้อยู่แล้ว
+    const cleanFuzzyAliases = (aliases, canonicalName = '') => {
       const out = [];
       const seen = new Set();
+      const canonicalKey = normalizeForMatch(canonicalName);
       (Array.isArray(aliases) ? aliases : String(aliases || '').split(',')).forEach(raw => {
         const text = safeText(raw);
         if (!text) return;
-        const key = text.toLocaleLowerCase('th-TH');
-        if (seen.has(key)) return;
+        const key = normalizeForMatch(text);
+        if (!key || key === canonicalKey || seen.has(key)) return;
         seen.add(key);
         out.push(text);
       });
       return out;
     };
 
-    // รอบจ่ายสะดวก (หน่วยย่อย): ถ้ากำหนด dispense_step จะปัดจำนวนจ่ายขึ้นตามค่านี้
-    // ถ้าไม่กำหนด: ยาแตกย่อย = 1 หน่วย, ยาไม่แตกย่อย = pack size เดิม
+    // รอบจ่ายสะดวก (หน่วยย่อย)
+    // กฎสำคัญ: ถ้า "ห้ามแตกย่อย" รอบจ่ายต้องเป็นจำนวนเท่าของ pack เสมอ แม้ตั้ง dispense_step ผิดไว้ในฐานเก่า
     const getDispenseStep = (item) => {
+      const pack = safePackSize(item?.packSize ?? item?.pack_size);
+      const isUnpacked = !!(item?.isUnpacked ?? item?.unpacked);
       const explicit = toNonNegativeNumber(item?.dispenseStep ?? item?.dispense_step, 0);
-      if (explicit > 0) return explicit;
-      return item?.isUnpacked ? 1 : safePackSize(item?.packSize ?? item?.pack_size);
+      if (isUnpacked) return explicit > 0 ? explicit : 1;
+      if (explicit > 0) return Math.max(pack, Math.ceil(explicit / pack) * pack);
+      return pack;
     };
 
     // ตัวคูณยอดใช้จากไฟล์ต้นทาง (เช่น รบ.301/JHCIS) -> หน่วยย่อยภายในระบบ
@@ -210,9 +222,49 @@
       return Math.ceil(safeNeed / step) * step;
     };
 
+    // Lock ชั้นสุดท้ายสำหรับจำนวนจ่าย: ยาห้ามแตกย่อยจะไม่มีทางเหลือเศษ pack
+    const normalizeDispenseQty = (qty, item) => {
+      if (isNonBillableInRequisition(item)) return 0;
+      const safeQty = toNonNegativeNumber(qty);
+      if (safeQty <= 0) return 0;
+      return roundDispenseQty(safeQty, item);
+    };
+
+    const isDispenseQtyLockedValid = (qty, item) => {
+      const safeQty = toNonNegativeNumber(qty);
+      if (safeQty === 0 || item?.isUnpacked) return true;
+      const pack = safePackSize(item?.packSize ?? item?.pack_size);
+      return Math.abs((safeQty / pack) - Math.round(safeQty / pack)) < 1e-9;
+    };
+
     const isNonBillableInRequisition = (item) => item?.type === '6' || !!item?.isDisabledForHospital;
+
+    // ใช้ทุกครั้งก่อนบันทึก/แสดงใบเบิก เพื่อไม่ให้ข้อมูลจาก UI หรือข้อมูลเก่าหลุดกฎการแตกย่อย
+    const lockRequisitionItem = (rawItem) => {
+      const item = { ...rawItem };
+      item.packSize = safePackSize(item.packSize ?? item.pack_size);
+      item.isUnpacked = !!(item.isUnpacked ?? item.unpacked);
+      item.dispenseStep = toNonNegativeNumber(item.dispenseStep ?? item.dispense_step, 0);
+      item.prevExcess = toSafeNumber(item.prevExcess);
+      item.usage = toNonNegativeNumber(item.usage);
+      item.netNeed = toNonNegativeNumber(item.netNeed);
+      item.targetVMI = toNonNegativeNumber(item.targetVMI);
+
+      if (isNonBillableInRequisition(item)) {
+        item.netNeed = 0;
+        item.dispenseQty = 0;
+        item.dispensePack = 0;
+      } else {
+        item.dispenseQty = normalizeDispenseQty(item.dispenseQty, item);
+        item.dispensePack = item.dispenseQty > 0 ? Math.ceil(item.dispenseQty / item.packSize) : 0;
+      }
+      item.newExcess = item.prevExcess - item.usage + item.dispenseQty;
+      return item;
+    };
+
     const getRequisitionItemValue = (item) => {
       if (isNonBillableInRequisition(item)) return 0;
+      // ใช้ค่าที่บันทึกจริงสำหรับรายงานย้อนหลัง; การ lock ทำก่อน save/approve ไม่แก้ประวัติย้อนหลังเงียบ ๆ
       return (toNonNegativeNumber(item?.dispenseQty) / safePackSize(item?.packSize)) * toNonNegativeNumber(item?.price);
     };
 
@@ -1367,7 +1419,7 @@ const CreateReqView = ({ ctx }) => {
           const pastHistory = m_usages.slice(0,5);
 
           if (existingItem) {
-             return { ...existingItem, isUnpacked, type, price, packSize, dispenseStep, usageMultiplier, isDisabledForHospital, requestMore: existingItem.requestMore || 0, isUnlocked: (existingItem.requestMore > 0), pastHistory };
+             return lockRequisitionItem({ ...existingItem, isUnpacked, type, price, packSize, dispenseStep, usageMultiplier, isDisabledForHospital, requestMore: existingItem.requestMore || 0, isUnlocked: (existingItem.requestMore > 0), pastHistory });
           }
 
           const isVaccine = type === '6';
@@ -1383,7 +1435,20 @@ const CreateReqView = ({ ctx }) => {
         });
 
         existingReqItems.forEach(ex => {
-           if(!generatedList.find(g => g.drugId === ex.drugId)) generatedList.push({...ex, pastHistory: [0,0,0,0,0], requestMore: ex.requestMore || 0, isUnlocked: (ex.requestMore > 0)});
+           if(!generatedList.find(g => g.drugId === ex.drugId)) {
+             const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(ex.drugId));
+             const merged = {
+               ...ex,
+               packSize: safePackSize(drug?.pack_size ?? ex.packSize),
+               isUnpacked: drug ? !!drug.unpacked : !!ex.isUnpacked,
+               type: safeText(drug?.type ?? ex.type, '1') || '1',
+               price: toNonNegativeNumber(drug?.price ?? ex.price),
+               dispenseStep: toNonNegativeNumber(drug?.dispense_step ?? ex.dispenseStep ?? ex.dispense_step, 0),
+               usageMultiplier: getUsageMultiplier(drug || ex),
+               pastHistory: [0,0,0,0,0], requestMore: ex.requestMore || 0, isUnlocked: (ex.requestMore > 0)
+             };
+             generatedList.push(lockRequisitionItem(merged));
+           }
         });
         return generatedList.sort(sortDrugs);
       });
@@ -1545,14 +1610,17 @@ const CreateReqView = ({ ctx }) => {
          let uploadFailed = false;
          try {
            const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: safeText(i.rawName), usage: toNonNegativeNumber(i.usage) }));
-           const sanitizedItems = items.map(item => ({
-              drugId: safeText(item.drugId), name: safeText(item.name, 'N/A') || 'N/A', unit: safeText(item.unit),
-              packSize: safePackSize(item.packSize), isUnpacked: !!item.isUnpacked, type: safeText(item.type, '1') || '1', price: toNonNegativeNumber(item.price),
-              dispenseStep: toNonNegativeNumber(item.dispenseStep ?? item.dispense_step, 0), usageMultiplier: getUsageMultiplier(item), isDisabledForHospital: !!item.isDisabledForHospital,
-              prevExcess: toSafeNumber(item.prevExcess), usage: toNonNegativeNumber(item.usage), targetVMI: toNonNegativeNumber(item.targetVMI), netNeed: toNonNegativeNumber(item.netNeed),
-              dispensePack: toNonNegativeNumber(item.dispensePack), dispenseQty: toNonNegativeNumber(item.dispenseQty), newExcess: toSafeNumber(item.newExcess),
-              isSpecial: false, requestMore: toNonNegativeNumber(item.requestMore), isNewDrug: !!item.isNewDrug, isAdjusted: !!item.isAdjusted
-           })).filter(item => item.drugId);
+           const sanitizedItems = items.map(item => {
+              const base = {
+                drugId: safeText(item.drugId), name: safeText(item.name, 'N/A') || 'N/A', unit: safeText(item.unit),
+                packSize: safePackSize(item.packSize), isUnpacked: !!item.isUnpacked, type: safeText(item.type, '1') || '1', price: toNonNegativeNumber(item.price),
+                dispenseStep: toNonNegativeNumber(item.dispenseStep ?? item.dispense_step, 0), usageMultiplier: getUsageMultiplier(item), isDisabledForHospital: !!item.isDisabledForHospital,
+                prevExcess: toSafeNumber(item.prevExcess), usage: toNonNegativeNumber(item.usage), targetVMI: toNonNegativeNumber(item.targetVMI), netNeed: toNonNegativeNumber(item.netNeed),
+                dispensePack: toNonNegativeNumber(item.dispensePack), dispenseQty: toNonNegativeNumber(item.dispenseQty), newExcess: toSafeNumber(item.newExcess),
+                isSpecial: false, requestMore: toNonNegativeNumber(item.requestMore), isNewDrug: !!item.isNewDrug, isAdjusted: !!item.isAdjusted
+              };
+              return lockRequisitionItem(base);
+           }).filter(item => item.drugId);
 
            if (sanitizedItems.some(i => i.packSize <= 0 || !Number.isFinite(i.usage) || !Number.isFinite(i.dispenseQty) || !Number.isFinite(i.newExcess))) {
              throw new Error('พบข้อมูลจำนวนยาที่ไม่ถูกต้อง กรุณาตรวจสอบรายการก่อนส่ง');
@@ -1622,10 +1690,10 @@ const CreateReqView = ({ ctx }) => {
                Object.entries(grouped).forEach(([drugId, aliases]) => {
                  const drugObj = ctx.appDb.drugs.find(d => String(d.drug_id) === String(drugId));
                  if (!drugObj) return;
-                 const currentAliases = cleanFuzzyAliases(drugObj.fuzzy);
+                 const currentAliases = cleanFuzzyAliases(drugObj.fuzzy, drugObj.drug_name);
                  const seen = new Set(currentAliases.map(normalizeForMatch));
                  aliases.forEach(a => { if (a && !seen.has(normalizeForMatch(a))) { currentAliases.push(a); seen.add(normalizeForMatch(a)); } });
-                 ops.push({ type: 'update', ref: db.collection('master_drugs').doc(drugId), data: { fuzzy: cleanFuzzyAliases(currentAliases).join(',') } });
+                 ops.push({ type: 'update', ref: db.collection('master_drugs').doc(drugId), data: { fuzzy: cleanFuzzyAliases(currentAliases, drugObj.drug_name).join(',') } });
                });
                if (ops.length) await executeBatchChunks(ops);
              }
@@ -1671,10 +1739,10 @@ const CreateReqView = ({ ctx }) => {
                Object.entries(grouped).forEach(([drugId, aliases]) => {
                  const drugObj = ctx.appDb.drugs.find(d => String(d.drug_id) === String(drugId));
                  if (!drugObj) return;
-                 const currentAliases = cleanFuzzyAliases(drugObj.fuzzy);
+                 const currentAliases = cleanFuzzyAliases(drugObj.fuzzy, drugObj.drug_name);
                  const seen = new Set(currentAliases.map(normalizeForMatch));
                  aliases.forEach(a => { if (a && !seen.has(normalizeForMatch(a))) { currentAliases.push(a); seen.add(normalizeForMatch(a)); } });
-                 ops.push({ type: 'update', ref: db.collection('master_drugs').doc(drugId), data: { fuzzy: cleanFuzzyAliases(currentAliases).join(',') } });
+                 ops.push({ type: 'update', ref: db.collection('master_drugs').doc(drugId), data: { fuzzy: cleanFuzzyAliases(currentAliases, drugObj.drug_name).join(',') } });
                });
                if (ops.length) await executeBatchChunks(ops);
              }
@@ -1891,7 +1959,7 @@ const CreateReqView = ({ ctx }) => {
                         )}
                       </td>
                       <td className="p-3 text-center font-black text-emerald-700 bg-emerald-50/30 border-l border-slate-100 text-[15px]">
-                         {(isVaccine || isDisabled) ? '0' : formatQty(item.dispenseQty, item.packSize)}
+                         {(isVaccine || isDisabled) ? '0' : formatQty(lockRequisitionItem(item).dispenseQty, item.packSize)}
                       </td>
                       <td className="p-3 text-center bg-red-50/20 border-l border-slate-100">
                          <button onClick={() => handleDeleteItem(item.drugId)} className="text-slate-400 hover:text-red-600 transition p-1.5 rounded hover:bg-red-100"><i className="fa-solid fa-trash"></i></button>
@@ -2128,22 +2196,22 @@ const ViewReqView = ({ ctx }) => {
       useEffect(() => {
         if(!req) return;
         const merged = (req.items || []).map(item => {
+          // เอกสาร Completed เป็นหลักฐานย้อนหลัง: ห้าม re-normalize/เปลี่ยนราคา/สถานะตาม master ปัจจุบัน
+          if (req.status === 'Completed') return { ...item };
           const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(req.hospitalId) && String(p.drug_id) === String(item.drugId));
           const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(item.drugId));
           const isDisabledForHospital = !!par?.is_disabled;
           const mergedItem = {
             ...item,
+            packSize: safePackSize(drug?.pack_size ?? item.packSize),
+            isUnpacked: drug ? !!drug.unpacked : !!item.isUnpacked,
+            type: safeText(drug?.type ?? item.type, '1') || '1',
+            price: toNonNegativeNumber(drug?.price ?? item.price),
             dispenseStep: toNonNegativeNumber(drug?.dispense_step ?? item.dispenseStep ?? item.dispense_step, 0),
             usageMultiplier: getUsageMultiplier(drug || item),
             isDisabledForHospital
           };
-          if (isDisabledForHospital) {
-            mergedItem.netNeed = 0;
-            mergedItem.dispensePack = 0;
-            mergedItem.dispenseQty = 0;
-            mergedItem.newExcess = toSafeNumber(item.prevExcess) - toNonNegativeNumber(item.usage);
-          }
-          return mergedItem;
+          return lockRequisitionItem(mergedItem);
         });
         setEditableItems(merged);
       }, [req, ctx.appDb.parLevels, ctx.appDb.drugs]);
@@ -2155,9 +2223,34 @@ const ViewReqView = ({ ctx }) => {
       const { fiscalYear, term } = getFiscalInfo(req.month, req.year);
 
       const handleAdjust = (idx, val) => {
-        const qty = parseInt(val) || 0; const newItems = [...editableItems];
-        newItems[idx] = { ...newItems[idx], dispenseQty: qty, dispensePack: Math.ceil(qty / safePackSize(newItems[idx].packSize)), newExcess: (newItems[idx].prevExcess - newItems[idx].usage) + qty, isAdjusted: true };
+        // ระหว่างพิมพ์ให้เก็บค่าชั่วคราวก่อน เพื่อไม่ให้ controlled input เด้งจนพิมพ์เลขหลายหลักไม่ได้
+        const requestedQty = toNonNegativeNumber(val);
+        const newItems = [...editableItems];
+        const current = newItems[idx];
+        if (!current) return;
+        newItems[idx] = {
+          ...current,
+          dispenseQty: requestedQty,
+          dispensePack: requestedQty > 0 ? Math.ceil(requestedQty / safePackSize(current.packSize)) : 0,
+          newExcess: toSafeNumber(current.prevExcess) - toNonNegativeNumber(current.usage) + requestedQty,
+          isAdjusted: true
+        };
         setEditableItems(newItems);
+      };
+
+      const handleAdjustCommit = (idx) => {
+        const newItems = [...editableItems];
+        const current = newItems[idx];
+        if (!current) return;
+        const before = toNonNegativeNumber(current.dispenseQty);
+        const locked = lockRequisitionItem(current);
+        newItems[idx] = locked;
+        setEditableItems(newItems);
+        if (before !== locked.dispenseQty) {
+          ctx.showToast(current.isUnpacked
+            ? `ปรับจำนวนจ่ายเป็น ${locked.dispenseQty} ตามรอบจ่ายที่กำหนด`
+            : `ยานี้ห้ามแตกย่อย: ปรับจำนวนจ่าย ${before} → ${locked.dispenseQty} ให้เป็นเต็ม Pack`);
+        }
       };
 
       // ⭐️ ฟังก์ชันลบรายการยาออกจากใบเบิก (ไม่เอาไปรวมในเอกสาร)
@@ -2305,7 +2398,7 @@ const ViewReqView = ({ ctx }) => {
                 if (!isAdmin && String(current.hospitalId) !== String(ctx.currentUser.hospital_id)) throw new Error('ไม่มีสิทธิ์แก้ไขใบเบิกของหน่วยงานอื่น');
                 const revision = toNonNegativeInt(current.revision, 0) + 1;
                 tx.update(reqRef, {
-                  items: editableItems.map(it => ({ ...it, packSize: safePackSize(it.packSize), dispenseQty: toNonNegativeNumber(it.dispenseQty), dispensePack: toNonNegativeNumber(it.dispensePack), newExcess: toSafeNumber(it.newExcess) })),
+                  items: editableItems.map(it => lockRequisitionItem({ ...it, packSize: safePackSize(it.packSize) })),
                   created_by_name: safeText(reqName),
                   created_by_position: safeText(reqPosition),
                   updated_by_uid: ctx.currentUser.uid,
@@ -2696,9 +2789,9 @@ const ViewReqView = ({ ctx }) => {
                                   <td className="text-center">{formatQty(it.usage, it.packSize)}</td>
                                   <td className="text-center text-blue-700">{formatQty(it.prevExcess - it.usage, it.packSize)}</td>
                                   <td className="text-center font-bold bg-emerald-50/50 no-print">
-                                     {canEdit && !isVaccine && !isDisabled ? <input type="number" className="w-16 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white text-emerald-700" value={it.dispenseQty} onChange={e=>handleAdjust(editableItems.findIndex(x=>x.drugId===it.drugId), e.target.value)} /> : <span>{(isVaccine || isDisabled) ? '0' : formatQty(it.dispenseQty, it.packSize)}</span>}
+                                     {canEdit && !isVaccine && !isDisabled ? <input type="number" min="0" step={getDispenseStep(it)} className="w-20 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white text-emerald-700" value={it.dispenseQty} title={it.isUnpacked ? 'อนุญาตแตกย่อย' : `ห้ามแตกย่อย: ต้องเป็นเท่าของ ${it.packSize} หน่วย (Step ${getDispenseStep(it)})`} onChange={e=>handleAdjust(editableItems.findIndex(x=>x.drugId===it.drugId), e.target.value)} onBlur={()=>handleAdjustCommit(editableItems.findIndex(x=>x.drugId===it.drugId))} /> : <span>{(isVaccine || isDisabled) ? '0' : formatQty(req.status === 'Completed' ? it.dispenseQty : lockRequisitionItem(it).dispenseQty, it.packSize)}</span>}
                                   </td>
-                                  <td className="text-center font-bold hidden print:table-cell">{(isVaccine || isDisabled) ? '0' : formatQty(it.dispenseQty, it.packSize)}</td>
+                                  <td className="text-center font-bold hidden print:table-cell">{(isVaccine || isDisabled) ? '0' : formatQty(req.status === 'Completed' ? it.dispenseQty : lockRequisitionItem(it).dispenseQty, it.packSize)}</td>
                                   <td className="text-right pr-1 text-slate-500">
                                      <span className="no-print">{isVaccine ? (isAdmin ? formatUnitPrice(it.price) : 'ไม่ร่วมระบบเบิก') : isDisabled ? (isAdmin ? formatUnitPrice(it.price) : '-') : formatUnitPrice(it.price)}</span>
                                      <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDisabled ? '-' : formatUnitPrice(it.price)}</span>
@@ -3161,7 +3254,7 @@ const AdminConfigView = ({ ctx }) => {
       // ⭐️ ดึง Fuzzy เข้า State แยกต่างหากเมื่อเปิดกล่องแก้ข้อมูลยา
       useEffect(() => {
          if (editTarget && editTarget.col === 'master_drugs') {
-             const existingFuzzy = cleanFuzzyAliases(editTarget.data.fuzzy);
+             const existingFuzzy = cleanFuzzyAliases(editTarget.data.fuzzy, editTarget.data.drug_name);
              setFuzzyList(existingFuzzy);
          }
       }, [editTarget]);
@@ -3197,12 +3290,22 @@ const AdminConfigView = ({ ctx }) => {
         if (editTarget.col === 'master_drugs') {
            docId = data.drug_id;
            // ⭐️ กรองคำพ้องที่ว่างและคำซ้ำออกก่อนเซฟ
-           const finalFuzzy = cleanFuzzyAliases(fuzzyList).join(',');
+           const finalFuzzy = cleanFuzzyAliases(fuzzyList, data.drug_name).join(',');
+           const packSize = safePackSize(data.pack_size);
+           const unpacked = data.unpacked === "true";
+           const rawDispenseStep = toNonNegativeNumber(data.dispense_step, 0);
+           const lockedDispenseStep = rawDispenseStep > 0
+             ? (unpacked ? rawDispenseStep : Math.ceil(rawDispenseStep / packSize) * packSize)
+             : 0;
            payload = {
              drug_id: safeText(data.drug_id), drug_name: safeText(data.drug_name), type: safeText(data.type, '1') || '1',
-             pack_size: safePackSize(data.pack_size), usage_multiplier: Math.max(1, toNonNegativeNumber(data.usage_multiplier, 1)), dispense_step: toNonNegativeNumber(data.dispense_step, 0),
-             price: toNonNegativeNumber(data.price), unit_id: safeText(data.unit_id), unpacked: data.unpacked === "true", fuzzy: finalFuzzy
+             pack_size: packSize, usage_multiplier: Math.max(1, toNonNegativeNumber(data.usage_multiplier, 1)), dispense_step: lockedDispenseStep,
+             price: toNonNegativeNumber(data.price), unit_id: safeText(data.unit_id), unpacked, fuzzy: finalFuzzy,
+             schema_version: APP_SCHEMA_VERSION
            };
+           if (!unpacked && rawDispenseStep > 0 && lockedDispenseStep !== rawDispenseStep) {
+             ctx.showToast(`ยานี้ห้ามแตกย่อย: รอบจ่าย ${rawDispenseStep} ถูกปรับเป็น ${lockedDispenseStep} ให้ลงตัวกับ Pack ${packSize}`);
+           }
         } else if (editTarget.col === 'master_unit') {
            docId = data.unit_id; payload = { unit_id: data.unit_id, unit_name: data.unit_name };
         } else if (editTarget.col === 'master_drug_types') {
@@ -3273,6 +3376,53 @@ const AdminConfigView = ({ ctx }) => {
 
       const DrugManager = () => {
         const [searchTerm, setSearchTerm] = useState('');
+
+        const requestCleanAllFuzzy = () => {
+          let beforeCount = 0;
+          let afterCount = 0;
+          let changedDrugs = 0;
+          ctx.appDb.drugs.forEach(d => {
+            const before = String(d.fuzzy || '').split(',').map(x => safeText(x)).filter(Boolean);
+            const after = cleanFuzzyAliases(before, d.drug_name);
+            beforeCount += before.length;
+            afterCount += after.length;
+            if (before.join(',') !== after.join(',')) changedDrugs++;
+          });
+          const removed = beforeCount - afterCount;
+          if (removed <= 0) return ctx.showToast('ไม่พบ Fuzzy ซ้ำที่ต้องล้าง');
+
+          ctx.setConfirmDialog({
+            title: 'ล้าง Fuzzy ซ้ำทั้งหมด?',
+            message: `พบ Fuzzy ${beforeCount} รายการ จะลบรายการซ้ำ/รายการที่ซ้ำกับชื่อยาหลัก ${removed} รายการ เหลือ ${afterCount} รายการ กระทบยา ${changedDrugs} รายการ`,
+            icon: 'fa-broom',
+            iconColor: 'text-indigo-500',
+            confirmBtnClass: 'bg-indigo-600 hover:bg-indigo-700',
+            confirmText: 'ล้าง Fuzzy ซ้ำ',
+            onConfirm: async () => {
+              try {
+                const ops = [];
+                ctx.appDb.drugs.forEach(d => {
+                  const before = String(d.fuzzy || '').split(',').map(x => safeText(x)).filter(Boolean);
+                  const after = cleanFuzzyAliases(before, d.drug_name);
+                  if (before.join(',') !== after.join(',')) {
+                    ops.push({
+                      type: 'update',
+                      ref: db.collection('master_drugs').doc(d.drug_id),
+                      data: { fuzzy: after.join(','), fuzzy_cleaned_at: firebase.firestore.FieldValue.serverTimestamp(), schema_version: APP_SCHEMA_VERSION }
+                    });
+                  }
+                });
+                if (ops.length) await executeBatchChunks(ops);
+                await writeAuditLog(ctx.currentUser, 'FUZZY_CLEAN_ALL', 'master_drugs', 'ALL', { before_count: beforeCount, after_count: afterCount, removed_count: removed, changed_drugs: changedDrugs });
+                await ctx.refreshData();
+                ctx.showToast(`ล้าง Fuzzy ซ้ำแล้ว ${removed} รายการ`);
+              } catch (e) {
+                ctx.showToast('ล้าง Fuzzy ไม่สำเร็จ: ' + e.message, 'error');
+              }
+            }
+          });
+        };
+
         const handleCSVUpload = (e) => {
           const file = e.target.files[0];
           if(!file) return;
@@ -3281,12 +3431,18 @@ const AdminConfigView = ({ ctx }) => {
             complete: async (results) => {
               const ops = results.data.map(row => {
                 const isUnpacked = String(row.unpacked).toUpperCase() === 'TRUE';
+                const packSize = safePackSize(row.pack_size);
+                const rawDispenseStep = toNonNegativeNumber(row.dispense_step, 0);
+                const lockedDispenseStep = rawDispenseStep > 0
+                  ? (isUnpacked ? rawDispenseStep : Math.ceil(rawDispenseStep / packSize) * packSize)
+                  : 0;
                 return {
                   type: 'set', ref: db.collection('master_drugs').doc(row.drug_id),
                   data: {
-                    drug_id: row.drug_id, drug_name: row.drug_name, pack_size: Number(row.pack_size) || 1,
+                    drug_id: row.drug_id, drug_name: row.drug_name, pack_size: packSize,
                     unit_id: row.unit_id, price: toNonNegativeNumber(row.price), type: String(row.type) || '1', unpacked: isUnpacked,
-                    usage_multiplier: Math.max(1, toNonNegativeNumber(row.usage_multiplier, 1)), dispense_step: toNonNegativeNumber(row.dispense_step, 0), fuzzy: cleanFuzzyAliases(row.fuzzy).join(',')
+                    usage_multiplier: Math.max(1, toNonNegativeNumber(row.usage_multiplier, 1)), dispense_step: lockedDispenseStep,
+                    fuzzy: cleanFuzzyAliases(row.fuzzy, row.drug_name).join(','), schema_version: APP_SCHEMA_VERSION
                   }
                 };
               }).filter(op => op.data.drug_id);
@@ -3316,14 +3472,19 @@ const AdminConfigView = ({ ctx }) => {
               </label>
             </div>
             
-            <div className="flex justify-between items-center mb-4 gap-4">
+            <div className="flex justify-between items-center mb-4 gap-4 flex-wrap">
                <div className="relative w-full max-w-sm">
                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
                  <input type="text" placeholder="ค้นหารายการยา หรือ พิมพ์คำพ้อง (Fuzzy)..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:border-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
                </div>
-               <button onClick={()=>setEditTarget({ col: 'master_drugs', data: {}, isNew: true })} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shrink-0 hover:scale-105 transition">
-                 <i className="fa-solid fa-plus mr-1"></i> เพิ่มรายการยา
-               </button>
+               <div className="flex gap-2 ml-auto">
+                 <button onClick={requestCleanAllFuzzy} className="bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-3 rounded-xl font-bold shrink-0 hover:bg-indigo-200 transition" title="ลบ Fuzzy ที่ซ้ำกันหลัง normalize โดยไม่ทำงานอัตโนมัติตอน Login">
+                   <i className="fa-solid fa-broom mr-1"></i> ล้าง Fuzzy ซ้ำ
+                 </button>
+                 <button onClick={()=>setEditTarget({ col: 'master_drugs', data: {}, isNew: true })} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shrink-0 hover:scale-105 transition">
+                   <i className="fa-solid fa-plus mr-1"></i> เพิ่มรายการยา
+                 </button>
+               </div>
             </div>
 
             <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
@@ -3340,7 +3501,7 @@ const AdminConfigView = ({ ctx }) => {
                       <td className="p-4 whitespace-normal">
                         <div className="flex flex-wrap gap-1 max-w-[250px]">
                            {/* ⭐️ แสดง Fuzzy แบบป้ายในตาราง */}
-                           {d.fuzzy ? d.fuzzy.split(',').filter(f=>f.trim()!=='').map((f, i) => <span key={i} className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded border border-slate-200">{f.trim()}</span>) : '-'}
+                           {cleanFuzzyAliases(d.fuzzy, d.drug_name).length ? cleanFuzzyAliases(d.fuzzy, d.drug_name).map((f, i) => <span key={i} className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded border border-slate-200">{f}</span>) : '-'}
                         </div>
                       </td>
                       <td className="p-4 text-center font-medium text-slate-600">{d.pack_size}</td>
@@ -4097,7 +4258,7 @@ const AdminConfigView = ({ ctx }) => {
                                     e.preventDefault();
                                     const val = e.target.value.trim();
                                     if (val) {
-                                       setFuzzyList(cleanFuzzyAliases([...fuzzyList, val]));
+                                       setFuzzyList(cleanFuzzyAliases([...fuzzyList, val], editTarget.data.drug_name));
                                        e.target.value = '';
                                     }
                                  }
@@ -4118,7 +4279,7 @@ const AdminConfigView = ({ ctx }) => {
                         </div>
                         <div className="w-1/2">
                           <label className="text-sm font-bold text-slate-600 block mb-1">ขนาดบรรจุ (Pack)</label>
-                          <input name="pack_size" type="number" defaultValue={editTarget.data.pack_size} placeholder="เช่น 100" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                          <input name="pack_size" type="number" min="1" step="1" defaultValue={editTarget.data.pack_size} placeholder="เช่น 100" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                         </div>
                       </div>
                       <div className="mt-2 bg-indigo-50 p-3 rounded-xl border border-indigo-200">
@@ -4143,7 +4304,7 @@ const AdminConfigView = ({ ctx }) => {
                       <div className="mt-2 bg-blue-50 p-3 rounded-xl border border-blue-200">
                          <label className="text-sm font-bold text-blue-800 block mb-1">รอบจ่ายสะดวก (Dispense Step) — หน่วยย่อย</label>
                          <input name="dispense_step" type="number" min="0" step="1" defaultValue={editTarget.data.dispense_step || 0} placeholder="0 = ใช้ค่าอัตโนมัติ" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
-                         <p className="text-[10px] text-blue-600 mt-1">ตัวอย่าง Omeprazole pack 14 แต่ต้องการหยิบครั้งละ 350 หน่วย ให้ใส่ 350; ถ้าใส่ 0 ระบบใช้แบบเดิม</p>
+                         <p className="text-[10px] text-blue-600 mt-1">ตัวอย่าง Omeprazole Pack 14 แต่ต้องการหยิบครั้งละ 350 หน่วย ให้ใส่ 350; ถ้าเป็น “ห้ามแตกย่อย” ระบบบังคับรอบจ่ายให้หาร Pack ลงตัวอัตโนมัติ</p>
                       </div>
                       <div className="mt-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
                          <label className="text-sm font-bold text-slate-600 block mb-1">สถานะแตกย่อย</label>
@@ -4329,7 +4490,7 @@ const App = () => {
           }
 
           setAppDb({
-            drugs: drugsSnap.docs.map(d => ({ id: d.id, ...d.data(), fuzzy: cleanFuzzyAliases(d.data().fuzzy).join(',') })),
+            drugs: drugsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
             hospitals: hospSnap.docs.map(d => ({id: d.id, ...d.data()})),
             units: unitSnap.docs.map(d => ({ id: d.id, ...d.data() })),
             parLevels: parSnap.docs.map(d => ({ id: d.id, ...d.data() })),
@@ -4397,7 +4558,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v3.4 Production</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => setCurrentView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

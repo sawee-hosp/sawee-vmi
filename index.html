@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <title>Sawee Rxfill (VMI Edition)</title>
+  <title>Sawee Rxfill (VMI Edition v3.1 Production)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
   
@@ -100,7 +100,7 @@
   <div id="root" class="flex-grow"></div>
 
   <script type="text/babel" data-presets="react">
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
     const firebaseConfig = {
       apiKey: "AIzaSyAnzXAEkH8Zz0Ur4lCQ00qa4UqYATTikAs",
@@ -142,24 +142,159 @@
     };
 
     const formatQty = (qty, packSize) => {
-       if (!qty || qty <= 0) return '0';
-       const p = Math.floor(qty / packSize);
-       const r = qty % packSize;
+       const safeQty = Number(qty);
+       const safePack = Math.max(1, Number(packSize) || 1);
+       if (!Number.isFinite(safeQty) || safeQty <= 0) return '0';
+       const p = Math.floor(safeQty / safePack);
+       const r = safeQty % safePack;
        if (r === 0) return p.toString();
        if (p === 0) return `(${r})`;
        return `${p}(${r})`;
     };
 
+    const APP_SCHEMA_VERSION = 4;
+    const MAX_BATCH_WRITES = 400;
+    let fuzzyAutoCleanDone = false;
+    const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+    const toSafeNumber = (value, fallback = 0) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
+    const toNonNegativeNumber = (value, fallback = 0) => Math.max(0, toSafeNumber(value, fallback));
+    const toNonNegativeInt = (value, fallback = 0) => Math.max(0, Math.round(toSafeNumber(value, fallback)));
+    const safePackSize = (value) => Math.max(1, toSafeNumber(value, 1));
+    const safeText = (value, fallback = '') => String(value ?? fallback).trim();
+    const normalizeForMatch = (value) => String(value ?? '').toLowerCase().replace(/[\s\-\.\(\)]/g, '');
+
+    // ล้าง fuzzy ซ้ำโดยคงคำแรกไว้ (ตัดช่องว่างหัว/ท้าย และเทียบแบบไม่สนตัวพิมพ์ใหญ่/เล็ก)
+    const cleanFuzzyAliases = (aliases) => {
+      const out = [];
+      const seen = new Set();
+      (Array.isArray(aliases) ? aliases : String(aliases || '').split(',')).forEach(raw => {
+        const text = safeText(raw);
+        if (!text) return;
+        const key = text.toLocaleLowerCase('th-TH');
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(text);
+      });
+      return out;
+    };
+
+    // รอบจ่ายสะดวก (หน่วยย่อย): ถ้ากำหนด dispense_step จะปัดจำนวนจ่ายขึ้นตามค่านี้
+    // ถ้าไม่กำหนด: ยาแตกย่อย = 1 หน่วย, ยาไม่แตกย่อย = pack size เดิม
+    const getDispenseStep = (item) => {
+      const explicit = toNonNegativeNumber(item?.dispenseStep ?? item?.dispense_step, 0);
+      if (explicit > 0) return explicit;
+      return item?.isUnpacked ? 1 : safePackSize(item?.packSize ?? item?.pack_size);
+    };
+
+    // ตัวคูณยอดใช้จากไฟล์ต้นทาง (เช่น รบ.301/JHCIS) -> หน่วยย่อยภายในระบบ
+    // ตัวอย่าง Obimin: ในรายงาน 1 = 1 กระปุก แต่จริงมี 30 เม็ด -> usage_multiplier = 30
+    // ถ้าไฟล์ต้นทางรายงานเป็นหน่วยย่อยอยู่แล้ว ให้ใช้ 1
+    const getUsageMultiplier = (drugOrItem) => {
+      const explicit = toNonNegativeNumber(drugOrItem?.usageMultiplier ?? drugOrItem?.usage_multiplier, 1);
+      return explicit > 0 ? explicit : 1;
+    };
+
+    const convertImportedUsage = (rawUsage, drugOrItem) => {
+      return toNonNegativeNumber(rawUsage) * getUsageMultiplier(drugOrItem);
+    };
+
+    const roundDispenseQty = (need, item) => {
+      const safeNeed = toNonNegativeNumber(need);
+      if (safeNeed <= 0) return 0;
+      const step = Math.max(1, getDispenseStep(item));
+      return Math.ceil(safeNeed / step) * step;
+    };
+
+    const isNonBillableInRequisition = (item) => item?.type === '6' || !!item?.isDisabledForHospital;
+    const getRequisitionItemValue = (item) => {
+      if (isNonBillableInRequisition(item)) return 0;
+      return (toNonNegativeNumber(item?.dispenseQty) / safePackSize(item?.packSize)) * toNonNegativeNumber(item?.price);
+    };
+
+    const formatUnitPrice = (value) => toNonNegativeNumber(value).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 4
+    });
+
+    const buildRequisitionId = (hospitalId, month, year) => {
+      const hosp = String(hospitalId || 'UNKNOWN').replace(/[^A-Za-z0-9_-]/g, '_');
+      return `REQ-${year}-${String(month).padStart(2, '0')}-${hosp}`;
+    };
+
+    const buildTrackingId = (prefix, refId) => {
+      const d = new Date();
+      const ymd = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+      return `${prefix}-${ymd}-${String(refId || '').slice(0,8).toUpperCase()}`;
+    };
+
+    const makeActionToken = () => {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    };
+
+    const buildAuditPayload = (actor, action, targetType, targetId, details = {}) => ({
+      action,
+      target_type: targetType,
+      target_id: String(targetId || ''),
+      actor_uid: actor?.uid || auth.currentUser?.uid || '',
+      actor_name: actor?.name || auth.currentUser?.email || 'Unknown',
+      actor_role: actor?.role || '',
+      actor_hospital_id: actor?.hospital_id || '',
+      details: JSON.parse(JSON.stringify(details || {})),
+      schema_version: APP_SCHEMA_VERSION,
+      created_at: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    const addAuditToBatch = (batch, actor, action, targetType, targetId, details = {}) => {
+      const ref = db.collection('audit_logs').doc();
+      batch.set(ref, buildAuditPayload(actor, action, targetType, targetId, details));
+      return ref;
+    };
+
+    const writeAuditLog = async (actor, action, targetType, targetId, details = {}) => {
+      try {
+        await db.collection('audit_logs').add(buildAuditPayload(actor, action, targetType, targetId, details));
+      } catch (err) {
+        console.warn('Audit log failed:', err);
+      }
+    };
+
     const executeBatchChunks = async (operations) => {
-      const BATCH_SIZE = 450;
-      for (let i = 0; i < operations.length; i += BATCH_SIZE) {
+      for (let i = 0; i < operations.length; i += MAX_BATCH_WRITES) {
         const batch = db.batch();
-        operations.slice(i, i + BATCH_SIZE).forEach(op => {
-          if (op.type === 'set') batch.set(op.ref, op.data, { merge: true });
-          if (op.type === 'update') batch.update(op.ref, op.data);
-          if (op.type === 'delete') batch.delete(op.ref);
+        operations.slice(i, i + MAX_BATCH_WRITES).forEach(op => {
+          if (op.type === 'set') batch.set(op.ref, op.data, op.options || { merge: true });
+          else if (op.type === 'update') batch.update(op.ref, op.data);
+          else if (op.type === 'delete') batch.delete(op.ref);
+          else throw new Error(`Unknown batch operation: ${op.type}`);
         });
         await batch.commit();
+      }
+    };
+
+    const fileToBase64 = (file) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('ไม่สามารถอ่านไฟล์ที่แนบได้'));
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        const comma = result.indexOf(',');
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    const fetchWithTimeout = async (url, options = {}, timeoutMs = 30000) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
       }
     };
 
@@ -295,26 +430,51 @@ const RegisterView = ({ ctx }) => {
       }, []);
 
       const handleRegister = async () => {
-        if(!formData.hospitalId || !formData.name.trim() || !formData.position.trim()) return ctx.showToast('กรุณากรอกข้อมูลให้ครบ', 'error');
+        const email = safeText(formData.email).toLowerCase();
+        const password = String(formData.password || '');
+        const name = safeText(formData.name);
+        const position = safeText(formData.position);
+        const hospitalId = safeText(formData.hospitalId);
+
+        if(!hospitalId || !name || !position || !email || !password) return ctx.showToast('กรุณากรอกข้อมูลให้ครบ', 'error');
+        if(password.length < 6) return ctx.showToast('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร', 'error');
+        if(!hospList.some(h => String(h.hospital_id) === hospitalId)) return ctx.showToast('รพ.สต. ที่เลือกไม่ถูกต้อง', 'error');
+
         setIsSubmitting(true);
+        let userCredential = null;
+        if (ctx.registrationInProgressRef) ctx.registrationInProgressRef.current = true;
         try {
-          const userCredential = await auth.createUserWithEmailAndPassword(formData.email, formData.password);
-          await db.collection('users').doc(userCredential.user.uid).set({ 
-              name: formData.name, 
-              position: formData.position, 
-              hospital_id: formData.hospitalId, 
-              role: 'hospital', 
-              created_at: firebase.firestore.FieldValue.serverTimestamp() 
-          });
+          userCredential = await auth.createUserWithEmailAndPassword(email, password);
+          try {
+            await db.collection('users').doc(userCredential.user.uid).set({
+              email,
+              name,
+              position,
+              hospital_id: hospitalId,
+              role: 'hospital',
+              active: true,
+              schema_version: APP_SCHEMA_VERSION,
+              created_at: firebase.firestore.FieldValue.serverTimestamp(),
+              updated_at: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            await writeAuditLog({ uid: userCredential.user.uid, name, role: 'hospital', hospital_id: hospitalId }, 'USER_REGISTER', 'users', userCredential.user.uid, { email });
+          } catch (profileError) {
+            // createUserWithEmailAndPassword จะล็อกอิน user ใหม่ทันที จึง rollback Auth หากสร้าง profile ไม่สำเร็จ
+            try { await userCredential.user.delete(); } catch (rollbackError) { console.warn('Auth rollback failed:', rollbackError); }
+            throw new Error('สร้างบัญชีเข้าสู่ระบบได้ แต่บันทึกข้อมูลผู้ใช้ไม่สำเร็จ ระบบได้ยกเลิกบัญชีที่สร้างใหม่แล้ว: ' + profileError.message);
+          }
+          await auth.signOut();
           ctx.showToast('ลงทะเบียนสำเร็จ กรุณาล็อกอิน');
           ctx.setCurrentView('login');
-        } catch (error) { 
+        } catch (error) {
           let errorMsg = error.message;
           if (error.code === 'auth/email-already-in-use') errorMsg = 'อีเมลนี้มีในระบบแล้ว';
           else if (error.code === 'auth/weak-password') errorMsg = 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร';
-          ctx.showToast('ลงทะเบียนไม่สำเร็จ: ' + errorMsg, 'error'); 
-        } finally { 
-          setIsSubmitting(false); 
+          else if (error.code === 'auth/invalid-email') errorMsg = 'รูปแบบอีเมลไม่ถูกต้อง';
+          ctx.showToast('ลงทะเบียนไม่สำเร็จ: ' + errorMsg, 'error');
+        } finally {
+          if (ctx.registrationInProgressRef) ctx.registrationInProgressRef.current = false;
+          setIsSubmitting(false);
         }
       };
 
@@ -347,7 +507,9 @@ const RegisterView = ({ ctx }) => {
         if(!formData.name || !formData.position) return ctx.showToast('กรุณากรอกข้อมูลให้ครบ', 'error');
         setIsSaving(true);
         try {
-          await db.collection('users').doc(ctx.currentUser.uid).update(formData);
+          const payload = { name: safeText(formData.name), position: safeText(formData.position), updated_at: firebase.firestore.FieldValue.serverTimestamp() };
+          await db.collection('users').doc(ctx.currentUser.uid).update(payload);
+          await writeAuditLog(ctx.currentUser, 'USER_PROFILE_UPDATE', 'users', ctx.currentUser.uid, { name: payload.name, position: payload.position });
           await ctx.refreshData(); 
           ctx.showToast('อัปเดตข้อมูลส่วนตัวแล้ว'); ctx.setCurrentView('dashboard');
         } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
@@ -389,8 +551,8 @@ const RegisterView = ({ ctx }) => {
       const [adminFilterYear, setAdminFilterYear] = useState(currentYear);
 
       const handleReqAction = () => {
-        if (!currentMonthReq) { ctx.setEditReqId(null); ctx.setCurrentView('create_req'); } 
-        else if (currentMonthReq.status === 'Pending') { ctx.setEditReqId(currentMonthReq.id); ctx.setCurrentView('create_req'); }
+        if (!currentMonthReq) { ctx.setEditReqId(null); ctx.setCurrentView('create_req'); }
+        else if (['Pending','Rejected'].includes(currentMonthReq.status)) { ctx.setEditReqId(currentMonthReq.id); ctx.setCurrentView('create_req'); }
       };
 
       const handleAdminUploadForHosp = (hospId) => {
@@ -413,11 +575,14 @@ const RegisterView = ({ ctx }) => {
               {isHospital && (
                 <button 
                   onClick={handleReqAction} 
-                  disabled={currentMonthReq && currentMonthReq.status === 'Completed'}
-                  className={`px-6 py-3 rounded-xl font-bold shadow-lg transition flex items-center ${currentMonthReq && currentMonthReq.status === 'Completed' ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : currentMonthReq && currentMonthReq.status === 'Pending' ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-amber-200' : 'bg-gradient-main text-white hover:scale-105 shadow-emerald-200'}`}
+                  disabled={currentMonthReq && ['Completed','Approving','ApprovalFailed'].includes(currentMonthReq.status)}
+                  className={`px-6 py-3 rounded-xl font-bold shadow-lg transition flex items-center ${currentMonthReq && ['Completed','Approving','ApprovalFailed'].includes(currentMonthReq.status) ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : currentMonthReq && currentMonthReq.status === 'Pending' ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-amber-200' : currentMonthReq && currentMonthReq.status === 'Rejected' ? 'bg-red-500 text-white hover:bg-red-600 shadow-red-200' : 'bg-gradient-main text-white hover:scale-105 shadow-emerald-200'}`}
                 >
-                  {currentMonthReq && currentMonthReq.status === 'Completed' ? <><i className="fa-solid fa-lock mr-2"></i> เบิกแล้ว (รอรอบหน้า)</> :
-                   currentMonthReq && currentMonthReq.status === 'Pending' ? <><i className="fa-solid fa-pen mr-2"></i> แก้ไข/ตรวจสอบรอบนี้</> : 
+                  {currentMonthReq?.status === 'Completed' ? <><i className="fa-solid fa-lock mr-2"></i> เบิกแล้ว (รอรอบหน้า)</> :
+                   currentMonthReq?.status === 'Approving' ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i> ห้องยากำลังอนุมัติ</> :
+                   currentMonthReq?.status === 'ApprovalFailed' ? <><i className="fa-solid fa-triangle-exclamation mr-2"></i> รอห้องยาแก้การอนุมัติ</> :
+                   currentMonthReq?.status === 'Rejected' ? <><i className="fa-solid fa-rotate-right mr-2"></i> แก้ไขและส่งใหม่</> :
+                   currentMonthReq?.status === 'Pending' ? <><i className="fa-solid fa-pen mr-2"></i> แก้ไข/ตรวจสอบรอบนี้</> :
                    <><i className="fa-solid fa-boxes-packing mr-2"></i> ทำเรื่องเติมยา</>}
                 </button>
               )}
@@ -426,7 +591,7 @@ const RegisterView = ({ ctx }) => {
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 w-full">
             {isHospital && (
-               <div onClick={() => ctx.setCurrentView('create_req')} className={`rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition bg-white hover:bg-slate-50 ${isRequisitionPeriod ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200'}`}>
+               <div onClick={handleReqAction} className={`rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition bg-white hover:bg-slate-50 ${isRequisitionPeriod ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200'}`}>
                  <div className={`p-4 rounded-xl mr-4 ${isRequisitionPeriod ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}><i className="fa-regular fa-calendar-check text-2xl"></i></div>
                  <div>
                     <div className="text-slate-500 font-medium">ปฏิทินเบิกยา (วันที่ 20-31)</div>
@@ -485,7 +650,10 @@ const RegisterView = ({ ctx }) => {
                                   <td className="p-3 text-slate-500">{submitDate}</td>
                                   <td className="p-3 text-center">
                                      {req ? (
-                                        req.status === 'Completed' ? <span className="text-emerald-600 font-bold"><i className="fa-solid fa-check-circle"></i> จัดยาแล้ว</span> : 
+                                        req.status === 'Completed' ? <span className="text-emerald-600 font-bold"><i className="fa-solid fa-check-circle"></i> จัดยาแล้ว</span> :
+                                        req.status === 'Rejected' ? <span className="text-red-600 font-bold"><i className="fa-solid fa-circle-xmark"></i> ไม่อนุมัติ / รอแก้ไข</span> :
+                                        req.status === 'ApprovalFailed' ? <span className="text-red-600 font-bold"><i className="fa-solid fa-triangle-exclamation"></i> อนุมัติไม่สำเร็จ</span> :
+                                        req.status === 'Approving' ? <span className="text-blue-600 font-bold"><i className="fa-solid fa-spinner fa-spin"></i> กำลังอนุมัติ</span> :
                                         <span className="text-amber-500 font-bold"><i className="fa-solid fa-clock"></i> ส่งบิลแล้ว (รอจัด)</span>
                                      ) : <span className="text-slate-400">- ยังไม่ส่ง -</span>}
                                   </td>
@@ -539,13 +707,13 @@ const RegisterView = ({ ctx }) => {
                             <td className="p-4 text-slate-600">{req.created_by_name || '-'} {isAdmin && <span className="text-xs text-indigo-500 block">{ctx.appDb.hospitals.find(h=>h.hospital_id===req.hospitalId)?.hospital_name}</span>}</td>
                             <td className="p-4 text-slate-600">{req.month}/{req.year}</td>
                             <td className="p-4">
-                              <span className={`px-3 py-1 rounded-lg text-xs font-bold ${req.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                {req.status === 'Completed' ? 'สำเร็จ' : 'กำลังดำเนินการ'}
-                              </span>
+                              <span className={`px-3 py-1 rounded-lg text-xs font-bold ${req.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' : req.status === 'Rejected' || req.status === 'ApprovalFailed' ? 'bg-red-100 text-red-700' : req.status === 'Approving' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                                 {req.status === 'Completed' ? 'สำเร็จ' : req.status === 'Rejected' ? 'ไม่อนุมัติ' : req.status === 'ApprovalFailed' ? 'อนุมัติล้มเหลว' : req.status === 'Approving' ? 'กำลังอนุมัติ' : 'รอจัดยา'}
+                               </span>
                             </td>
                             <td className="p-4 text-right flex justify-end gap-2">
                                {req.excel_url && (
-                                  <a href={req.excel_url} target="_blank" className="text-emerald-600 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-semibold transition flex items-center" onClick={(e) => e.stopPropagation()}>
+                                  <a href={req.excel_url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-sm font-semibold transition flex items-center" onClick={(e) => e.stopPropagation()}>
                                     <i className="fa-solid fa-file-excel mr-1"></i> ดูไฟล์ รบ.301
                                   </a>
                                )}
@@ -627,35 +795,66 @@ const ReturnDrugView = ({ ctx }) => {
       };
 
       const handleSubmit = async () => {
-          const toReturn = items.filter(i => i.selected && i.returnQty > 0);
+          const toReturn = items.filter(i => i.selected && toNonNegativeNumber(i.returnQty) > 0);
           if (toReturn.length === 0) return ctx.showToast('กรุณาเลือกรายการที่ต้องการคืนและระบุยอด', 'error');
+          if (toReturn.some(i => !Number.isFinite(Number(i.actualBal)) || Number(i.actualBal) < 0)) return ctx.showToast('ยอดมีจริงต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป', 'error');
 
           setIsSubmitting(true);
           try {
-              const batch = db.batch();
-              const returnId = `RET-${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}-${Math.floor(Math.random()*1000).toString().padStart(3,'0')}`;
-              
+              const returnRef = db.collection('stock_returns').doc();
+              const returnId = buildTrackingId('RET', returnRef.id);
+              const auditRef = db.collection('audit_logs').doc();
+
               const returnDoc = {
-                  id: returnId, hospital_id: hospId,
+                  id: returnId,
+                  hospital_id: hospId,
                   hospital_name: ctx.appDb.hospitals.find(h=>h.hospital_id === hospId)?.hospital_name || hospId,
-                  created_by: ctx.currentUser.name, created_at: firebase.firestore.FieldValue.serverTimestamp(),
+                  created_by: ctx.currentUser.name,
+                  created_by_uid: ctx.currentUser.uid,
+                  created_at: firebase.firestore.FieldValue.serverTimestamp(),
                   items: toReturn.map(i => ({
-                      drugId: i.drugId, name: i.name, unit: i.unit, packSize: i.packSize, price: i.price,
-                      currentBal: i.currentBal, actualBal: i.actualBal, returnQty: i.returnQty,
-                      returnValue: (i.returnQty / i.packSize) * i.price
+                      drugId: i.drugId, name: i.name, unit: i.unit, packSize: safePackSize(i.packSize), price: toNonNegativeNumber(i.price),
+                      currentBal: toNonNegativeNumber(i.currentBal), actualBal: toNonNegativeNumber(i.actualBal), returnQty: toNonNegativeNumber(i.returnQty),
+                      returnValue: (toNonNegativeNumber(i.returnQty) / safePackSize(i.packSize)) * toNonNegativeNumber(i.price)
                   })),
-                  totalValue: toReturn.reduce((sum, i) => sum + ((i.returnQty / i.packSize) * i.price), 0),
-                  status: 'Completed'
+                  totalValue: toReturn.reduce((sum, i) => sum + ((toNonNegativeNumber(i.returnQty) / safePackSize(i.packSize)) * toNonNegativeNumber(i.price)), 0),
+                  status: 'Completed',
+                  schema_version: APP_SCHEMA_VERSION
               };
 
-              batch.set(db.collection('stock_returns').doc(returnId), returnDoc);
-              toReturn.forEach(i => {
-                  batch.set(db.collection('current_excess').doc(`${hospId}_${i.drugId}`), {
-                      excess_balance: i.currentBal - i.returnQty, last_updated: firebase.firestore.FieldValue.serverTimestamp()
-                  }, { merge: true });
+              await db.runTransaction(async (tx) => {
+                  const balanceRefs = toReturn.map(i => db.collection('current_excess').doc(`${hospId}_${i.drugId}`));
+                  const balanceSnaps = await Promise.all(balanceRefs.map(ref => tx.get(ref)));
+
+                  balanceSnaps.forEach((snap, idx) => {
+                      const item = toReturn[idx];
+                      const latest = snap.exists ? toNonNegativeNumber(snap.data().excess_balance) : 0;
+                      const screenBalance = toNonNegativeNumber(item.currentBal);
+                      const qty = toNonNegativeNumber(item.returnQty);
+                      if (Math.abs(latest - screenBalance) > 0.000001) {
+                          throw new Error(`ยอด ${item.name} ถูกเปลี่ยนโดยผู้ใช้อื่นแล้ว (ล่าสุด ${latest}) กรุณารีเฟรชและทำรายการใหม่`);
+                      }
+                      if (qty > latest) throw new Error(`จำนวนคืน ${item.name} มากกว่ายอดล่าสุดในระบบ`);
+                  });
+
+                  tx.set(returnRef, returnDoc);
+                  toReturn.forEach((item, idx) => {
+                      const latest = toNonNegativeNumber(item.currentBal);
+                      const qty = toNonNegativeNumber(item.returnQty);
+                      tx.set(balanceRefs[idx], {
+                          hospital_id: hospId,
+                          drug_id: item.drugId,
+                          excess_balance: Math.max(0, latest - qty),
+                          last_updated: firebase.firestore.FieldValue.serverTimestamp()
+                      }, { merge: true });
+                  });
+                  tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'STOCK_RETURN', 'stock_returns', returnId, {
+                      hospital_id: hospId,
+                      item_count: toReturn.length,
+                      total_value: returnDoc.totalValue
+                  }));
               });
 
-              await batch.commit();
               ctx.showToast('บันทึกการคืนยาสำเร็จ ระบบตัดสต๊อกเรียบร้อยแล้ว');
               await ctx.refreshData();
               setPrintData({...returnDoc, created_at_date: new Date()});
@@ -872,23 +1071,61 @@ const ReturnDrugView = ({ ctx }) => {
          e.preventDefault();
          const fd = new FormData(e.target);
          const data = Object.fromEntries(fd);
-         if(!data.reason.trim()) return ctx.showToast('ระบุเหตุผลด้วย', 'error');
+         const reason = safeText(data.reason);
+         const newBalance = Number(data.new_balance);
+         if(!reason) return ctx.showToast('ระบุเหตุผลด้วย', 'error');
+         if(!Number.isFinite(newBalance) || newBalance < 0) return ctx.showToast('ยอดเครดิตใหม่ต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป', 'error');
+
          try {
-            const batch = db.batch();
-            const adjStatus = isAdmin ? 'Approved' : 'Pending';
-            batch.set(db.collection('stock_adjustments').doc(), { hospital_id: hospId, drug_id: editItem.drugId, old_balance: editItem.currentBal, new_balance: Number(data.new_balance), reason: data.reason, user_name: ctx.currentUser.name, status: adjStatus, date: firebase.firestore.FieldValue.serverTimestamp() });
-            if (isAdmin) batch.set(db.collection('current_excess').doc(`${hospId}_${editItem.drugId}`), { hospital_id: hospId, drug_id: editItem.drugId, excess_balance: Number(data.new_balance), last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
-            await batch.commit();
+            const adjRef = db.collection('stock_adjustments').doc();
+            const currentRef = db.collection('current_excess').doc(`${hospId}_${editItem.drugId}`);
+            const payload = {
+              hospital_id: hospId,
+              drug_id: editItem.drugId,
+              old_balance: toNonNegativeNumber(editItem.currentBal),
+              new_balance: newBalance,
+              reason,
+              user_name: ctx.currentUser.name,
+              user_uid: ctx.currentUser.uid,
+              status: isAdmin ? 'Approved' : 'Pending',
+              date: firebase.firestore.FieldValue.serverTimestamp(),
+              schema_version: APP_SCHEMA_VERSION
+            };
+
+            if (isAdmin) {
+              const auditRef = db.collection('audit_logs').doc();
+              await db.runTransaction(async (tx) => {
+                const currentSnap = await tx.get(currentRef);
+                const latest = currentSnap.exists ? toNonNegativeNumber(currentSnap.data().excess_balance) : 0;
+                if (Math.abs(latest - toNonNegativeNumber(editItem.currentBal)) > 0.000001) {
+                  throw new Error(`ยอดสต๊อกถูกเปลี่ยนแล้ว (ล่าสุด ${latest}) กรุณารีเฟรชก่อนปรับใหม่`);
+                }
+                tx.set(adjRef, { ...payload, approved_at: firebase.firestore.FieldValue.serverTimestamp(), approved_by_uid: ctx.currentUser.uid, approved_by_name: ctx.currentUser.name });
+                tx.set(currentRef, { hospital_id: hospId, drug_id: editItem.drugId, excess_balance: newBalance, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'STOCK_ADJUST_ADMIN', 'stock_adjustments', adjRef.id, { drug_id: editItem.drugId, old_balance: latest, new_balance: newBalance, reason }));
+              });
+            } else {
+              const batch = db.batch();
+              batch.set(adjRef, payload);
+              addAuditToBatch(batch, ctx.currentUser, 'STOCK_ADJUST_REQUEST', 'stock_adjustments', adjRef.id, { drug_id: editItem.drugId, old_balance: payload.old_balance, new_balance: newBalance, reason });
+              await batch.commit();
+            }
+
             ctx.showToast(isAdmin ? 'ปรับสต๊อกเรียบร้อยแล้ว' : 'ส่งคำขอปรับสต๊อกแล้ว รออนุมัติ');
             setShowModal(false); await ctx.refreshData();
          } catch(err) { ctx.showToast(err.message, 'error'); }
       };
 
       const handleDelete = async (drugId) => {
+         const stockItem = drugList.find(i => String(i.drugId) === String(drugId));
+         if (stockItem && Math.abs(toSafeNumber(stockItem.currentBal)) > 0.000001) {
+           return ctx.showToast('ไม่สามารถนำยาออกจากคลังได้ขณะที่เครดิตคงเหลือไม่เป็น 0 กรุณาปรับ/คืนยาให้เหลือ 0 ก่อน', 'error');
+         }
          try {
             const batch = db.batch();
             batch.delete(db.collection('config_par').doc(`${hospId}_${drugId}`));
             batch.delete(db.collection('current_excess').doc(`${hospId}_${drugId}`));
+            addAuditToBatch(batch, ctx.currentUser, 'STOCK_ITEM_REMOVE', 'config_par', `${hospId}_${drugId}`, { hospital_id: hospId, drug_id: drugId });
             await batch.commit();
             ctx.showToast('นำออกจากคลังเรียบร้อย'); await ctx.refreshData();
          } catch(err) { ctx.showToast(err.message, 'error'); }
@@ -1016,12 +1253,22 @@ const ReturnDrugView = ({ ctx }) => {
                 {editItem.isNew ? (
                    <form onSubmit={async (e) => {
                       e.preventDefault();
-                      const fd = new FormData(e.target); const drugId = fd.get('drug_id'); const target = Number(fd.get('target')); const current = Number(fd.get('current'));
-                      if(!drugId) return;
-                      const batch = db.batch();
-                      batch.set(db.collection('config_par').doc(`${hospId}_${drugId}`), { hospital_id: hospId, drug_id: drugId, par_qty: target });
-                      batch.set(db.collection('current_excess').doc(`${hospId}_${drugId}`), { hospital_id: hospId, drug_id: drugId, excess_balance: current, last_updated: firebase.firestore.FieldValue.serverTimestamp() });
-                      await batch.commit(); ctx.showToast('เพิ่มยาลงคลังสำเร็จ'); setShowModal(false); ctx.refreshData();
+                      const fd = new FormData(e.target);
+                      const drugId = safeText(fd.get('drug_id'));
+                      const target = Number(fd.get('target'));
+                      const current = Number(fd.get('current'));
+                      if(!drugId) return ctx.showToast('กรุณาเลือกรหัสยา', 'error');
+                      if(!ctx.appDb.drugs.some(d => String(d.drug_id) === drugId)) return ctx.showToast('ไม่พบรหัสยานี้ในฐานข้อมูลกลาง', 'error');
+                      if(drugList.some(d => String(d.drugId) === drugId)) return ctx.showToast('ยานี้มีอยู่ในคลังแล้ว', 'error');
+                      if(!Number.isFinite(target) || target < 0 || !Number.isFinite(current) || current < 0) return ctx.showToast('Target และเครดิตตั้งต้นต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป', 'error');
+                      try {
+                        const batch = db.batch();
+                        batch.set(db.collection('config_par').doc(`${hospId}_${drugId}`), { hospital_id: hospId, drug_id: drugId, par_qty: target, updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+                        batch.set(db.collection('current_excess').doc(`${hospId}_${drugId}`), { hospital_id: hospId, drug_id: drugId, excess_balance: current, last_updated: firebase.firestore.FieldValue.serverTimestamp() });
+                        addAuditToBatch(batch, ctx.currentUser, 'STOCK_ITEM_ADD', 'config_par', `${hospId}_${drugId}`, { hospital_id: hospId, drug_id: drugId, target, initial_balance: current });
+                        await batch.commit();
+                        ctx.showToast('เพิ่มยาลงคลังสำเร็จ'); setShowModal(false); await ctx.refreshData();
+                      } catch(err) { ctx.showToast(err.message, 'error'); }
                    }} className="space-y-4">
                       <div><label className="text-sm font-bold text-slate-600 mb-1 block">เลือกรหัสยาในระบบ</label>
                          <input list="add-drug-list" name="drug_id" className="w-full border p-3 rounded-xl outline-none" required placeholder="พิมพ์ค้นหา..."/>
@@ -1059,6 +1306,11 @@ const CreateReqView = ({ ctx }) => {
       
       const isOutOfPeriod = !isAdmin && (today.getDate() < 20 || today.getDate() > 31);
       const hasExistingReq = !!ctx.editReqId;
+      const existingReqForMonth = ctx.appDb.requisitions.find(r =>
+        String(r.hospitalId) === String(hospId) && Number(r.month) === currentMonth && Number(r.year) === currentYear && !String(r.id || '').startsWith('HIST-')
+      );
+      const duplicateCreateBlocked = !ctx.editReqId && !!existingReqForMonth;
+      const duplicateCanBeDeleted = !!existingReqForMonth && (['Pending','Rejected'].includes(existingReqForMonth.status) || (isAdmin && existingReqForMonth.status === 'ApprovalFailed'));
       
       const [acknowledged, setAcknowledged] = useState(false);
       const [searchTerm, setSearchTerm] = useState(''); 
@@ -1097,8 +1349,11 @@ const CreateReqView = ({ ctx }) => {
           const prevExcess = bal ? Number(bal.excess_balance) : 0;
           const isUnpacked = drug ? !!drug.unpacked : false;
           const type = drug ? drug.type : '1';
-          const price = drug ? drug.price : 0;
-          const packSize = drug ? Number(drug.pack_size) : 1;
+          const price = drug ? toNonNegativeNumber(drug.price) : 0;
+          const packSize = drug ? safePackSize(drug.pack_size) : 1;
+          const dispenseStep = drug ? toNonNegativeNumber(drug.dispense_step, 0) : 0;
+          const usageMultiplier = drug ? getUsageMultiplier(drug) : 1;
+          const isDisabledForHospital = !!par.is_disabled;
           
           let m_usages = [];
           for(let i=1; i<=5; i++) {
@@ -1112,14 +1367,14 @@ const CreateReqView = ({ ctx }) => {
           const pastHistory = m_usages.slice(0,5);
 
           if (existingItem) {
-             return { ...existingItem, isUnpacked, type, price, requestMore: existingItem.requestMore || 0, isUnlocked: (existingItem.requestMore > 0), pastHistory };
+             return { ...existingItem, isUnpacked, type, price, packSize, dispenseStep, usageMultiplier, isDisabledForHospital, requestMore: existingItem.requestMore || 0, isUnlocked: (existingItem.requestMore > 0), pastHistory };
           }
 
           const isVaccine = type === '6';
 
           return {
             drugId: par.drug_id, name: drug ? drug.drug_name : 'N/A', unit: unitName,
-            packSize, isUnpacked, type, price, pastHistory,
+            packSize, isUnpacked, type, price, dispenseStep, usageMultiplier, isDisabledForHospital, pastHistory,
             prevExcess, usage: 0, targetVMI: 0, 
             netNeed: 0, dispensePack: 0, dispenseQty: 0, 
             newExcess: prevExcess, isSpecial: false,
@@ -1155,7 +1410,7 @@ const CreateReqView = ({ ctx }) => {
                   if (startDay < 20 && endDay < 20) isDateValid = false;
                }
             }
-            if (compacted.length >= 6 && /^\d+\.?$/.test(compacted[0])) {
+            if (compacted.length >= 7 && /^\d+\.?$/.test(compacted[0])) {
                const rawName = compacted[1]; const usageStr = compacted[6]; 
                const usageNum = parseFloat(usageStr?.replace(/,/g, ''));
                if (!isNaN(usageNum) && usageNum >= 0 && rawName && !rawName.includes('รวม')) {
@@ -1165,23 +1420,22 @@ const CreateReqView = ({ ctx }) => {
           });
 
           // ⭐️ อัปเกรดระบบ Fuzzy Logic ให้รัดกุมขึ้น
-          const normalize = (str) => String(str).toLowerCase().replace(/[\s\-\.\(\)]/g, '');
           extracted = extracted.map(item => {
-            const normRaw = normalize(item.rawName);
+            const normRaw = normalizeForMatch(item.rawName);
             let mappedId = '';
             
             // 1. ตรวจสอบแบบ Exact Match ก่อน (ปลอดภัยที่สุด)
             let matched = ctx.appDb.drugs.find(d => {
-               const normSys = normalize(d.drug_name);
-               const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize).filter(f => f !== '') : [];
+               const normSys = normalizeForMatch(d.drug_name);
+               const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalizeForMatch).filter(f => f !== '') : [];
                return normSys === normRaw || fuzzyArr.includes(normRaw);
             });
             
             // 2. ถ้าไม่เจอแบบ Exact Match ถึงจะยอมให้ใช้ Partial Match แต่มีเงื่อนไขว่าความยาวต้อง > 5 อักษร
             if (!matched) {
               matched = ctx.appDb.drugs.find(d => {
-                 const normSys = normalize(d.drug_name);
-                 const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalize).filter(f => f !== '') : [];
+                 const normSys = normalizeForMatch(d.drug_name);
+                 const fuzzyArr = d.fuzzy ? String(d.fuzzy).split(',').map(normalizeForMatch).filter(f => f !== '') : [];
                  
                  if (normSys.length > 5 && (normRaw.includes(normSys) || normSys.includes(normRaw))) return true;
                  return fuzzyArr.some(f => f.length > 5 && (normRaw.includes(f) || f.includes(normRaw)));
@@ -1233,19 +1487,16 @@ const CreateReqView = ({ ctx }) => {
             
             let totalNeedToDispense = netNeed + requestMore;
 
-            if (row.type === '6') {
-               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; row.newExcess = currentBal; 
+            if (row.isDisabledForHospital) {
+               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; row.newExcess = currentBal;
+            } else if (row.type === '6') {
+               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; row.newExcess = currentBal;
             } else if (totalNeedToDispense <= 0) {
-               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; row.newExcess = currentBal; 
+               row.netNeed = 0; row.dispensePack = 0; row.dispenseQty = 0; row.newExcess = currentBal;
             } else {
-               row.netNeed = netNeed; 
-               if (row.isUnpacked) {
-                  row.dispensePack = Math.ceil(totalNeedToDispense / row.packSize); 
-                  row.dispenseQty = Math.ceil(totalNeedToDispense);
-               } else {
-                  row.dispensePack = Math.ceil(totalNeedToDispense / row.packSize); 
-                  row.dispenseQty = row.dispensePack * row.packSize; 
-               }
+               row.netNeed = netNeed;
+               row.dispenseQty = roundDispenseQty(totalNeedToDispense, row);
+               row.dispensePack = Math.ceil(row.dispenseQty / safePackSize(row.packSize));
                row.newExcess = currentBal + row.dispenseQty;
             }
             return row;
@@ -1279,9 +1530,11 @@ const CreateReqView = ({ ctx }) => {
          const unitObj = ctx.appDb.units.find(u => String(u.unit_id) === String(drug.unit_id));
          const unitDisplay = unitObj ? unitObj.unit_name : (drug.unit_id || '');
 
+         const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(hospId) && String(p.drug_id) === String(drug.drug_id));
          const newItem = {
             drugId: drug.drug_id, name: drug.drug_name, unit: unitDisplay,
-            packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
+            packSize: safePackSize(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: toNonNegativeNumber(drug.price),
+            dispenseStep: toNonNegativeNumber(drug.dispense_step, 0), usageMultiplier: getUsageMultiplier(drug), isDisabledForHospital: !!par?.is_disabled,
             prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: 0,
             isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: true
          };
@@ -1289,102 +1542,162 @@ const CreateReqView = ({ ctx }) => {
       };
 
       const executeSubmit = async () => {
-         const processSave = async (fileUrl) => {
-            const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: i.rawName, usage: i.usage }));
-            
-            const sanitizedItems = items.map(item => {
-               return {
-                  drugId: item.drugId || "", name: item.name || "N/A", unit: item.unit || "",
-                  packSize: item.packSize || 1, isUnpacked: !!item.isUnpacked, type: item.type || '1', price: item.price || 0,
-                  prevExcess: item.prevExcess || 0, usage: item.usage || 0, targetVMI: item.targetVMI || 0, netNeed: item.netNeed || 0,
-                  dispensePack: item.dispensePack || 0, dispenseQty: item.dispenseQty || 0, newExcess: item.newExcess || 0,
-                  isSpecial: false, requestMore: item.requestMore || 0, isNewDrug: !!item.isNewDrug, isAdjusted: !!item.isAdjusted
-               };
-            });
+         let uploadFailed = false;
+         try {
+           const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: safeText(i.rawName), usage: toNonNegativeNumber(i.usage) }));
+           const sanitizedItems = items.map(item => ({
+              drugId: safeText(item.drugId), name: safeText(item.name, 'N/A') || 'N/A', unit: safeText(item.unit),
+              packSize: safePackSize(item.packSize), isUnpacked: !!item.isUnpacked, type: safeText(item.type, '1') || '1', price: toNonNegativeNumber(item.price),
+              dispenseStep: toNonNegativeNumber(item.dispenseStep ?? item.dispense_step, 0), usageMultiplier: getUsageMultiplier(item), isDisabledForHospital: !!item.isDisabledForHospital,
+              prevExcess: toSafeNumber(item.prevExcess), usage: toNonNegativeNumber(item.usage), targetVMI: toNonNegativeNumber(item.targetVMI), netNeed: toNonNegativeNumber(item.netNeed),
+              dispensePack: toNonNegativeNumber(item.dispensePack), dispenseQty: toNonNegativeNumber(item.dispenseQty), newExcess: toSafeNumber(item.newExcess),
+              isSpecial: false, requestMore: toNonNegativeNumber(item.requestMore), isNewDrug: !!item.isNewDrug, isAdjusted: !!item.isAdjusted
+           })).filter(item => item.drugId);
 
-            const finalStatus = 'Pending'; 
+           if (sanitizedItems.some(i => i.packSize <= 0 || !Number.isFinite(i.usage) || !Number.isFinite(i.dispenseQty) || !Number.isFinite(i.newExcess))) {
+             throw new Error('พบข้อมูลจำนวนยาที่ไม่ถูกต้อง กรุณาตรวจสอบรายการก่อนส่ง');
+           }
 
-            if (ctx.editReqId) {
-               const payload = { items: sanitizedItems, skipped_items: skipped, updated_at: firebase.firestore.FieldValue.serverTimestamp(), status: finalStatus };
-               if (fileUrl) payload.excel_url = fileUrl; 
-               await db.collection('requisitions').doc(ctx.editReqId).update(payload);
-               
-               const batch = db.batch();
-               importData.items.filter(i => i.mappedDrugId !== '').forEach(item => {
-                  const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
-                  const drugObj = ctx.appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
-                  if(drugObj) {
-                     const existingFuzzy = drugObj.fuzzy ? String(drugObj.fuzzy).split(',').map(f=>f.trim().toLowerCase()) : [];
-                     const rawLower = item.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
-                     if(!existingFuzzy.includes(rawLower)) {
-                        batch.update(drugRef, { fuzzy: drugObj.fuzzy ? `${drugObj.fuzzy},${item.rawName}` : item.rawName });
-                     }
-                  }
-               });
-               
-               await batch.commit();
-               
-               if(excelFile && !fileUrl) ctx.showToast('บันทึกยอดสำเร็จ แต่ไม่สามารถอัปโหลดไฟล์ รบ.301 ลง Google Drive ได้', 'error');
-               else ctx.showToast('อัปเดตใบเบิกสำเร็จ');
-
-            } else {
-               const newId = `REQ-${currentYear}-${String(currentMonth).padStart(2, '0')}-${Math.floor(Math.random()*1000).toString().padStart(3, '0')}`;
-               const batch = db.batch();
-               const reqRef = db.collection('requisitions').doc(newId);
-               batch.set(reqRef, {
-                 hospitalId: hospId, month: currentMonth, year: currentYear, status: finalStatus, is_printed: false,
-                 excel_url: fileUrl || "", items: sanitizedItems, skipped_items: skipped, 
-                 created_by_name: ctx.currentUser?.name || 'System', 
-                 created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่', 
-                 created_at: firebase.firestore.FieldValue.serverTimestamp() 
-               });
-               importData.items.filter(i => i.mappedDrugId !== '').forEach(item => {
-                  const drugRef = db.collection('master_drugs').doc(item.mappedDrugId);
-                  const drugObj = ctx.appDb.drugs.find(d => d.drug_id === item.mappedDrugId);
-                  if(drugObj) {
-                     const existingFuzzy = drugObj.fuzzy ? String(drugObj.fuzzy).split(',').map(f=>f.trim().toLowerCase()) : [];
-                     const rawLower = item.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
-                     if(!existingFuzzy.includes(rawLower)) {
-                        batch.update(drugRef, { fuzzy: drugObj.fuzzy ? `${drugObj.fuzzy},${item.rawName}` : item.rawName });
-                     }
-                  }
-               });
-               
-               await batch.commit();
-               
-               if(excelFile && !fileUrl) ctx.showToast('ส่งข้อมูลสำเร็จ แต่ไม่สามารถอัปโหลดไฟล์ รบ.301 ลง Google Drive ได้', 'error');
-               else ctx.showToast(isAdmin ? 'อัปโหลดแทน รพ.สต. สำเร็จ (รอตรวจสอบ)' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา');
-            }
-            await ctx.refreshData(); ctx.setEditReqId(null); ctx.setTargetUploadHosp(null); ctx.setCurrentView('dashboard');
-         };
-
-         if (excelFile) {
-            const reader = new FileReader();
-            reader.onload = async (event) => {
-               const base64Str = event.target.result.split(',')[1];
-               let fileUrl = "";
-               try {
-                  if(GAS_DRIVE_URL.includes('/exec')) {
-                     const uploadRes = await fetch(GAS_DRIVE_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                        body: JSON.stringify({ filename: `Rxfill_${hospId}_${currentMonth}_${currentYear}.xlsx`, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', base64: base64Str })
-                     });
-                     const uploadData = await uploadRes.json();
-                     if(uploadData.status === 'success') fileUrl = uploadData.url || "";
-                  }
-               } catch(err) {
-                  console.error("Fetch GAS Failed:", err);
+           let fileUrl = '';
+           if (excelFile) {
+             if (excelFile.size > MAX_UPLOAD_BYTES) throw new Error('ไฟล์แนบมีขนาดเกิน 10 MB กรุณาลดขนาดไฟล์ก่อนส่ง');
+             try {
+               const base64Str = await fileToBase64(excelFile);
+               if(GAS_DRIVE_URL.includes('/exec')) {
+                 const ext = (excelFile.name.split('.').pop() || 'xlsx').toLowerCase();
+                 const uploadRes = await fetchWithTimeout(GAS_DRIVE_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({
+                      filename: `Rxfill_${hospId}_${currentMonth}_${currentYear}.${ext}`,
+                      mimeType: excelFile.type || 'application/octet-stream',
+                      base64: base64Str,
+                      mode: 'production'
+                    })
+                 }, 30000);
+                 if (!uploadRes.ok) throw new Error(`Upload HTTP ${uploadRes.status}`);
+                 const uploadData = await uploadRes.json();
+                 if(uploadData.status === 'success') fileUrl = uploadData.url || '';
+                 else throw new Error(uploadData.message || 'ปลายทางไม่ตอบกลับสถานะ success');
                }
-               processSave(fileUrl);
-            };
-            reader.readAsDataURL(excelFile);
-         } else { processSave(""); }
+             } catch(err) {
+               console.error('Upload GAS Failed:', err);
+               uploadFailed = true;
+             }
+           }
+
+           const finalStatus = 'Pending';
+           if (ctx.editReqId) {
+             const reqRef = db.collection('requisitions').doc(ctx.editReqId);
+             const auditRef = db.collection('audit_logs').doc();
+             await db.runTransaction(async (tx) => {
+               const snap = await tx.get(reqRef);
+               if (!snap.exists) throw new Error('ไม่พบใบเบิกที่ต้องการแก้ไข');
+               const current = snap.data();
+               if (!isAdmin && String(current.hospitalId) !== String(ctx.currentUser.hospital_id)) throw new Error('ไม่มีสิทธิ์แก้ไขใบเบิกของหน่วยงานอื่น');
+               if (!['Pending','Rejected'].includes(current.status)) throw new Error('ใบเบิกนี้ไม่อยู่ในสถานะที่แก้ไข/ส่งใหม่ได้แล้ว');
+               const payload = {
+                 items: sanitizedItems,
+                 skipped_items: skipped,
+                 updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+                 updated_by_uid: ctx.currentUser.uid,
+                 updated_by_name: ctx.currentUser.name,
+                 status: finalStatus,
+                 revision: toNonNegativeInt(current.revision, 0) + 1,
+                 schema_version: APP_SCHEMA_VERSION
+               };
+               if (fileUrl) payload.excel_url = fileUrl;
+               tx.update(reqRef, payload);
+               tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_UPDATE', 'requisitions', ctx.editReqId, { hospital_id: current.hospitalId, month: current.month, year: current.year, revision: payload.revision }));
+             });
+
+             // ให้เฉพาะ Admin เป็นผู้เพิ่มคำพ้องเข้าฐาน master เพื่อลดความเสี่ยง master data ถูกแก้จาก client รพ.สต.
+             if (isAdmin) {
+               const grouped = {};
+               importData.items.filter(i => i.mappedDrugId).forEach(i => {
+                 grouped[i.mappedDrugId] = grouped[i.mappedDrugId] || [];
+                 grouped[i.mappedDrugId].push(safeText(i.rawName));
+               });
+               const ops = [];
+               Object.entries(grouped).forEach(([drugId, aliases]) => {
+                 const drugObj = ctx.appDb.drugs.find(d => String(d.drug_id) === String(drugId));
+                 if (!drugObj) return;
+                 const currentAliases = cleanFuzzyAliases(drugObj.fuzzy);
+                 const seen = new Set(currentAliases.map(normalizeForMatch));
+                 aliases.forEach(a => { if (a && !seen.has(normalizeForMatch(a))) { currentAliases.push(a); seen.add(normalizeForMatch(a)); } });
+                 ops.push({ type: 'update', ref: db.collection('master_drugs').doc(drugId), data: { fuzzy: cleanFuzzyAliases(currentAliases).join(',') } });
+               });
+               if (ops.length) await executeBatchChunks(ops);
+             }
+             ctx.showToast(uploadFailed ? 'อัปเดตใบเบิกสำเร็จ แต่ไฟล์ รบ.301 อัปโหลดไม่สำเร็จ' : 'อัปเดตใบเบิกสำเร็จ', uploadFailed ? 'error' : 'success');
+           } else {
+             // กันการสร้างซ้ำจากข้อมูลที่โหลดอยู่ และใช้ document id แบบ deterministic กันการกดพร้อมกันหลายแท็บ
+             const existing = ctx.appDb.requisitions.find(r => String(r.hospitalId) === String(hospId) && Number(r.month) === currentMonth && Number(r.year) === currentYear && !String(r.id || '').startsWith('HIST-'));
+             if (existing) throw new Error(`เดือน ${currentMonth}/${currentYear} มีใบเบิกอยู่แล้ว (${existing.id}) กรุณาลบอันเก่าออกก่อน จึงจะสร้างใบเบิกใหม่ได้`);
+
+             const newId = buildRequisitionId(hospId, currentMonth, currentYear);
+             const reqRef = db.collection('requisitions').doc(newId);
+             const auditRef = db.collection('audit_logs').doc();
+             await db.runTransaction(async (tx) => {
+               const existingSnap = await tx.get(reqRef);
+               if (existingSnap.exists) throw new Error('พบใบเบิกรอบนี้อยู่แล้ว กรุณารีเฟรชหน้าจอ');
+               tx.set(reqRef, {
+                 hospitalId: hospId,
+                 month: currentMonth,
+                 year: currentYear,
+                 status: finalStatus,
+                 is_printed: false,
+                 excel_url: fileUrl || '',
+                 items: sanitizedItems,
+                 skipped_items: skipped,
+                 created_by_uid: ctx.currentUser?.uid || '',
+                 created_by_name: ctx.currentUser?.name || 'System',
+                 created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่',
+                 created_at: firebase.firestore.FieldValue.serverTimestamp(),
+                 updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+                 revision: 1,
+                 schema_version: APP_SCHEMA_VERSION
+               });
+               tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_CREATE', 'requisitions', newId, { hospital_id: hospId, month: currentMonth, year: currentYear, item_count: sanitizedItems.length }));
+             });
+
+             if (isAdmin) {
+               const grouped = {};
+               importData.items.filter(i => i.mappedDrugId).forEach(i => {
+                 grouped[i.mappedDrugId] = grouped[i.mappedDrugId] || [];
+                 grouped[i.mappedDrugId].push(safeText(i.rawName));
+               });
+               const ops = [];
+               Object.entries(grouped).forEach(([drugId, aliases]) => {
+                 const drugObj = ctx.appDb.drugs.find(d => String(d.drug_id) === String(drugId));
+                 if (!drugObj) return;
+                 const currentAliases = cleanFuzzyAliases(drugObj.fuzzy);
+                 const seen = new Set(currentAliases.map(normalizeForMatch));
+                 aliases.forEach(a => { if (a && !seen.has(normalizeForMatch(a))) { currentAliases.push(a); seen.add(normalizeForMatch(a)); } });
+                 ops.push({ type: 'update', ref: db.collection('master_drugs').doc(drugId), data: { fuzzy: cleanFuzzyAliases(currentAliases).join(',') } });
+               });
+               if (ops.length) await executeBatchChunks(ops);
+             }
+
+             ctx.showToast(uploadFailed ? 'ส่งข้อมูลสำเร็จ แต่ไฟล์ รบ.301 อัปโหลดไม่สำเร็จ' : (isAdmin ? 'อัปโหลดแทน รพ.สต. สำเร็จ (รอตรวจสอบ)' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา'), uploadFailed ? 'error' : 'success');
+           }
+
+           await ctx.refreshData();
+           ctx.setEditReqId(null);
+           ctx.setTargetUploadHosp(null);
+           ctx.setCurrentView('dashboard');
+         } finally {
+           setIsSubmitting(false);
+         }
       };
 
       const handleSubmitPreCheck = () => {
+         if (isSubmitting) return;
+         if (duplicateCreateBlocked) return ctx.showToast(`เดือนนี้มีใบเบิกอยู่แล้ว (${existingReqForMonth.id}) กรุณาลบอันเก่าออกก่อน`, 'error');
          if(!excelFile && !ctx.editReqId && !isAdmin) return ctx.showToast('กรุณาแนบไฟล์ รบ.301 (.xlsx) เพื่อใช้เป็นหลักฐานประกอบการเบิก', 'error');
-         if(items.filter(i => i.usage > 0 || i.requestMore > 0).length === 0) return ctx.showToast('ไม่มีรายการเบิกใดๆ กรุณากรอกยอด', 'error');
+         if(excelFile && excelFile.size > MAX_UPLOAD_BYTES) return ctx.showToast('ไฟล์แนบมีขนาดเกิน 10 MB', 'error');
+         if(items.filter(i => toNonNegativeNumber(i.usage) > 0 || toNonNegativeNumber(i.requestMore) > 0).length === 0) return ctx.showToast('ไม่มีรายการเบิกใดๆ กรุณากรอกยอด', 'error');
+         if(items.some(i => !Number.isFinite(Number(i.packSize)) || Number(i.packSize) <= 0 || toSafeNumber(i.usage) < 0 || toSafeNumber(i.requestMore) < 0)) return ctx.showToast('พบจำนวนยาหรือขนาดบรรจุไม่ถูกต้อง', 'error');
          
          ctx.setConfirmDialog({
             title: 'ยืนยันการส่งใบเบิก?',
@@ -1404,6 +1717,21 @@ const CreateReqView = ({ ctx }) => {
         const matchUsage = showUsedOnly ? item.usage > 0 || item.requestMore > 0 : true;
         return matchSearch && matchType && matchUsage;
       });
+
+      if (duplicateCreateBlocked) {
+        return (
+          <div className="bg-white rounded-3xl p-10 text-center shadow-sm max-w-2xl mx-auto mt-10 border border-red-200 animate-fade-in">
+            <i className="fa-solid fa-copy text-6xl text-red-500 mb-6"></i>
+            <h2 className="text-2xl font-bold text-slate-800 mb-3">เดือนนี้มีใบเบิกอยู่แล้ว</h2>
+            <p className="text-slate-600 mb-2 text-lg">พบใบเบิก <span className="font-bold text-red-600">{existingReqForMonth.id}</span> สำหรับเดือน {currentMonth}/{currentYear}</p>
+            <p className="text-red-600 font-bold mb-8">{duplicateCanBeDeleted ? 'กรุณาลบอันเก่าออกก่อน จึงจะสร้างใบเบิกใหม่ได้' : 'ใบเบิกเดือนนี้ถูกดำเนินการแล้ว จึงไม่อนุญาตให้สร้างใบใหม่ซ้ำ กรุณาติดต่อ Admin หากต้องแก้ไขข้อมูลย้อนหลัง'}</p>
+            <div className="flex flex-col sm:flex-row justify-center gap-4">
+              <button onClick={() => { ctx.setTargetUploadHosp(null); ctx.setCurrentView('dashboard'); }} className="bg-slate-100 text-slate-600 px-6 py-3 rounded-xl font-bold hover:bg-slate-200 transition">กลับหน้าหลัก</button>
+              <button onClick={() => { ctx.setEditReqId(existingReqForMonth.id); ctx.setCurrentReqId(existingReqForMonth.id); ctx.setCurrentView('view_req'); }} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition">เปิดใบเบิกเดิม</button>
+            </div>
+          </div>
+        );
+      }
 
       if (isOutOfPeriod && !acknowledged && !ctx.editReqId) {
         return (
@@ -1528,27 +1856,30 @@ const CreateReqView = ({ ctx }) => {
                   const displayUnit = unitObj ? unitObj.unit_name : (item.unit || drug?.unit_id || '');
                   
                   const isVaccine = item.type === '6';
+                  const isDisabled = !!item.isDisabledForHospital;
 
                   return (
-                    <tr key={item.drugId} className={`transition ${isVaccine ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-amber-50/30'}`}>
+                    <tr key={item.drugId} className={`transition ${isDisabled ? 'bg-slate-200/80 text-slate-500' : isVaccine ? 'bg-red-50/50 hover:bg-red-50' : 'hover:bg-amber-50/30'}`}>
                       <td className="p-3 font-bold text-slate-800">
                          {item.name} 
                          <span className="text-xs font-normal text-slate-400 ml-1">[{item.drugId}]</span>
                          {(item.requestMore > 0 || item.isNewDrug || item.isAdjusted) && <span className="text-red-600 font-bold ml-1 text-[11px] border border-red-200 bg-red-50 px-1 rounded">(ขอเพิ่ม)</span>}
-                         {isVaccine && <span className="ml-2 text-xs font-bold text-red-500 border border-red-200 bg-white px-2 py-0.5 rounded"><i className="fa-solid fa-ban"></i> ไม่ร่วมรายการ</span>}
+                         {isVaccine && <span className="ml-2 text-xs font-bold text-red-600 border border-red-200 bg-white px-2 py-0.5 rounded"><i className="fa-solid fa-ban"></i> ไม่ร่วมระบบเบิก</span>}
+                         {isDisabled && <span className="ml-2 text-xs font-bold text-slate-700 border border-slate-400 bg-slate-100 px-2 py-0.5 rounded"><i className="fa-solid fa-circle-xmark"></i> ยกเลิกจ่าย</span>}
+                         {item.dispenseStep > 0 && !isVaccine && !isDisabled && <span className="ml-2 text-[10px] font-bold text-blue-700 border border-blue-200 bg-blue-50 px-2 py-0.5 rounded">รอบจ่าย {item.dispenseStep}</span>}
                       </td>
                       <td className="p-3 text-center text-slate-600 border-l border-slate-100">{displayUnit}</td>
                       <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100">{item.packSize}</td>
                       
                       {showCalc && <td className="p-3 text-center text-blue-600 font-bold bg-blue-50/20 border-l border-slate-100">{formatQty(item.prevExcess, item.packSize)}</td>}
                       {showCalc && <td className="p-3 bg-amber-50/50 border-l border-slate-100 relative text-center">
-                        <input type="number" min="0" className="w-20 border-b-2 border-amber-300 bg-transparent p-1 text-center font-bold text-amber-900 outline-none focus:bg-white focus:border-amber-600 transition disabled:opacity-50" value={item.usage || ''} onChange={e => updateRow(item.drugId, e.target.value, null)} placeholder="0" disabled={isVaccine} />
+                        <input type="number" min="0" className="w-20 border-b-2 border-amber-300 bg-transparent p-1 text-center font-bold text-amber-900 outline-none focus:bg-white focus:border-amber-600 transition disabled:opacity-50" value={item.usage || ''} onChange={e => updateRow(item.drugId, e.target.value, null)} placeholder="0" disabled={isVaccine || isDisabled} />
                       </td>}
                       {showCalc && <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100 bg-slate-50/50">{formatQty(item.targetVMI, item.packSize)}</td>}
-                      {showCalc && <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100">{isVaccine ? '0' : formatQty(item.netNeed, item.packSize)}</td>}
+                      {showCalc && <td className="p-3 text-center font-bold text-slate-600 border-l border-slate-100">{(isVaccine || isDisabled) ? '0' : formatQty(item.netNeed, item.packSize)}</td>}
                       
                       <td className="p-3 bg-indigo-50/50 border-l border-slate-100 text-center tooltip-container relative">
-                        {isVaccine ? <span className="text-slate-300">-</span> : !item.isUnlocked ? (
+                        {(isVaccine || isDisabled) ? <span className="text-slate-400">-</span> : !item.isUnlocked ? (
                            <button onClick={() => {
                               const newItems = items.map(i => i.drugId === item.drugId ? {...i, isUnlocked: true} : i);
                               setItems(newItems);
@@ -1560,7 +1891,7 @@ const CreateReqView = ({ ctx }) => {
                         )}
                       </td>
                       <td className="p-3 text-center font-black text-emerald-700 bg-emerald-50/30 border-l border-slate-100 text-[15px]">
-                         {isVaccine ? '0' : formatQty(item.dispenseQty, item.packSize)}
+                         {(isVaccine || isDisabled) ? '0' : formatQty(item.dispenseQty, item.packSize)}
                       </td>
                       <td className="p-3 text-center bg-red-50/20 border-l border-slate-100">
                          <button onClick={() => handleDeleteItem(item.drugId)} className="text-slate-400 hover:text-red-600 transition p-1.5 rounded hover:bg-red-100"><i className="fa-solid fa-trash"></i></button>
@@ -1569,7 +1900,7 @@ const CreateReqView = ({ ctx }) => {
                   )
                 })}
                 {filteredItems.length === 0 && (
-                  <tr><td colSpan="10" className="p-12 text-center text-slate-400 font-bold">ไม่พบรายการยา</td></tr>
+                  <tr><td colSpan="11" className="p-12 text-center text-slate-400 font-bold">ไม่พบรายการยา</td></tr>
                 )}
               </tbody>
             </table>
@@ -1653,10 +1984,15 @@ const CreateReqView = ({ ctx }) => {
                                  {mappedDrugObj && (
                                     <div className="text-xs text-slate-500 mt-1 font-semibold">
                                        {mappedDrugObj.drug_name} {isDuplicate && <span className="text-amber-600 font-bold ml-1">(ซ้ำ - จะนำยอดไปรวมกัน)</span>}
+                                       {getUsageMultiplier(mappedDrugObj) !== 1 && (
+                                         <span className="block mt-1 text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-2 py-1 w-fit">
+                                           แปลงหน่วย: {item.usage} × {getUsageMultiplier(mappedDrugObj)} = {convertImportedUsage(item.usage, mappedDrugObj)} หน่วยย่อย
+                                         </span>
+                                       )}
                                     </div>
                                  )}
                                  <datalist id="drug-list">
-                                    {ctx.appDb.drugs.sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>)}
+                                    {[...ctx.appDb.drugs].sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]</option>)}
                                  </datalist>
                               </td>
                               <td className="p-3">
@@ -1683,7 +2019,9 @@ const CreateReqView = ({ ctx }) => {
                       const aggregatedUsages = {};
                       importData.items.forEach(i => {
                          if (i.mappedDrugId && (showZeroImport || i.usage > 0)) {
-                            aggregatedUsages[i.mappedDrugId] = (aggregatedUsages[i.mappedDrugId] || 0) + Number(i.usage);
+                            const mappedDrug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(i.mappedDrugId));
+                            const normalizedUsage = convertImportedUsage(i.usage, mappedDrug);
+                            aggregatedUsages[i.mappedDrugId] = (aggregatedUsages[i.mappedDrugId] || 0) + normalizedUsage;
                          }
                       });
 
@@ -1700,7 +2038,9 @@ const CreateReqView = ({ ctx }) => {
 
                                existing = {
                                   drugId: d.drug_id, name: d.drug_name, unit: unitDisplay,
-                                  packSize: Number(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: d.price,
+                                  packSize: safePackSize(d.pack_size), isUnpacked: !!d.unpacked, type: d.type, price: toNonNegativeNumber(d.price),
+                                  dispenseStep: toNonNegativeNumber(d.dispense_step, 0), usageMultiplier: getUsageMultiplier(d),
+                                  isDisabledForHospital: !!ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(hospId) && String(p.drug_id) === String(d.drug_id))?.is_disabled,
                                   prevExcess: 0, usage: 0, targetVMI: 0, netNeed: 0,
                                   dispensePack: 0, dispenseQty: 0, newExcess: 0, isSpecial: false, requestMore: 0,
                                   isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: false
@@ -1716,7 +2056,7 @@ const CreateReqView = ({ ctx }) => {
                       const calcItems = newItemsArr.map(item => {
                          const totalImportUsage = aggregatedUsages[item.drugId];
                          if (totalImportUsage !== undefined) {
-                            const usage = parseInt(totalImportUsage) || 0;
+                            const usage = toNonNegativeNumber(totalImportUsage);
                             const requestMore = item.requestMore || 0;
                             
                             const recent5 = item.pastHistory ? item.pastHistory.slice(0, 5) : [0,0,0,0,0];
@@ -1735,14 +2075,13 @@ const CreateReqView = ({ ctx }) => {
                             
                             let dispensePack=0, dispenseQty=0, newExcess=currentBal;
 
-                            if (item.type === '6') {
+                            if (item.isDisabledForHospital) {
+                               dispensePack = 0; dispenseQty = 0; newExcess = currentBal; netNeed = 0;
+                            } else if (item.type === '6') {
                                dispensePack = 0; dispenseQty = 0; newExcess = currentBal; netNeed = 0;
                             } else if (totalNeed > 0) {
-                               if (item.isUnpacked) {
-                                  dispensePack = Math.ceil(totalNeed / item.packSize); dispenseQty = Math.ceil(totalNeed);
-                               } else {
-                                  dispensePack = Math.ceil(totalNeed / item.packSize); dispenseQty = dispensePack * item.packSize;
-                               }
+                               dispenseQty = roundDispenseQty(totalNeed, item);
+                               dispensePack = Math.ceil(dispenseQty / safePackSize(item.packSize));
                                newExcess = currentBal + dispenseQty;
                             }
                             return { ...item, usage, netNeed, dispensePack, dispenseQty, newExcess, targetVMI: dynamicTargetVMI };
@@ -1773,7 +2112,12 @@ const ViewReqView = ({ ctx }) => {
       const isHospital = ctx.currentUser?.role === 'hospital';
       const isAdmin = ctx.currentUser?.role === 'admin';
       const isPending = req?.status === 'Pending';
-      const canEdit = isPending && (isAdmin || isHospital); 
+      const isApprovalFailed = req?.status === 'ApprovalFailed';
+      const isApprovingStatus = req?.status === 'Approving';
+      const ownsReq = isHospital && String(req?.hospitalId) === String(ctx.currentUser?.hospital_id);
+      const canEdit = isPending && (isAdmin || ownsReq);
+      const canDeleteReq = isAdmin ? ['Pending','Rejected','ApprovalFailed'].includes(req?.status) : (ownsReq && ['Pending','Rejected'].includes(req?.status));
+      const canApproveReq = isAdmin && (isPending || isApprovalFailed);
       
       const userInfo = ctx.appDb.usersList.find(u => u.name === req?.created_by_name) || { position: 'เจ้าหน้าที่', role: '' };
       const [reqName, setReqName] = useState(req?.created_by_name || '');
@@ -1781,7 +2125,28 @@ const ViewReqView = ({ ctx }) => {
       
       const [manualAddSearch, setManualAddSearch] = useState('');
 
-      useEffect(() => { if(req) setEditableItems(req.items); }, [req]);
+      useEffect(() => {
+        if(!req) return;
+        const merged = (req.items || []).map(item => {
+          const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(req.hospitalId) && String(p.drug_id) === String(item.drugId));
+          const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(item.drugId));
+          const isDisabledForHospital = !!par?.is_disabled;
+          const mergedItem = {
+            ...item,
+            dispenseStep: toNonNegativeNumber(drug?.dispense_step ?? item.dispenseStep ?? item.dispense_step, 0),
+            usageMultiplier: getUsageMultiplier(drug || item),
+            isDisabledForHospital
+          };
+          if (isDisabledForHospital) {
+            mergedItem.netNeed = 0;
+            mergedItem.dispensePack = 0;
+            mergedItem.dispenseQty = 0;
+            mergedItem.newExcess = toSafeNumber(item.prevExcess) - toNonNegativeNumber(item.usage);
+          }
+          return mergedItem;
+        });
+        setEditableItems(merged);
+      }, [req, ctx.appDb.parLevels, ctx.appDb.drugs]);
       if(!req) return null;
       
       const hosp = ctx.appDb.hospitals.find(h => h.hospital_id === req.hospitalId);
@@ -1791,7 +2156,7 @@ const ViewReqView = ({ ctx }) => {
 
       const handleAdjust = (idx, val) => {
         const qty = parseInt(val) || 0; const newItems = [...editableItems];
-        newItems[idx] = { ...newItems[idx], dispenseQty: qty, dispensePack: Math.ceil(qty / newItems[idx].packSize), newExcess: (newItems[idx].prevExcess - newItems[idx].usage) + qty, isAdjusted: true };
+        newItems[idx] = { ...newItems[idx], dispenseQty: qty, dispensePack: Math.ceil(qty / safePackSize(newItems[idx].packSize)), newExcess: (newItems[idx].prevExcess - newItems[idx].usage) + qty, isAdjusted: true };
         setEditableItems(newItems);
       };
 
@@ -1823,9 +2188,11 @@ const ViewReqView = ({ ctx }) => {
          const bal = ctx.appDb.balances.find(b => String(b.hospital_id) === String(req.hospitalId) && String(b.drug_id) === drug.drug_id);
          const prevExcess = bal ? Number(bal.excess_balance) : 0;
 
+         const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(req.hospitalId) && String(p.drug_id) === String(drug.drug_id));
          const newItem = {
             drugId: drug.drug_id, name: drug.drug_name, unit: unitDisplay,
-            packSize: Number(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
+            packSize: safePackSize(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: toNonNegativeNumber(drug.price),
+            dispenseStep: toNonNegativeNumber(drug.dispense_step, 0), usageMultiplier: getUsageMultiplier(drug), isDisabledForHospital: !!par?.is_disabled,
             prevExcess: prevExcess, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess,
             isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: true
          };
@@ -1840,7 +2207,12 @@ const ViewReqView = ({ ctx }) => {
 
           const bal = ctx.appDb.balances.find(b => String(b.hospital_id) === String(req.hospitalId) && String(b.drug_id) === mappedDrugId);
           const prevExcess = bal ? Number(bal.excess_balance) : 0;
-          const packSize = Number(drug.pack_size) || 1;
+          const packSize = safePackSize(drug.pack_size);
+          const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(req.hospitalId) && String(p.drug_id) === String(mappedDrugId));
+          const isDisabledForHospital = !!par?.is_disabled;
+          const dispenseStep = toNonNegativeNumber(drug.dispense_step, 0);
+          const usageMultiplier = getUsageMultiplier(drug);
+          const normalizedUsage = convertImportedUsage(usage, drug);
           
           let m_usages = [];
           for(let i=1; i<=6; i++) {
@@ -1857,22 +2229,20 @@ const ViewReqView = ({ ctx }) => {
           const SD = Math.sqrt(variance || 0);
           const targetVMI = Math.ceil(mean6M + (1.645 * SD));
 
-          const currentBal = prevExcess - usage;
+          const currentBal = prevExcess - normalizedUsage;
           let netNeed = targetVMI - currentBal;
           if (netNeed <= 0) netNeed = 0;
 
           let dispensePack=0, dispenseQty=0, newExcess=currentBal;
           
-          if (drug.type === '6') {
+          if (isDisabledForHospital) {
+             netNeed = 0; dispensePack = 0; dispenseQty = 0; newExcess = currentBal;
+          } else if (drug.type === '6') {
              netNeed = 0; dispensePack = 0; dispenseQty = 0; newExcess = currentBal;
           } else if (netNeed > 0) {
-              if (drug.unpacked) {
-                  dispensePack = Math.ceil(netNeed / packSize); 
-                  dispenseQty = Math.ceil(netNeed);
-              } else {
-                  dispensePack = Math.ceil(netNeed / packSize); 
-                  dispenseQty = dispensePack * packSize;
-              }
+              const tempItem = { packSize, isUnpacked: !!drug.unpacked, dispenseStep };
+              dispenseQty = roundDispenseQty(netNeed, tempItem);
+              dispensePack = Math.ceil(dispenseQty / packSize);
               newExcess = currentBal + dispenseQty;
           }
 
@@ -1881,8 +2251,9 @@ const ViewReqView = ({ ctx }) => {
 
           const newItem = {
               drugId: mappedDrugId, name: drug.drug_name, unit: unitDisplay,
-              packSize, isUnpacked: !!drug.unpacked, type: drug.type || '1', price: drug.price || 0,
-              prevExcess, usage, targetVMI, netNeed, dispensePack, dispenseQty, newExcess,
+              packSize, isUnpacked: !!drug.unpacked, type: drug.type || '1', price: toNonNegativeNumber(drug.price),
+              dispenseStep, usageMultiplier, isDisabledForHospital,
+              prevExcess, usage: normalizedUsage, targetVMI, netNeed, dispensePack, dispenseQty, newExcess,
               isSpecial: false, requestMore: 0, isNewDrug: true, isAdjusted: true
           };
 
@@ -1890,18 +2261,20 @@ const ViewReqView = ({ ctx }) => {
               const existingIdx = prev.findIndex(i => i.drugId === mappedDrugId);
               if (existingIdx >= 0) {
                   const arr = [...prev];
-                  arr[existingIdx].usage += usage;
+                  arr[existingIdx].usage += normalizedUsage;
                   let cBal = arr[existingIdx].prevExcess - arr[existingIdx].usage;
                   let nNeed = arr[existingIdx].targetVMI - cBal;
                   if (nNeed < 0) nNeed = 0;
                   arr[existingIdx].netNeed = nNeed;
                   
                   let dPack=0, dQty=0, nExcess=cBal;
-                  if (arr[existingIdx].type === '6') {
+                  if (arr[existingIdx].isDisabledForHospital) {
+                      nNeed = 0; dPack = 0; dQty = 0; nExcess = cBal;
+                  } else if (arr[existingIdx].type === '6') {
                       nNeed = 0; dPack = 0; dQty = 0; nExcess = cBal;
                   } else if(nNeed > 0) {
-                      if(arr[existingIdx].isUnpacked) { dPack = Math.ceil(nNeed / arr[existingIdx].packSize); dQty = Math.ceil(nNeed); } 
-                      else { dPack = Math.ceil(nNeed / arr[existingIdx].packSize); dQty = dPack * arr[existingIdx].packSize; }
+                      dQty = roundDispenseQty(nNeed, arr[existingIdx]);
+                      dPack = Math.ceil(dQty / safePackSize(arr[existingIdx].packSize));
                       nExcess = cBal + dQty;
                   }
                   arr[existingIdx].dispensePack = dPack;
@@ -1922,10 +2295,25 @@ const ViewReqView = ({ ctx }) => {
       const handleSaveChanges = async () => {
           setIsApproving(true);
           try {
-              await db.collection('requisitions').doc(req.id).update({
-                  items: editableItems,
-                  created_by_name: reqName,
-                  created_by_position: reqPosition
+              const reqRef = db.collection('requisitions').doc(req.id);
+              const auditRef = db.collection('audit_logs').doc();
+              await db.runTransaction(async (tx) => {
+                const snap = await tx.get(reqRef);
+                if (!snap.exists) throw new Error('ไม่พบใบเบิก');
+                const current = snap.data();
+                if (current.status !== 'Pending') throw new Error('ใบเบิกนี้ถูกเปลี่ยนสถานะแล้ว กรุณารีเฟรช');
+                if (!isAdmin && String(current.hospitalId) !== String(ctx.currentUser.hospital_id)) throw new Error('ไม่มีสิทธิ์แก้ไขใบเบิกของหน่วยงานอื่น');
+                const revision = toNonNegativeInt(current.revision, 0) + 1;
+                tx.update(reqRef, {
+                  items: editableItems.map(it => ({ ...it, packSize: safePackSize(it.packSize), dispenseQty: toNonNegativeNumber(it.dispenseQty), dispensePack: toNonNegativeNumber(it.dispensePack), newExcess: toSafeNumber(it.newExcess) })),
+                  created_by_name: safeText(reqName),
+                  created_by_position: safeText(reqPosition),
+                  updated_by_uid: ctx.currentUser.uid,
+                  updated_by_name: ctx.currentUser.name,
+                  updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+                  revision
+                });
+                tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_EDIT_FINAL', 'requisitions', req.id, { revision }));
               });
               ctx.showToast('บันทึกการแก้ไขข้อมูลสำเร็จ');
               await ctx.refreshData();
@@ -1935,67 +2323,188 @@ const ViewReqView = ({ ctx }) => {
 
       const handleApprove = async () => {
         setIsApproving(true);
-        try {
-          const batch = db.batch(); 
-          batch.update(db.collection('requisitions').doc(req.id), { 
-              status: 'Completed', 
-              items: editableItems, 
-              skipped_items: req.skipped_items || [],
-              created_by_name: reqName,
-              created_by_position: reqPosition
-          });
-          
-          const currentKey = getYearMonthKey(req.month, req.year);
+        const reqRef = db.collection('requisitions').doc(req.id);
+        const approvalToken = makeActionToken();
 
-          editableItems.forEach(it => {
-              batch.set(db.collection('current_excess').doc(`${req.hospitalId}_${it.drugId}`), { hospital_id: req.hospitalId, drug_id: it.drugId, excess_balance: it.newExcess, last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
-              
-              batch.set(db.collection('historical_usages').doc(`${req.hospitalId}_${it.drugId}`), {
-                  hospital_id: req.hospitalId, drug_id: it.drugId,
-                  history: { [currentKey]: it.usage }, 
-                  updated_at: firebase.firestore.FieldValue.serverTimestamp()
-              }, { merge: true });
-          });
-          
-          if(req.skipped_items) {
-             req.skipped_items.filter(s => s.mappedDrugId).forEach(s => {
-                const d = ctx.appDb.drugs.find(x => x.drug_id === s.mappedDrugId);
-                if(d) {
-                   const existingFuzzy = d.fuzzy ? d.fuzzy.split(',').map(f=>f.trim().toLowerCase()) : [];
-                   const rawLower = s.rawName.toLowerCase().replace(/[\s\-\.\(\)]/g, '');
-                   if(!existingFuzzy.includes(rawLower)) {
-                      batch.update(db.collection('master_drugs').doc(d.drug_id), { fuzzy: d.fuzzy ? `${d.fuzzy},${s.rawName}` : s.rawName });
-                   }
-                }
-             });
+        // ก่อนอนุมัติ Admin re-derive master fields/สถานะยกเลิกจากฐานปัจจุบันอีกครั้ง
+        // เพื่อไม่เชื่อข้อมูลราคา/pack/type/สถานะที่มาจาก client เพียงอย่างเดียว
+        const approvedItems = editableItems.map(raw => {
+          const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(raw.drugId));
+          const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(req.hospitalId) && String(p.drug_id) === String(raw.drugId));
+          const item = {
+            ...raw,
+            name: drug?.drug_name || raw.name,
+            packSize: safePackSize(drug?.pack_size ?? raw.packSize),
+            isUnpacked: drug ? !!drug.unpacked : !!raw.isUnpacked,
+            type: safeText(drug?.type ?? raw.type, '1') || '1',
+            price: toNonNegativeNumber(drug?.price ?? raw.price),
+            dispenseStep: toNonNegativeNumber(drug?.dispense_step ?? raw.dispenseStep ?? raw.dispense_step, 0),
+            usageMultiplier: getUsageMultiplier(drug || raw),
+            isDisabledForHospital: !!par?.is_disabled,
+            usage: toNonNegativeNumber(raw.usage),
+            prevExcess: toSafeNumber(raw.prevExcess)
+          };
+          if (item.isDisabledForHospital || item.type === '6') {
+            item.netNeed = 0;
+            item.dispenseQty = 0;
+            item.dispensePack = 0;
+            item.newExcess = item.prevExcess - item.usage;
+          } else {
+            const requestedQty = toNonNegativeNumber(raw.dispenseQty);
+            item.dispenseQty = requestedQty > 0 ? roundDispenseQty(requestedQty, item) : 0;
+            item.dispensePack = Math.ceil(item.dispenseQty / safePackSize(item.packSize));
+            item.newExcess = item.prevExcess - item.usage + item.dispenseQty;
           }
+          return item;
+        });
 
-          await batch.commit(); ctx.showToast('อนุมัติแล้ว'); await ctx.refreshData(); ctx.setCurrentView('dashboard');
-        } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsApproving(false); }
+        try {
+          // Phase 1: claim ใบเบิกด้วย transaction เพื่อกันแอดมินสองคนอนุมัติพร้อมกัน
+          await db.runTransaction(async (tx) => {
+            const snap = await tx.get(reqRef);
+            if (!snap.exists) throw new Error('ไม่พบใบเบิก');
+            const current = snap.data();
+            if (!['Pending','ApprovalFailed'].includes(current.status)) throw new Error(`ใบเบิกอยู่ในสถานะ ${current.status} จึงไม่สามารถอนุมัติซ้ำได้`);
+            tx.update(reqRef, {
+              status: 'Approving',
+              approval_token: approvalToken,
+              approval_started_at: firebase.firestore.FieldValue.serverTimestamp(),
+              approval_started_by_uid: ctx.currentUser.uid,
+              approval_started_by_name: ctx.currentUser.name,
+              approval_error: firebase.firestore.FieldValue.delete()
+            });
+          });
+
+          const currentKey = getYearMonthKey(req.month, req.year);
+          const operations = [];
+          approvedItems.forEach(it => {
+              if (!it.drugId) return;
+              operations.push({
+                type: 'set',
+                ref: db.collection('current_excess').doc(`${req.hospitalId}_${it.drugId}`),
+                data: {
+                  hospital_id: req.hospitalId,
+                  drug_id: it.drugId,
+                  excess_balance: toSafeNumber(it.newExcess),
+                  last_updated: firebase.firestore.FieldValue.serverTimestamp()
+                },
+                options: { merge: true }
+              });
+              operations.push({
+                type: 'set',
+                ref: db.collection('historical_usages').doc(`${req.hospitalId}_${it.drugId}`),
+                data: {
+                  hospital_id: req.hospitalId,
+                  drug_id: it.drugId,
+                  history: { [currentKey]: toNonNegativeNumber(it.usage) },
+                  updated_at: firebase.firestore.FieldValue.serverTimestamp()
+                },
+                options: { merge: true }
+              });
+          });
+          await executeBatchChunks(operations);
+
+          // Phase 2: finalize เฉพาะผู้ที่ถือ approval token นี้
+          const auditRef = db.collection('audit_logs').doc();
+          await db.runTransaction(async (tx) => {
+            const snap = await tx.get(reqRef);
+            if (!snap.exists) throw new Error('ไม่พบใบเบิกระหว่าง finalize');
+            const current = snap.data();
+            if (current.status !== 'Approving' || current.approval_token !== approvalToken) throw new Error('สิทธิ์การอนุมัติใบนี้ถูกเปลี่ยนโดยผู้ใช้อื่น');
+            tx.update(reqRef, {
+              status: 'Completed',
+              items: approvedItems,
+              skipped_items: req.skipped_items || [],
+              created_by_name: safeText(reqName),
+              created_by_position: safeText(reqPosition),
+              approved_at: firebase.firestore.FieldValue.serverTimestamp(),
+              approved_by_uid: ctx.currentUser.uid,
+              approved_by_name: ctx.currentUser.name,
+              approval_token: firebase.firestore.FieldValue.delete(),
+              approval_error: firebase.firestore.FieldValue.delete(),
+              updated_at: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_APPROVE', 'requisitions', req.id, { hospital_id: req.hospitalId, month: req.month, year: req.year, item_count: approvedItems.length }));
+          });
+
+          ctx.showToast('อนุมัติและอัปเดตสต๊อกเรียบร้อยแล้ว');
+          await ctx.refreshData();
+          ctx.setCurrentView('dashboard');
+        } catch(e) {
+          console.error('Approve failed:', e);
+          // ถ้าขั้นตอนเขียน stock บางส่วนล้มเหลว จะ mark failed และสามารถกด retry ได้; writes เป็น deterministic จึงทำซ้ำได้
+          try {
+            await db.runTransaction(async (tx) => {
+              const snap = await tx.get(reqRef);
+              if (!snap.exists) return;
+              const current = snap.data();
+              if (current.status === 'Approving' && current.approval_token === approvalToken) {
+                tx.update(reqRef, {
+                  status: 'ApprovalFailed',
+                  approval_error: String(e.message || e).slice(0, 500),
+                  approval_failed_at: firebase.firestore.FieldValue.serverTimestamp()
+                });
+              }
+            });
+          } catch(markErr) { console.warn('Cannot mark ApprovalFailed:', markErr); }
+          ctx.showToast('อนุมัติไม่สำเร็จ: ' + e.message + ' (สามารถเปิดใบนี้แล้วกดลองอนุมัติใหม่ได้)', 'error');
+          await ctx.refreshData();
+        } finally { setIsApproving(false); }
       };
 
       const handleRejectReq = async () => {
-         setIsApproving(true);
-         try {
-            await db.collection('requisitions').doc(req.id).update({ status: 'Rejected' });
+        setIsApproving(true);
+        try {
+            const reqRef = db.collection('requisitions').doc(req.id);
+            const auditRef = db.collection('audit_logs').doc();
+            await db.runTransaction(async (tx) => {
+              const snap = await tx.get(reqRef);
+              if (!snap.exists) throw new Error('ไม่พบใบเบิก');
+              if (snap.data().status !== 'Pending') throw new Error('ใบเบิกนี้ถูกเปลี่ยนสถานะแล้ว');
+              tx.update(reqRef, {
+                status: 'Rejected',
+                rejected_at: firebase.firestore.FieldValue.serverTimestamp(),
+                rejected_by_uid: ctx.currentUser.uid,
+                rejected_by_name: ctx.currentUser.name,
+                updated_at: firebase.firestore.FieldValue.serverTimestamp()
+              });
+              tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_REJECT', 'requisitions', req.id, { hospital_id: req.hospitalId }));
+            });
             ctx.showToast('ไม่อนุมัติใบเบิก');
             await ctx.refreshData();
             ctx.setCurrentView('dashboard');
-         } catch(e) { ctx.showToast(e.message, 'error'); setIsApproving(false); }
+        } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsApproving(false); }
       };
 
       const handleDeleteReq = async () => {
-         setIsApproving(true);
-         try {
-            await db.collection('requisitions').doc(req.id).delete();
+        setIsApproving(true);
+        try {
+            const reqRef = db.collection('requisitions').doc(req.id);
+            const auditRef = db.collection('audit_logs').doc();
+            await db.runTransaction(async (tx) => {
+              const snap = await tx.get(reqRef);
+              if (!snap.exists) throw new Error('ไม่พบใบเบิก');
+              const current = snap.data();
+              const hospitalOwnPending = !isAdmin && String(current.hospitalId) === String(ctx.currentUser.hospital_id) && ['Pending','Rejected'].includes(current.status);
+              const adminAllowed = isAdmin && ['Pending','Rejected','ApprovalFailed'].includes(current.status);
+              if (!hospitalOwnPending && !adminAllowed) throw new Error('ใบเบิกสถานะนี้ไม่อนุญาตให้ลบ');
+              tx.delete(reqRef);
+              tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_DELETE', 'requisitions', req.id, { hospital_id: current.hospitalId, month: current.month, year: current.year, status: current.status }));
+            });
             ctx.showToast('ลบใบเบิกสำเร็จ');
             await ctx.refreshData();
             ctx.setCurrentView('dashboard');
-         } catch(e) { ctx.showToast(e.message, 'error'); setIsApproving(false); }
+        } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsApproving(false); }
       };
 
       const handleTriggerPrint = () => {
-         db.collection('requisitions').doc(req.id).update({is_printed: true});
+         db.collection('requisitions').doc(req.id).update({
+           is_printed: true,
+           printed_at: firebase.firestore.FieldValue.serverTimestamp(),
+           printed_by_uid: ctx.currentUser.uid,
+           printed_by_name: ctx.currentUser.name
+         }).catch(err => console.warn('Cannot mark printed:', err));
+         writeAuditLog(ctx.currentUser, 'REQUISITION_PRINT', 'requisitions', req.id, { hospital_id: req.hospitalId });
          
          const originalTitle = document.title;
          document.title = `ใบเบิก ${hospNameClean} ${req.month}/${fiscalYear}`;
@@ -2011,7 +2520,7 @@ const ViewReqView = ({ ctx }) => {
       typeKeys.forEach(k => groupedItems[k] = []);
       
       // ⭐️ ระบุเงื่อนไข: หากจำนวนยาเบิกเหลือ 0 จะไม่ปรากฏในใบเบิก
-      const itemsToDisplay = editableItems.filter(it => it.dispenseQty > 0 || it.type === '6');
+      const itemsToDisplay = editableItems.filter(it => it.dispenseQty > 0 || it.type === '6' || it.isDisabledForHospital);
 
       itemsToDisplay.forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
       
@@ -2027,19 +2536,19 @@ const ViewReqView = ({ ctx }) => {
           <div className="flex justify-between items-center mb-6 no-print pb-4 border-b relative z-10">
             <button onClick={() => ctx.setCurrentView('dashboard')} className="text-slate-500 font-bold hover:text-slate-800"><i className="fa-solid fa-arrow-left mr-1"></i> กลับ</button>
             <div className="flex gap-2">
-              {req.excel_url && <a href={req.excel_url} target="_blank" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
+              {req.excel_url && <a href={req.excel_url} target="_blank" rel="noopener noreferrer" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
               <button onClick={() => { handleTriggerPrint(); }} className={`text-white px-4 py-2 rounded-xl font-bold shadow-lg flex items-center transition bg-blue-600 hover:bg-blue-700`}><i className="fa-solid fa-print mr-2"></i> พิมพ์เอกสารเบิก</button>
               
-              {(isAdmin || (isHospital && isPending)) && (
+              {canDeleteReq && (
                  <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันลบใบเบิก', message: `ลบใบเบิก เดือน ${THAI_MONTHS[req.month - 1]} ของ ${hosp?.hospital_name} แล้วข้อมูลจะหายไป และโปรดเบิกเข้ามาใหม่อีก`, icon: 'fa-triangle-exclamation', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700 shadow-lg', confirmText: 'รับทราบ ลบทิ้ง', onConfirm: handleDeleteReq })} disabled={isApproving} className="bg-red-100 text-red-700 px-4 py-2 rounded-xl font-bold shadow-sm flex items-center hover:bg-red-200 transition">
                    <i className="fa-solid fa-trash mr-2"></i> ลบใบเบิกทิ้ง
                  </button>
               )}
               
-              {isAdmin && isPending && (
+              {canApproveReq && (
                  <>
-                    <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันไม่อนุมัติ', message: 'คุณต้องการไม่อนุมัติใบเบิกนี้ใช่หรือไม่?', icon: 'fa-xmark', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700', confirmText: 'ไม่อนุมัติ', onConfirm: handleRejectReq })} disabled={isApproving} className="bg-white border-2 border-red-500 text-red-600 px-6 py-2 rounded-xl font-bold shadow hover:bg-red-50 transition">ไม่อนุมัติ</button>
-                    <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันจัดยา', message: 'คุณตรวจสอบยอดและต้องการจัดยานี้ใช่หรือไม่?', icon: 'fa-check-double', confirmText: 'ยืนยันจัดยา', onConfirm: handleApprove })} disabled={isApproving} className="bg-gradient-main text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center hover:scale-105">{isApproving ? '...' : <span><i className="fa-solid fa-check-double mr-2"></i> บันทึกจัดยาแล้ว</span>}</button>
+                    {isPending && <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันไม่อนุมัติ', message: 'คุณต้องการไม่อนุมัติใบเบิกนี้ใช่หรือไม่?', icon: 'fa-xmark', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700', confirmText: 'ไม่อนุมัติ', onConfirm: handleRejectReq })} disabled={isApproving} className="bg-white border-2 border-red-500 text-red-600 px-6 py-2 rounded-xl font-bold shadow hover:bg-red-50 transition">ไม่อนุมัติ</button>}
+                    <button onClick={() => ctx.setConfirmDialog({ title: isApprovalFailed ? 'ลองอนุมัติอีกครั้ง' : 'ยืนยันจัดยา', message: isApprovalFailed ? 'การอนุมัติครั้งก่อนล้มเหลว ระบบจะเขียนข้อมูลเดิมซ้ำแบบ idempotent แล้ว finalize อีกครั้ง' : 'คุณตรวจสอบยอดและต้องการจัดยานี้ใช่หรือไม่?', icon: 'fa-check-double', confirmText: isApprovalFailed ? 'ลองใหม่' : 'ยืนยันจัดยา', onConfirm: handleApprove })} disabled={isApproving} className="bg-gradient-main text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center hover:scale-105">{isApproving ? '...' : <span><i className="fa-solid fa-check-double mr-2"></i> {isApprovalFailed ? 'ลองอนุมัติอีกครั้ง' : 'บันทึกจัดยาแล้ว'}</span>}</button>
                  </>
               )}
             </div>
@@ -2144,7 +2653,7 @@ const ViewReqView = ({ ctx }) => {
                    
                    let subTotalItems = typeItems.length;
                    let subTotalPrice = 0;
-                   typeItems.forEach(it => subTotalPrice += (it.dispenseQty / (it.packSize||1)) * (it.price || 0));
+                   typeItems.forEach(it => subTotalPrice += getRequisitionItemValue(it));
 
                    grandTotalItems += subTotalItems;
                    grandTotalPrice += subTotalPrice;
@@ -2155,28 +2664,31 @@ const ViewReqView = ({ ctx }) => {
                             <td colSpan={canEdit ? "13" : "12"} className="font-bold text-left px-2 py-1 border-y border-black">
                                <div className="flex justify-between w-full">
                                    <span>{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey]}</span>
-                                   <span className="pr-1">{subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2})} บาท</span>
+                                   <span className="pr-1">{typeKey === '6' ? 'ไม่ร่วมระบบเบิก' : `${subTotalPrice.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})} บาท`}</span>
                                </div>
                             </td>
                          </tr>
                          {typeItems.map((it) => {
                             globalItemIndex++;
-                            const itemValue = (it.dispenseQty / (it.packSize||1)) * (it.price || 0);
+                            const itemValue = getRequisitionItemValue(it);
                             
                             const drug = ctx.appDb.drugs.find(d => d.drug_id === it.drugId);
                             const unitObj = drug ? ctx.appDb.units.find(u => String(u.unit_id) === String(drug.unit_id)) : null;
                             const displayUnit = unitObj ? unitObj.unit_name : (it.unit || drug?.unit_id || '');
                             
                             const isVaccine = it.type === '6';
+                            const isDisabled = !!it.isDisabledForHospital;
+                            const rowClass = isDisabled ? 'bg-slate-200 text-slate-500 print:bg-gray-200' : (isVaccine ? 'bg-red-50/50 print:bg-transparent' : '');
 
                             return (
-                               <tr key={it.drugId} className={isVaccine ? 'bg-red-50/50 print:bg-transparent' : ''}>
+                               <tr key={it.drugId} className={rowClass}>
                                   <td className="text-center">{globalItemIndex}</td>
                                   <td className="font-semibold text-left pl-1">
                                      {it.name} 
                                      {/* ⭐️ ป้าย (ขอเพิ่ม) สีแดง */}
                                      {(it.requestMore > 0 || it.isNewDrug || it.isAdjusted) && <span className="text-red-600 font-bold ml-1 text-[11px] border border-red-200 bg-red-50 px-1 rounded">(ขอเพิ่ม)</span>}
-                                     {isVaccine && <span className="text-red-500 font-bold ml-1 text-[9px] border border-red-200 rounded px-1 no-print">ไม่ร่วมรายการ</span>}
+                                     {isVaccine && <span className="text-red-600 font-bold ml-1 text-[9px] border border-red-300 bg-red-50 rounded px-1">ไม่ร่วมระบบเบิก</span>}
+                                     {isDisabled && <span className="text-slate-700 font-bold ml-1 text-[9px] border border-slate-400 bg-slate-200 rounded px-1">ยกเลิกจ่าย</span>}
                                   </td>
                                   <td className="text-center text-slate-700">{displayUnit}</td>
                                   <td className="text-center">{it.packSize}</td>
@@ -2184,11 +2696,17 @@ const ViewReqView = ({ ctx }) => {
                                   <td className="text-center">{formatQty(it.usage, it.packSize)}</td>
                                   <td className="text-center text-blue-700">{formatQty(it.prevExcess - it.usage, it.packSize)}</td>
                                   <td className="text-center font-bold bg-emerald-50/50 no-print">
-                                     {canEdit && !isVaccine ? <input type="number" className="w-16 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white text-emerald-700" value={it.dispenseQty} onChange={e=>handleAdjust(editableItems.findIndex(x=>x.drugId===it.drugId), e.target.value)} /> : <span>{isVaccine ? '0' : formatQty(it.dispenseQty, it.packSize)}</span>}
+                                     {canEdit && !isVaccine && !isDisabled ? <input type="number" className="w-16 text-center border-b border-emerald-500 bg-transparent outline-none focus:bg-white text-emerald-700" value={it.dispenseQty} onChange={e=>handleAdjust(editableItems.findIndex(x=>x.drugId===it.drugId), e.target.value)} /> : <span>{(isVaccine || isDisabled) ? '0' : formatQty(it.dispenseQty, it.packSize)}</span>}
                                   </td>
-                                  <td className="text-center font-bold hidden print:table-cell">{isVaccine ? '0' : formatQty(it.dispenseQty, it.packSize)}</td>
-                                  <td className="text-right pr-1 text-slate-500">{(it.price || 0).toFixed(2)}</td>
-                                  <td className="text-right pr-1 font-semibold">{itemValue.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                  <td className="text-center font-bold hidden print:table-cell">{(isVaccine || isDisabled) ? '0' : formatQty(it.dispenseQty, it.packSize)}</td>
+                                  <td className="text-right pr-1 text-slate-500">
+                                     <span className="no-print">{isVaccine ? (isAdmin ? formatUnitPrice(it.price) : 'ไม่ร่วมระบบเบิก') : isDisabled ? (isAdmin ? formatUnitPrice(it.price) : '-') : formatUnitPrice(it.price)}</span>
+                                     <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDisabled ? '-' : formatUnitPrice(it.price)}</span>
+                                  </td>
+                                  <td className="text-right pr-1 font-semibold">
+                                     <span className="no-print">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDisabled ? 'ยกเลิกจ่าย' : itemValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+                                     <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDisabled ? 'ยกเลิกจ่าย' : itemValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+                                  </td>
                                   <td></td>
                                   <td className="text-center font-mono text-gray-600">{it.drugId}</td>
                                   
@@ -2204,6 +2722,13 @@ const ViewReqView = ({ ctx }) => {
                       </tbody>
                    );
                 })}
+                <tfoot>
+                   <tr>
+                      <td colSpan={canEdit ? "13" : "12"} className="text-left px-2 py-2 border border-black text-[9pt] bg-white">
+                         <span className="font-bold">หมายเหตุ:</span> ข้อมูลยา จำนวนเต็มคือ จำนวนหน่วยใหญ่ของยานั้นๆ จำนวนในวงเล็บคือ จำนวนหน่วยย่อยที่แตกออกจากหน่วยใหญ่
+                      </td>
+                   </tr>
+                </tfoot>
              </table>
 
              <div className="flex justify-end mb-4 mt-2">
@@ -2273,7 +2798,7 @@ const ViewReqView = ({ ctx }) => {
 
              if (hReq && hReq.items) {
                 hReq.items.forEach(it => {
-                   const val = it.isUnpacked ? (it.dispenseQty / (it.packSize||1)) * (it.price||0) : it.dispensePack * (it.price||0);
+                   const val = getRequisitionItemValue(it);
                    if(sums[it.type] !== undefined) sums[it.type] += val;
                    else if(sums['1'] !== undefined) sums['1'] += val; 
                    total += val;
@@ -2381,7 +2906,7 @@ const ViewReqView = ({ ctx }) => {
                 req.items.forEach(it => {
                    if (filterType !== 'all' && it.type !== filterType) return;
                    
-                   const val = it.isUnpacked ? (it.dispenseQty / (it.packSize||1)) * (it.price||0) : it.dispensePack * (it.price||0);
+                   const val = getRequisitionItemValue(it);
                    
                    if (!itemStats[it.drugId]) {
                       const drug = ctx.appDb.drugs.find(d => d.drug_id === it.drugId);
@@ -2389,7 +2914,8 @@ const ViewReqView = ({ ctx }) => {
                       const displayUnit = unitObj ? unitObj.unit_name : (it.unit || drug?.unit_id || '');
 
                       itemStats[it.drugId] = { 
-                          id: it.drugId, name: it.name, type: it.type, unit: displayUnit, packSize: it.packSize, 
+                          id: it.drugId, name: it.name, type: it.type, unit: displayUnit, packSize: it.packSize,
+                          unitPrice: toNonNegativeNumber(drug?.price ?? it.price), isDisabledForHospital: !!it.isDisabledForHospital,
                           qty: 0, val: 0 
                       };
                    }
@@ -2466,6 +2992,7 @@ const ViewReqView = ({ ctx }) => {
                             <th className="p-3 border border-slate-300">ชื่อรายการยา/เวชภัณฑ์</th>
                             <th className="p-3 border border-slate-300 text-center">หมวดหมู่</th>
                             <th className="p-3 border border-slate-300 text-center">จำนวนที่จัดสรร</th>
+                            <th className="p-3 border border-slate-300 text-right">ราคา/Pack</th>
                             <th className="p-3 border border-slate-300 text-right">มูลค่ารวม (บาท)</th>
                          </tr>
                       </thead>
@@ -2477,15 +3004,16 @@ const ViewReqView = ({ ctx }) => {
                                <td className="p-3 border border-slate-300 font-semibold">{item.name}</td>
                                <td className="p-3 border border-slate-300 text-center">{typesSource[item.type]}</td>
                                <td className="p-3 border border-slate-300 text-center font-bold text-sky-700">{formatQty(item.qty, item.packSize)} <span className="text-[10px] font-normal text-slate-500">แพ็ค(ย่อย)</span></td>
+                               <td className="p-3 border border-slate-300 text-right font-bold text-emerald-700">{formatUnitPrice(item.unitPrice)} {item.type === '6' && <span className="block text-[9px] text-red-500">ไม่ร่วมระบบเบิก</span>} {item.isDisabledForHospital && <span className="block text-[9px] text-slate-500">ยกเลิกจ่าย</span>}</td>
                                <td className="p-3 border border-slate-300 text-right font-bold text-slate-800">{item.val.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                             </tr>
                          ))}
-                         {usageData.length === 0 && <tr><td colSpan="6" className="text-center p-8 text-slate-400 font-bold">ไม่พบข้อมูลตามเงื่อนไขที่เลือก</td></tr>}
+                         {usageData.length === 0 && <tr><td colSpan="7" className="text-center p-8 text-slate-400 font-bold">ไม่พบข้อมูลตามเงื่อนไขที่เลือก</td></tr>}
                       </tbody>
                       {usageData.length > 0 && (
                           <tfoot className="bg-slate-100 font-bold">
                               <tr>
-                                  <td colSpan="5" className="p-3 border border-slate-300 text-right">รวมมูลค่าทั้งสิ้น</td>
+                                  <td colSpan="6" className="p-3 border border-slate-300 text-right">รวมมูลค่าทั้งสิ้น</td>
                                   <td className="p-3 border border-slate-300 text-right text-lg text-sky-700">{usageData.reduce((sum, item) => sum + item.val, 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                               </tr>
                           </tfoot>
@@ -2633,14 +3161,17 @@ const AdminConfigView = ({ ctx }) => {
       // ⭐️ ดึง Fuzzy เข้า State แยกต่างหากเมื่อเปิดกล่องแก้ข้อมูลยา
       useEffect(() => {
          if (editTarget && editTarget.col === 'master_drugs') {
-             const existingFuzzy = editTarget.data.fuzzy ? String(editTarget.data.fuzzy).split(',').map(f => f.trim()).filter(f => f !== '') : [];
-             setFuzzyList([...new Set(existingFuzzy)]);
+             const existingFuzzy = cleanFuzzyAliases(editTarget.data.fuzzy);
+             setFuzzyList(existingFuzzy);
          }
       }, [editTarget]);
 
       const executeDelete = async (col, id) => {
         try {
-          await db.collection(col).doc(id).delete();
+          const batch = db.batch();
+          batch.delete(db.collection(col).doc(id));
+          addAuditToBatch(batch, ctx.currentUser, 'ADMIN_DELETE', col, id, {});
+          await batch.commit();
           ctx.showToast('ลบข้อมูลสำเร็จ'); await ctx.refreshData(); 
         } catch(e) { ctx.showToast(e.message, 'error'); }
       };
@@ -2648,7 +3179,10 @@ const AdminConfigView = ({ ctx }) => {
       const handleSave = async (col, id, data) => {
         setIsSaving(true);
         try {
-          await db.collection(col).doc(id).set(data, { merge: true });
+          const batch = db.batch();
+          batch.set(db.collection(col).doc(id), { ...data, updated_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          addAuditToBatch(batch, ctx.currentUser, 'ADMIN_SAVE', col, id, { fields: Object.keys(data || {}) });
+          await batch.commit();
           ctx.showToast('อัปเดตข้อมูลสำเร็จ'); await ctx.refreshData(); setEditTarget(null);
         } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
       };
@@ -2663,18 +3197,32 @@ const AdminConfigView = ({ ctx }) => {
         if (editTarget.col === 'master_drugs') {
            docId = data.drug_id;
            // ⭐️ กรองคำพ้องที่ว่างและคำซ้ำออกก่อนเซฟ
-           const finalFuzzy = [...new Set(fuzzyList.map(f=>f.trim()).filter(f=>f!==''))].join(',');
-           payload = { drug_id: data.drug_id, drug_name: data.drug_name, type: data.type, pack_size: Number(data.pack_size) || 1, price: Number(data.price) || 0, unit_id: data.unit_id, unpacked: data.unpacked === "true", fuzzy: finalFuzzy };
+           const finalFuzzy = cleanFuzzyAliases(fuzzyList).join(',');
+           payload = {
+             drug_id: safeText(data.drug_id), drug_name: safeText(data.drug_name), type: safeText(data.type, '1') || '1',
+             pack_size: safePackSize(data.pack_size), usage_multiplier: Math.max(1, toNonNegativeNumber(data.usage_multiplier, 1)), dispense_step: toNonNegativeNumber(data.dispense_step, 0),
+             price: toNonNegativeNumber(data.price), unit_id: safeText(data.unit_id), unpacked: data.unpacked === "true", fuzzy: finalFuzzy
+           };
         } else if (editTarget.col === 'master_unit') {
            docId = data.unit_id; payload = { unit_id: data.unit_id, unit_name: data.unit_name };
         } else if (editTarget.col === 'master_drug_types') {
            docId = data.type_id; payload = { [data.type_id]: data.type_name }; 
-           await db.collection('config').doc('drug_types').set(payload, { merge: true });
-           ctx.showToast('อัปเดตหมวดหมู่สำเร็จ'); await ctx.refreshData(); setEditTarget(null); return;
+          const batch = db.batch();
+          batch.set(db.collection('config').doc('drug_types'), payload, { merge: true });
+          addAuditToBatch(batch, ctx.currentUser, 'ADMIN_SAVE', 'config', 'drug_types', { type_id: data.type_id });
+          await batch.commit();
+          ctx.showToast('อัปเดตหมวดหมู่สำเร็จ'); await ctx.refreshData(); setEditTarget(null); return;
         } else if (editTarget.col === 'master_hospitals') {
            docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation };
         } else if (editTarget.col === 'users') {
-           docId = editTarget.data.id; payload = { name: data.name, position: data.position, hospital_id: data.hospital_id, role: data.role };
+          docId = editTarget.data.id;
+          payload = {
+            name: safeText(data.name),
+            email: safeText(editTarget.data.email),
+            position: safeText(data.position),
+            hospital_id: safeText(data.hospital_id),
+            role: data.role === 'admin' ? 'admin' : 'hospital'
+          };
         }
         await handleSave(editTarget.col, docId, payload);
       };
@@ -2737,7 +3285,8 @@ const AdminConfigView = ({ ctx }) => {
                   type: 'set', ref: db.collection('master_drugs').doc(row.drug_id),
                   data: {
                     drug_id: row.drug_id, drug_name: row.drug_name, pack_size: Number(row.pack_size) || 1,
-                    unit_id: row.unit_id, price: Number(row.price) || 0, type: String(row.type) || '1', unpacked: isUnpacked, fuzzy: row.fuzzy || ''
+                    unit_id: row.unit_id, price: toNonNegativeNumber(row.price), type: String(row.type) || '1', unpacked: isUnpacked,
+                    usage_multiplier: Math.max(1, toNonNegativeNumber(row.usage_multiplier, 1)), dispense_step: toNonNegativeNumber(row.dispense_step, 0), fuzzy: cleanFuzzyAliases(row.fuzzy).join(',')
                   }
                 };
               }).filter(op => op.data.drug_id);
@@ -2760,7 +3309,7 @@ const AdminConfigView = ({ ctx }) => {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-indigo-50 p-4 rounded-xl mb-6 gap-4 border border-indigo-100">
               <div>
                 <h3 className="font-bold text-indigo-800">นำเข้า/อัปเดตยาด้วยไฟล์ CSV</h3>
-                <p className="text-xs text-indigo-600 mt-1">คอลัมน์ที่ต้องการ: drug_id, drug_name, pack_size, unit_id, price, type, unpacked, fuzzy</p>
+                <p className="text-xs text-indigo-600 mt-1">คอลัมน์ที่ต้องการ: drug_id, drug_name, pack_size, unit_id, price, type, unpacked, fuzzy (เสริม: usage_multiplier, dispense_step)</p>
               </div>
               <label className="bg-indigo-600 text-white px-4 py-2 rounded-lg cursor-pointer font-bold hover:bg-indigo-700 shrink-0 shadow-lg">
                 <i className="fa-solid fa-file-csv mr-2"></i>อัปโหลด CSV ยา <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload}/>
@@ -2780,7 +3329,7 @@ const AdminConfigView = ({ ctx }) => {
             <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-sm max-h-[600px] overflow-y-auto">
               <table className="w-full text-left text-sm border-collapse whitespace-nowrap">
                 <thead className="bg-slate-100 border-b sticky top-0 z-10">
-                  <tr><th className="p-4">รหัส</th><th className="p-4">หมวด</th><th className="p-4">ชื่อยา</th><th className="p-4">ชื่อพ้อง (Fuzzy)</th><th className="p-4 text-center">Pack</th><th className="p-4 text-center">หน่วย</th><th className="p-4 text-center">แตกย่อย</th><th className="p-4 text-right">ราคา (฿)</th><th className="p-4 text-center">จัดการ</th></tr>
+                  <tr><th className="p-4">รหัส</th><th className="p-4">หมวด</th><th className="p-4">ชื่อยา</th><th className="p-4">ชื่อพ้อง (Fuzzy)</th><th className="p-4 text-center">Pack</th><th className="p-4 text-center">ตัวคูณยอดใช้</th><th className="p-4 text-center">รอบจ่าย</th><th className="p-4 text-center">หน่วย</th><th className="p-4 text-center">แตกย่อย</th><th className="p-4 text-right">ราคา (฿)</th><th className="p-4 text-center">จัดการ</th></tr>
                 </thead>
                 <tbody>
                   {filteredDrugs.map(d=>(
@@ -2795,6 +3344,8 @@ const AdminConfigView = ({ ctx }) => {
                         </div>
                       </td>
                       <td className="p-4 text-center font-medium text-slate-600">{d.pack_size}</td>
+                      <td className="p-4 text-center">{getUsageMultiplier(d) !== 1 ? <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded font-bold text-xs">×{getUsageMultiplier(d)}</span> : <span className="text-slate-300">×1</span>}</td>
+                      <td className="p-4 text-center">{toNonNegativeNumber(d.dispense_step, 0) > 0 ? <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-bold text-xs">{d.dispense_step}</span> : <span className="text-slate-300">Auto</span>}</td>
                       <td className="p-4 text-center">
                          {(() => {
                             const unitObj = ctx.appDb.units.find(u => String(u.unit_id) === String(d.unit_id));
@@ -2802,14 +3353,14 @@ const AdminConfigView = ({ ctx }) => {
                          })()}
                       </td>
                       <td className="p-4 text-center">{d.unpacked ? <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-bold text-xs">TRUE</span> : '-'}</td>
-                      <td className="p-4 text-right text-emerald-600 font-bold">{d.price || 0}</td>
+                      <td className="p-4 text-right text-emerald-600 font-bold">{formatUnitPrice(d.price)}</td>
                       <td className="p-4 text-center space-x-2">
                         <button onClick={()=>setEditTarget({ col: 'master_drugs', data: d, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
                         <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบยา ${d.drug_name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('master_drugs', d.drug_id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                       </td>
                     </tr>
                   ))}
-                  {filteredDrugs.length === 0 && <tr><td colSpan="9" className="text-center p-8 text-slate-400 font-bold">ไม่พบข้อมูลยา</td></tr>}
+                  {filteredDrugs.length === 0 && <tr><td colSpan="11" className="text-center p-8 text-slate-400 font-bold">ไม่พบข้อมูลยา</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -2962,10 +3513,103 @@ const AdminConfigView = ({ ctx }) => {
                       </td>
                       <td className="p-4 text-center space-x-2">
                         <button onClick={()=>setEditTarget({ col: 'users', data: u, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
-                        <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันลบผู้ใช้งาน', message:`คุณต้องการลบผู้ใช้งาน ${u.name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('users', u.id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
+                        <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันลบผู้ใช้งาน', message:`คุณต้องการลบโปรไฟล์ผู้ใช้งาน ${u.name} ใช่หรือไม่? บัญชี Firebase Authentication จะยังคงอยู่จนกว่าจะลบผ่าน Firebase Console/Backend แต่จะเข้าใช้งานระบบนี้ไม่ได้เพราะไม่มี profile`, onConfirm: ()=>executeDelete('users', u.id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      };
+
+      const DrugStatusManager = () => {
+        const [selectedHosp, setSelectedHosp] = useState(ctx.appDb.hospitals[0]?.hospital_id || '');
+        const [searchTerm, setSearchTerm] = useState('');
+        const [savingId, setSavingId] = useState('');
+
+        const rows = ctx.appDb.parLevels
+          .filter(p => String(p.hospital_id) === String(selectedHosp))
+          .map(p => {
+            const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(p.drug_id));
+            return { ...p, drug };
+          })
+          .filter(row => {
+            const q = searchTerm.toLowerCase();
+            return !q || String(row.drug_id || '').toLowerCase().includes(q) || String(row.drug?.drug_name || '').toLowerCase().includes(q) || String(row.drug?.fuzzy || '').toLowerCase().includes(q);
+          })
+          .sort((a,b) => sortDrugs({drugId:a.drug_id},{drugId:b.drug_id}));
+
+        const toggleDisabled = async (row) => {
+          if (!selectedHosp || !row.drug_id) return;
+          const docId = `${selectedHosp}_${row.drug_id}`;
+          const nextDisabled = !row.is_disabled;
+          setSavingId(docId);
+          try {
+            const ref = db.collection('config_par').doc(docId);
+            const auditRef = db.collection('audit_logs').doc();
+            await db.runTransaction(async tx => {
+              const snap = await tx.get(ref);
+              if (!snap.exists) throw new Error('ไม่พบรายการ Target VMI ของยานี้');
+              const latest = snap.data();
+              const data = {
+                is_disabled: nextDisabled,
+                updated_at: firebase.firestore.FieldValue.serverTimestamp()
+              };
+              if (nextDisabled) {
+                data.disabled_at = firebase.firestore.FieldValue.serverTimestamp();
+                data.disabled_by_uid = ctx.currentUser.uid;
+                data.disabled_by_name = ctx.currentUser.name;
+              } else {
+                data.disabled_at = firebase.firestore.FieldValue.delete();
+                data.disabled_by_uid = firebase.firestore.FieldValue.delete();
+                data.disabled_by_name = firebase.firestore.FieldValue.delete();
+              }
+              tx.update(ref, data);
+              tx.set(auditRef, buildAuditPayload(ctx.currentUser, nextDisabled ? 'HOSPITAL_DRUG_DISABLE' : 'HOSPITAL_DRUG_ENABLE', 'config_par', docId, {
+                hospital_id: selectedHosp,
+                drug_id: row.drug_id,
+                previous_disabled: !!latest.is_disabled,
+                new_disabled: nextDisabled
+              }));
+            });
+            ctx.showToast(nextDisabled ? 'ยกเลิกจ่ายยานี้สำหรับ รพ.สต. แล้ว' : 'เปิดจ่ายยานี้สำหรับ รพ.สต. แล้ว');
+            await ctx.refreshData();
+          } catch(e) { ctx.showToast(e.message, 'error'); }
+          finally { setSavingId(''); }
+        };
+
+        const disabledCount = rows.filter(r => r.is_disabled).length;
+
+        return (
+          <div className="p-6">
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-5">
+              <h3 className="font-bold text-lg text-slate-800"><i className="fa-solid fa-ban text-slate-500 mr-2"></i>ยกเลิก/เปิดจ่ายยาเฉพาะราย รพ.สต.</h3>
+              <p className="text-sm text-slate-500 mt-1">ยาที่ถูกยกเลิกยังแสดงในใบเบิกเป็นสีเทาและ badge “ยกเลิกจ่าย” เพื่อให้ตรวจสอบย้อนหลังได้ แต่ระบบจะกำหนดจำนวนจ่ายและมูลค่าในใบเบิกเป็น 0</p>
+            </div>
+            <div className="flex flex-col md:flex-row gap-3 mb-4">
+              <select value={selectedHosp} onChange={e=>setSelectedHosp(e.target.value)} className="border p-3 rounded-xl font-bold text-indigo-700 min-w-[280px]">
+                {ctx.appDb.hospitals.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}
+              </select>
+              <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="ค้นหารหัส/ชื่อยา..." className="border p-3 rounded-xl flex-1 outline-none focus:ring-2 focus:ring-slate-400" />
+              <div className="bg-slate-100 px-4 py-3 rounded-xl text-sm font-bold text-slate-600">ยกเลิก {disabledCount} / {rows.length} รายการ</div>
+            </div>
+            <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[620px] overflow-y-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-800 text-white sticky top-0 z-10"><tr><th className="p-3">รหัส</th><th className="p-3">รายการยา</th><th className="p-3 text-center">Target</th><th className="p-3 text-center">สถานะ</th><th className="p-3 text-center">จัดการ</th></tr></thead>
+                <tbody>
+                  {rows.map(row => {
+                    const docId = `${selectedHosp}_${row.drug_id}`;
+                    return <tr key={docId} className={`border-b ${row.is_disabled ? 'bg-slate-200 text-slate-500' : 'hover:bg-emerald-50/40'}`}>
+                      <td className="p-3 font-mono">{row.drug_id}</td>
+                      <td className="p-3 font-bold">{row.drug?.drug_name || 'ไม่พบชื่อยา'}</td>
+                      <td className="p-3 text-center">{row.par_qty ?? '-'}</td>
+                      <td className="p-3 text-center">{row.is_disabled ? <span className="bg-slate-600 text-white px-3 py-1 rounded-full text-xs font-bold">ยกเลิกจ่าย</span> : <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold">จ่ายตามปกติ</span>}</td>
+                      <td className="p-3 text-center"><button disabled={savingId===docId} onClick={()=>toggleDisabled(row)} className={`px-4 py-2 rounded-lg font-bold text-white disabled:opacity-50 ${row.is_disabled ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-600 hover:bg-slate-700'}`}>{savingId===docId ? 'กำลังบันทึก...' : row.is_disabled ? 'เปิดจ่ายอีกครั้ง' : 'ยกเลิกยานี้สำหรับ รพ.สต.'}</button></td>
+                    </tr>
+                  })}
+                  {rows.length===0 && <tr><td colSpan="5" className="p-10 text-center text-slate-400">ไม่พบรายการยาใน Target VMI ของ รพ.สต. นี้</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -2982,7 +3626,9 @@ const AdminConfigView = ({ ctx }) => {
             { id: 'master_hospitals', name: 'รพ.สต.' },
             { id: 'users', name: 'ผู้ใช้งาน' },
             { id: 'historical_usages', name: 'ประวัติเก่า (Time-Series)' },
-            { id: 'stock_adjustments', name: 'คำขอปรับสต๊อก' }
+            { id: 'stock_adjustments', name: 'คำขอปรับสต๊อก' },
+            { id: 'stock_returns', name: 'ประวัติคืนยา' },
+            { id: 'audit_logs', name: 'Audit Log' }
          ];
          const [selCol, setSelCol] = useState(collections[0].id);
          const [data, setData] = useState([]);
@@ -3043,9 +3689,10 @@ const AdminConfigView = ({ ctx }) => {
                                  return (
                                     <td key={k} className="p-0 border border-slate-200 relative">
                                        <textarea 
-                                          defaultValue={displayVal} 
-                                          onBlur={(e) => { if(e.target.value !== String(displayVal)) handleCellEdit(row._docId, k, e.target.value) }}
-                                          className="w-full h-full min-h-[30px] p-2 bg-transparent outline-none focus:bg-amber-100 focus:ring-inset focus:ring-2 focus:ring-amber-500 resize-none overflow-hidden hover:bg-slate-50"
+                                          defaultValue={displayVal}
+                                          disabled={selCol === 'audit_logs'}
+                                          onBlur={(e) => { if(selCol !== 'audit_logs' && e.target.value !== String(displayVal)) handleCellEdit(row._docId, k, e.target.value) }}
+                                          className={`w-full h-full min-h-[30px] p-2 outline-none resize-none overflow-hidden ${selCol === 'audit_logs' ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-transparent focus:bg-amber-100 focus:ring-inset focus:ring-2 focus:ring-amber-500 hover:bg-slate-50'}`}
                                           rows="1"
                                        />
                                     </td>
@@ -3066,13 +3713,22 @@ const AdminConfigView = ({ ctx }) => {
         const handleApprove = async (adj) => {
           setIsSaving(true);
           try {
-            const batch = db.batch();
-            batch.update(db.collection('stock_adjustments').doc(adj.id), { status: 'Approved', approved_at: firebase.firestore.FieldValue.serverTimestamp() });
-            const docId = `${adj.hospital_id}_${adj.drug_id}`;
-            batch.set(db.collection('current_excess').doc(docId), {
-              hospital_id: adj.hospital_id, drug_id: adj.drug_id, excess_balance: Number(adj.new_balance), last_updated: firebase.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-            await batch.commit();
+            const adjRef = db.collection('stock_adjustments').doc(adj.id);
+            const currentRef = db.collection('current_excess').doc(`${adj.hospital_id}_${adj.drug_id}`);
+            const auditRef = db.collection('audit_logs').doc();
+            await db.runTransaction(async (tx) => {
+              const [adjSnap, currentSnap] = await Promise.all([tx.get(adjRef), tx.get(currentRef)]);
+              if (!adjSnap.exists) throw new Error('ไม่พบคำขอปรับสต๊อก');
+              const latestAdj = adjSnap.data();
+              if (latestAdj.status !== 'Pending') throw new Error('คำขอนี้ถูกดำเนินการไปแล้ว');
+              const latestBalance = currentSnap.exists ? toNonNegativeNumber(currentSnap.data().excess_balance) : 0;
+              if (Math.abs(latestBalance - toNonNegativeNumber(latestAdj.old_balance)) > 0.000001) {
+                throw new Error(`ยอดปัจจุบันเปลี่ยนจาก ${latestAdj.old_balance} เป็น ${latestBalance} กรุณาตรวจสอบก่อนอนุมัติ`);
+              }
+              tx.update(adjRef, { status: 'Approved', approved_at: firebase.firestore.FieldValue.serverTimestamp(), approved_by_uid: ctx.currentUser.uid, approved_by_name: ctx.currentUser.name });
+              tx.set(currentRef, { hospital_id: latestAdj.hospital_id, drug_id: latestAdj.drug_id, excess_balance: toNonNegativeNumber(latestAdj.new_balance), last_updated: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+              tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'STOCK_ADJUST_APPROVE', 'stock_adjustments', adj.id, { hospital_id: latestAdj.hospital_id, drug_id: latestAdj.drug_id, old_balance: latestBalance, new_balance: latestAdj.new_balance }));
+            });
             ctx.showToast('อนุมัติปรับสต๊อกเรียบร้อยแล้ว');
             await ctx.refreshData();
           } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
@@ -3081,7 +3737,15 @@ const AdminConfigView = ({ ctx }) => {
         const handleReject = async (adj) => {
           setIsSaving(true);
           try {
-            await db.collection('stock_adjustments').doc(adj.id).update({ status: 'Rejected', rejected_at: firebase.firestore.FieldValue.serverTimestamp() });
+            const adjRef = db.collection('stock_adjustments').doc(adj.id);
+            const auditRef = db.collection('audit_logs').doc();
+            await db.runTransaction(async (tx) => {
+              const snap = await tx.get(adjRef);
+              if (!snap.exists) throw new Error('ไม่พบคำขอปรับสต๊อก');
+              if (snap.data().status !== 'Pending') throw new Error('คำขอนี้ถูกดำเนินการไปแล้ว');
+              tx.update(adjRef, { status: 'Rejected', rejected_at: firebase.firestore.FieldValue.serverTimestamp(), rejected_by_uid: ctx.currentUser.uid, rejected_by_name: ctx.currentUser.name });
+              tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'STOCK_ADJUST_REJECT', 'stock_adjustments', adj.id, { hospital_id: adj.hospital_id, drug_id: adj.drug_id }));
+            });
             ctx.showToast('ปฏิเสธคำขอแล้ว');
             await ctx.refreshData();
           } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSaving(false); }
@@ -3380,6 +4044,7 @@ const AdminConfigView = ({ ctx }) => {
             <TabBtn id="units" icon="fa-box" label="หน่วยนับ" />
             <TabBtn id="hospitals" icon="fa-hospital" label="รพ.สต." />
             <TabBtn id="approve_stock" icon="fa-check-to-slot" label="อนุมัติปรับสต๊อก" />
+            <TabBtn id="drug_status" icon="fa-ban" label="ยกเลิกจ่ายราย รพ.สต." />
             <TabBtn id="users" icon="fa-users" label="ผู้ใช้งาน" />
             <TabBtn id="raw_db" icon="fa-table" label="ฐานข้อมูลดิบ (Raw DB)" />
             <TabBtn id="hist_manager" icon="fa-history" label="จัดการประวัติย้อนหลัง" />
@@ -3391,6 +4056,7 @@ const AdminConfigView = ({ ctx }) => {
             {activeTab === 'units' && <UnitManager />}
             {activeTab === 'hospitals' && <HospitalManager />}
             {activeTab === 'approve_stock' && <ApproveStockManager />}
+            {activeTab === 'drug_status' && <DrugStatusManager />}
             {activeTab === 'users' && <UserManager />}
             {activeTab === 'raw_db' && <RawDBManager />}
             {activeTab === 'hist_manager' && <HistManager />}
@@ -3430,8 +4096,8 @@ const AdminConfigView = ({ ctx }) => {
                                  if (e.key === 'Enter') {
                                     e.preventDefault();
                                     const val = e.target.value.trim();
-                                    if (val && !fuzzyList.includes(val)) {
-                                       setFuzzyList([...fuzzyList, val]);
+                                    if (val) {
+                                       setFuzzyList(cleanFuzzyAliases([...fuzzyList, val]));
                                        e.target.value = '';
                                     }
                                  }
@@ -3455,6 +4121,11 @@ const AdminConfigView = ({ ctx }) => {
                           <input name="pack_size" type="number" defaultValue={editTarget.data.pack_size} placeholder="เช่น 100" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                         </div>
                       </div>
+                      <div className="mt-2 bg-indigo-50 p-3 rounded-xl border border-indigo-200">
+                         <label className="text-sm font-bold text-indigo-800 block mb-1">ตัวคูณยอดใช้จาก รบ.301 / JHCIS (Usage Multiplier)</label>
+                         <input name="usage_multiplier" type="number" min="1" step="0.0001" defaultValue={editTarget.data.usage_multiplier || 1} placeholder="1 = ไม่แปลงหน่วย" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" />
+                         <p className="text-[10px] text-indigo-700 mt-1">ตัวอย่าง Obimin: ถ้าใน รบ.301 ยอด 1 หมายถึง 1 กระปุก = 30 เม็ด ให้ Pack = 30 และตัวคูณยอดใช้ = 30; ระบบจะแปลง 1 → 30 ก่อนคำนวณ VMI</p>
+                      </div>
                       <div className="flex gap-4">
                         <div className="w-1/2">
                           <label className="text-sm font-bold text-slate-600 block mb-1">หน่วยนับ</label>
@@ -3465,8 +4136,14 @@ const AdminConfigView = ({ ctx }) => {
                         </div>
                         <div className="w-1/2">
                           <label className="text-sm font-bold text-slate-600 block mb-1">ราคา (฿) - ต่อ Pack</label>
-                          <input name="price" type="number" step="0.01" defaultValue={editTarget.data.price} placeholder="ราคาต่อ 1 Pack" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                          <input name="price" type="number" step="0.0001" min="0" defaultValue={editTarget.data.price} placeholder="เช่น 12.3456" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+                          <p className="text-[10px] text-slate-400 mt-1">รองรับราคาทศนิยมได้สูงสุด 4 ตำแหน่ง</p>
                         </div>
+                      </div>
+                      <div className="mt-2 bg-blue-50 p-3 rounded-xl border border-blue-200">
+                         <label className="text-sm font-bold text-blue-800 block mb-1">รอบจ่ายสะดวก (Dispense Step) — หน่วยย่อย</label>
+                         <input name="dispense_step" type="number" min="0" step="1" defaultValue={editTarget.data.dispense_step || 0} placeholder="0 = ใช้ค่าอัตโนมัติ" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                         <p className="text-[10px] text-blue-600 mt-1">ตัวอย่าง Omeprazole pack 14 แต่ต้องการหยิบครั้งละ 350 หน่วย ให้ใส่ 350; ถ้าใส่ 0 ระบบใช้แบบเดิม</p>
                       </div>
                       <div className="mt-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
                          <label className="text-sm font-bold text-slate-600 block mb-1">สถานะแตกย่อย</label>
@@ -3581,6 +4258,7 @@ const App = () => {
       const [adminActiveTab, setAdminActiveTab] = useState('drugs');
       const [targetUploadHosp, setTargetUploadHosp] = useState(null);
       const [isInitializing, setIsInitializing] = useState(true);
+      const registrationInProgressRef = useRef(false);
 
       const showToast = (message, type = 'success') => setToast({ message, type });
 
@@ -3606,83 +4284,97 @@ const App = () => {
 
 // ⭐️ แก้ปัญหาโควต้าเต็ม (Quota Exceeded) โดยดึงข้อมูลเฉพาะที่จำเป็น
       const refreshData = async (userData) => {
-        // ใช้ userData ที่ส่งเข้ามา หรือดึงจาก state ปัจจุบัน
-        const activeUser = userData || currentUser; 
+        const activeUser = userData || currentUser;
         if (!activeUser) return;
 
         const isAdmin = activeUser.role === 'admin';
         const hospId = activeUser.hospital_id;
 
         try {
-          // 1. ดึงข้อมูลพื้นฐานที่ทุกคนต้องใช้ (ตารางขนาดเล็ก โหลดนิดเดียว)
-          const [drugsSnap, hospSnap, unitSnap, userSnap, configSnap] = await Promise.all([
+          // Master data ที่จำเป็นกับทุกหน้าหลัง login
+          const basePromises = [
             db.collection('master_drugs').get(),
             db.collection('master_hospitals').get(),
             db.collection('master_unit').get(),
-            db.collection('users').get(),
             db.collection('config').doc('drug_types').get()
-          ]);
+          ];
+          // รายชื่อผู้ใช้ทั้งระบบโหลดเฉพาะ Admin เท่านั้น
+          if (isAdmin) basePromises.push(db.collection('users').get());
+
+          const baseResults = await Promise.all(basePromises);
+          const [drugsSnap, hospSnap, unitSnap, configSnap] = baseResults;
+          const userSnap = isAdmin ? baseResults[4] : null;
+
+          // Fuzzy จะ clean ตอนบันทึก/Import เท่านั้น
+          // ไม่เขียนฐานข้อมูลระหว่าง Login/Refresh เพื่อไม่ให้กระทบสิทธิ์ Admin
 
           let parSnap, balSnap, reqSnap, adjSnap, histSnap;
-
-          // 2. แยกดึงข้อมูลตารางขนาดใหญ่ตามสิทธิ์
           if (isAdmin) {
-             // แอดมินจำเป็นต้องดูภาพรวม จึงต้องโหลดทั้งหมด (ระวังแอดมินอย่ากด F5 รีเฟรชหน้ารัวๆ)
-             [parSnap, balSnap, reqSnap, adjSnap, histSnap] = await Promise.all([
-               db.collection('config_par').get(),
-               db.collection('current_excess').get(),
-               db.collection('requisitions').get(),
-               db.collection('stock_adjustments').get(),
-               db.collection('historical_usages').get()
-             ]);
+            [parSnap, balSnap, reqSnap, adjSnap, histSnap] = await Promise.all([
+              db.collection('config_par').get(),
+              db.collection('current_excess').get(),
+              db.collection('requisitions').get(),
+              db.collection('stock_adjustments').get(),
+              db.collection('historical_usages').get()
+            ]);
           } else {
-             // ⭐️ รพ.สต. จะดึง "เฉพาะข้อมูลของตัวเองเท่านั้น" (ลดการใช้ Quota ได้ 95%!!)
-             [parSnap, balSnap, reqSnap, adjSnap, histSnap] = await Promise.all([
-               db.collection('config_par').where('hospital_id', '==', hospId).get(),
-               db.collection('current_excess').where('hospital_id', '==', hospId).get(),
-               db.collection('requisitions').where('hospitalId', '==', hospId).get(), // ใบเบิกของตัวเอง
-               db.collection('stock_adjustments').where('hospital_id', '==', hospId).get(),
-               db.collection('historical_usages').where('hospital_id', '==', hospId).get()
-             ]);
+            if (!hospId) throw new Error('บัญชีผู้ใช้นี้ยังไม่ได้ผูก รพ.สต.');
+            [parSnap, balSnap, reqSnap, adjSnap, histSnap] = await Promise.all([
+              db.collection('config_par').where('hospital_id', '==', hospId).get(),
+              db.collection('current_excess').where('hospital_id', '==', hospId).get(),
+              db.collection('requisitions').where('hospitalId', '==', hospId).get(),
+              db.collection('stock_adjustments').where('hospital_id', '==', hospId).get(),
+              db.collection('historical_usages').where('hospital_id', '==', hospId).get()
+            ]);
           }
 
           setAppDb({
-            drugs: drugsSnap.docs.map(d => d.data()),
+            drugs: drugsSnap.docs.map(d => ({ id: d.id, ...d.data(), fuzzy: cleanFuzzyAliases(d.data().fuzzy).join(',') })),
             hospitals: hospSnap.docs.map(d => ({id: d.id, ...d.data()})),
-            units: unitSnap.docs.map(d => d.data()),
-            parLevels: parSnap.docs.map(d => d.data()),
-            balances: balSnap.docs.map(d => d.data()),
+            units: unitSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+            parLevels: parSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+            balances: balSnap.docs.map(d => ({ id: d.id, ...d.data() })),
             requisitions: reqSnap.docs.map(d => ({id: d.id, ...d.data()})),
-            usersList: userSnap.docs.map(d => ({id: d.id, ...d.data()})),
+            usersList: isAdmin ? userSnap.docs.map(d => ({id: d.id, ...d.data()})) : [{ id: activeUser.uid, ...activeUser }],
             stockAdjustments: adjSnap.docs.map(d => ({id: d.id, ...d.data()})),
             drugTypes: configSnap.exists ? configSnap.data() : null,
-            historicalUsages: histSnap.docs.map(d => d.data())
+            historicalUsages: histSnap.docs.map(d => ({ id: d.id, ...d.data() }))
           });
         } catch (error) {
-          showToast('โหลดข้อมูลล้มเหลว: ' + error.message, 'error');
+          // ให้สิทธิ์ผู้ใช้คงอยู่เหมือนไฟล์เดิม แม้ข้อมูลบาง collection โหลดไม่สำเร็จ
+          // เพื่อไม่ให้ refresh error ถูกตีความเป็น auth error แล้ว signOut Admin
+          console.error('[Sawee Rxfill] refreshData error:', error);
+          showToast('โหลดข้อมูลบางส่วนไม่สำเร็จ: ' + error.message, 'error');
         }
       };
 
 useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(async (user) => {
+          // คงพฤติกรรมการอ่านสิทธิ์แบบไฟล์ต้นฉบับที่ใช้งาน Admin ได้อยู่แล้ว
+          // ระหว่างสมัครสมาชิกใหม่เท่านั้น จึงพัก observer ชั่วคราว
+          if (registrationInProgressRef.current) {
+            setIsInitializing(false);
+            return;
+          }
+
           if (user) {
             try {
               const userDoc = await db.collection('users').doc(user.uid).get();
               if (userDoc.exists) {
                 const userData = { uid: user.uid, ...userDoc.data() };
                 setCurrentUser(userData);
-                await refreshData(userData); 
+                // refreshData มีหน้าที่โหลดข้อมูลเท่านั้น และจะไม่ signOut หาก collection ใดโหลดพลาด
+                await refreshData(userData);
                 setCurrentView('dashboard');
               } else {
                 showToast('ไม่พบข้อมูลสิทธิ์ผู้ใช้งาน', 'error');
-                auth.signOut();
+                await auth.signOut();
               }
             } catch(e) {
-                // ⭐️ แก้ไขตรงนี้: ถ้าระบบอ่านข้อมูลไม่ได้ (ติด Permission) ให้เตะออกไปหน้าล็อกอิน ไม่ให้ค้าง
-                showToast('เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์: ' + e.message, 'error');
-                auth.signOut(); 
-                setCurrentUser(null);
-                setCurrentView('login');
+              showToast('เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์: ' + e.message, 'error');
+              await auth.signOut();
+              setCurrentUser(null);
+              setCurrentView('login');
             }
           } else {
             setCurrentUser(null);
@@ -3696,7 +4388,7 @@ useEffect(() => {
       if (isInitializing) return <FullScreenSpinner />;
 
       if (currentView === 'login') return <><LoginView ctx={{handleLogin, setCurrentView, showToast}} />{toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}</>;
-      if (currentView === 'register') return <><RegisterView ctx={{setCurrentView, showToast, appDb}} />{toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}</>;
+      if (currentView === 'register') return <><RegisterView ctx={{setCurrentView, showToast, appDb, registrationInProgressRef}} />{toast && <Toast message={toast.message} type={toast.type} onClose={()=>setToast(null)} />}</>;
 
       const ctx = { appDb, currentUser, setCurrentView, showToast, refreshData, currentReqId, setCurrentReqId, editReqId, setEditReqId, setConfirmDialog, adminActiveTab, setAdminActiveTab, targetUploadHosp, setTargetUploadHosp, handleLogin };
 

@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <title>Sawee Rxfill (VMI Edition v4.9 Production)</title>
+  <title>Sawee Rxfill (VMI Edition v4.9.2 Production)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
   
@@ -174,7 +174,7 @@
     };
 
     const APP_SCHEMA_VERSION = 11;
-    const APP_VERSION = '4.9.0-production';
+    const APP_VERSION = '4.9.2-production';
     const MAX_BATCH_WRITES = 400;
     let fuzzyAutoCleanDone = false;
     
@@ -343,7 +343,11 @@
 
     const getUsageItemValue = (item) => {
       if (isNonBillableInRequisition(item)) return 0;
-      return (getRb301UsageQty(item) / safePackSize(item?.packSize ?? item?.pack_size)) * toNonNegativeNumber(item?.price);
+      const baseValue = (getRb301UsageQty(item) / safePackSize(item?.packSize ?? item?.pack_size)) * toNonNegativeNumber(item?.price);
+      // Completed อาจมีการแก้ mapping ย้อนหลังเพื่อแก้เฉพาะสถิติ รบ.301 โดยไม่แตะใบจัดยา/stock
+      const corrections = Array.isArray(item?.analyticsCorrections) ? item.analyticsCorrections : [];
+      const delta = corrections.reduce((sum, c) => sum + toSafeNumber(c?.deltaValue), 0);
+      return Math.max(0, baseValue + delta);
     };
 
     const getSystemSuggestedQty = (item) => {
@@ -2224,28 +2228,36 @@ const CreateReqView = ({ ctx }) => {
            const finalStatus = saveStatus;
            if (ctx.editReqId) {
              const reqRef = db.collection('requisitions').doc(ctx.editReqId);
-             const auditRef = db.collection('audit_logs').doc();
-             await db.runTransaction(async (tx) => {
-               const snap = await tx.get(reqRef);
-               if (!snap.exists) throw new Error('ไม่พบใบเบิกที่ต้องการแก้ไข');
-               const current = snap.data();
-               if (!isAdmin && String(current.hospitalId) !== String(ctx.currentUser.hospital_id)) throw new Error('ไม่มีสิทธิ์แก้ไขใบเบิกของหน่วยงานอื่น');
-               if (!['Draft','Pending','Rejected'].includes(current.status)) throw new Error('ใบเบิกนี้ไม่อยู่ในสถานะที่แก้ไข/ส่งใหม่ได้แล้ว');
-               if (current.is_printed) throw new Error('ใบเบิกนี้พิมพ์แล้ว จึงล็อกการแก้ไข');
-               const payload = {
-                 items: sanitizedItems,
-                 skipped_items: skipped,
-                 updated_at: firebase.firestore.FieldValue.serverTimestamp(),
-                 updated_by_uid: ctx.currentUser.uid,
-                 updated_by_name: ctx.currentUser.name,
-                 status: finalStatus,
-                 revision: toNonNegativeInt(current.revision, 0) + 1,
-                 schema_version: APP_SCHEMA_VERSION
-               };
-               if (fileUrl) payload.excel_url = fileUrl;
-               tx.update(reqRef, payload);
-               tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_UPDATE', 'requisitions', ctx.editReqId, { hospital_id: current.hospitalId, month: current.month, year: current.year, revision: payload.revision }));
-             });
+             let auditDetails = null;
+             try {
+               await db.runTransaction(async (tx) => {
+                 const snap = await tx.get(reqRef);
+                 if (!snap.exists) throw new Error('ไม่พบใบเบิกที่ต้องการแก้ไข');
+                 const current = snap.data();
+                 if (!isAdmin && String(current.hospitalId) !== String(ctx.currentUser.hospital_id)) throw new Error('ไม่มีสิทธิ์แก้ไขใบเบิกของหน่วยงานอื่น');
+                 if (!['Draft','Pending','Rejected'].includes(current.status)) throw new Error('ใบเบิกนี้ไม่อยู่ในสถานะที่แก้ไข/ส่งใหม่ได้แล้ว');
+                 if (current.is_printed && !isAdmin) throw new Error('ใบเบิกนี้พิมพ์แล้ว จึงล็อกการแก้ไขสำหรับผู้ใช้ รพ.สต.');
+                 const payload = {
+                   items: sanitizedItems,
+                   skipped_items: skipped,
+                   updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+                   updated_by_uid: ctx.currentUser.uid,
+                   updated_by_name: ctx.currentUser.name,
+                   status: finalStatus,
+                   revision: toNonNegativeInt(current.revision, 0) + 1,
+                   schema_version: APP_SCHEMA_VERSION
+                 };
+                 if (fileUrl) payload.excel_url = fileUrl;
+                 tx.update(reqRef, payload);
+                 auditDetails = { hospital_id: current.hospitalId, month: current.month, year: current.year, revision: payload.revision };
+               });
+             } catch (err) {
+               const msg = err?.message || String(err);
+               if (/permission|insufficient/i.test(msg)) throw new Error('Firestore ปฏิเสธสิทธิ์ที่ขั้นตอนแก้ไข requisitions: ' + msg);
+               throw err;
+             }
+             // Audit เป็นงานรอง: ห้ามทำให้ใบเบิกที่บันทึกสำเร็จแล้วล้มทั้ง transaction
+             if (auditDetails) await writeAuditLog(ctx.currentUser, 'REQUISITION_UPDATE', 'requisitions', ctx.editReqId, auditDetails);
              savedReqForLocal = {
                ...(editingReq || {}),
                id: ctx.editReqId, hospitalId: hospId, month: currentMonth, year: currentYear,
@@ -2257,35 +2269,56 @@ const CreateReqView = ({ ctx }) => {
 
              ctx.showToast(uploadFailed ? 'อัปเดตใบเบิกสำเร็จ แต่ไฟล์ รบ.301 อัปโหลดไม่สำเร็จ' : 'อัปเดตใบเบิกสำเร็จ', uploadFailed ? 'error' : 'success');
            } else {
-             // กันการสร้างซ้ำจากข้อมูลที่โหลดอยู่ และใช้ document id แบบ deterministic กันการกดพร้อมกันหลายแท็บ
+             // เช็กจาก state ก่อน เพื่อให้ตอบสนองเร็ว
              const existing = ctx.appDb.requisitions.find(r => String(r.hospitalId) === String(hospId) && Number(r.month) === currentMonth && Number(r.year) === currentYear && !String(r.id || '').startsWith('HIST-'));
              if (existing) throw new Error(`เดือน ${currentMonth}/${currentYear} มีใบเบิกอยู่แล้ว (${existing.id}) กรุณาลบอันเก่าออกก่อน จึงจะสร้างใบเบิกใหม่ได้`);
 
+             // สำคัญ: ห้าม tx.get(document ที่ยังไม่มี) เพราะ Rules แบบ owner ใช้ resource.data และจะ deny เอกสารที่ยังไม่เกิด
+             // ใช้ query ที่ constrain hospitalId ของผู้ใช้แทน ซึ่งสอดคล้องกับ Firestore Rules
+             let duplicateReq = null;
+             try {
+               const ownReqSnap = await db.collection('requisitions').where('hospitalId', '==', hospId).get();
+               duplicateReq = ownReqSnap.docs.map(d => ({ id:d.id, ...d.data() })).find(r =>
+                 Number(r.month) === currentMonth && Number(r.year) === currentYear && !String(r.id || '').startsWith('HIST-')
+               ) || null;
+             } catch (err) {
+               const msg = err?.message || String(err);
+               if (/permission|insufficient/i.test(msg)) throw new Error('Firestore ปฏิเสธสิทธิ์ที่ขั้นตอนตรวจใบเบิกเดิม (requisitions query): ' + msg);
+               throw err;
+             }
+             if (duplicateReq) throw new Error(`เดือน ${currentMonth}/${currentYear} มีใบเบิกอยู่แล้ว (${duplicateReq.id}) กรุณาเปิดใบเดิมเพื่อแก้ไข หรือลบใบเดิมก่อน`);
+
              const newId = buildRequisitionId(hospId, currentMonth, currentYear);
              const reqRef = db.collection('requisitions').doc(newId);
-             const auditRef = db.collection('audit_logs').doc();
-             await db.runTransaction(async (tx) => {
-               const existingSnap = await tx.get(reqRef);
-               if (existingSnap.exists) throw new Error('พบใบเบิกรอบนี้อยู่แล้ว กรุณารีเฟรชหน้าจอ');
-               tx.set(reqRef, {
-                 hospitalId: hospId,
-                 month: currentMonth,
-                 year: currentYear,
-                 status: finalStatus,
-                 is_printed: false,
-                 excel_url: fileUrl || '',
-                 items: sanitizedItems,
-                 skipped_items: skipped,
-                 created_by_uid: ctx.currentUser?.uid || '',
-                 created_by_name: ctx.currentUser?.name || 'System',
-                 created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่',
-                 created_at: firebase.firestore.FieldValue.serverTimestamp(),
-                 updated_at: firebase.firestore.FieldValue.serverTimestamp(),
-                 revision: 1,
-                 schema_version: APP_SCHEMA_VERSION
-               });
-               tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_CREATE', 'requisitions', newId, { hospital_id: hospId, month: currentMonth, year: currentYear, item_count: sanitizedItems.length }));
-             });
+             const createPayload = {
+               hospitalId: hospId,
+               month: currentMonth,
+               year: currentYear,
+               status: finalStatus,
+               is_printed: false,
+               excel_url: fileUrl || '',
+               items: sanitizedItems,
+               skipped_items: skipped,
+               created_by_uid: ctx.currentUser?.uid || '',
+               created_by_name: ctx.currentUser?.name || 'System',
+               created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่',
+               created_at: firebase.firestore.FieldValue.serverTimestamp(),
+               updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+               revision: 1,
+               schema_version: APP_SCHEMA_VERSION
+             };
+             try {
+               await reqRef.set(createPayload);
+             } catch (err) {
+               const msg = err?.message || String(err);
+               if (/permission|insufficient/i.test(msg)) {
+                 throw new Error(`Firestore ปฏิเสธสิทธิ์ตอนสร้าง requisitions/${newId}. โปรดตรวจ users/${ctx.currentUser.uid}: role=${ctx.currentUser.role || '-'}, hospital_id=${ctx.currentUser.hospital_id || '-'}; ใบกำลังส่ง hospitalId=${hospId}. (${msg})`);
+               }
+               throw err;
+             }
+             // Audit แยกออกจาก write หลัก เพื่อไม่ให้ audit permission ทำให้ใบเบิกล้ม
+             await writeAuditLog(ctx.currentUser, 'REQUISITION_CREATE', 'requisitions', newId, { hospital_id: hospId, month: currentMonth, year: currentYear, item_count: sanitizedItems.length });
+
              savedReqForLocal = {
                id: newId, hospitalId: hospId, month: currentMonth, year: currentYear, status: finalStatus,
                is_printed: false, excel_url: fileUrl || '', items: sanitizedItems, skipped_items: skipped,
@@ -2294,7 +2327,6 @@ const CreateReqView = ({ ctx }) => {
                created_at: firebase.firestore.Timestamp.now(), updated_at: firebase.firestore.Timestamp.now(),
                revision: 1, schema_version: APP_SCHEMA_VERSION
              };
-
 
              ctx.showToast(uploadFailed ? 'ส่งข้อมูลสำเร็จ แต่ไฟล์ รบ.301 อัปโหลดไม่สำเร็จ' : (isAdmin ? 'อัปโหลดแทน รพ.สต. สำเร็จ (รอตรวจสอบ)' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา'), uploadFailed ? 'error' : 'success');
            }
@@ -2850,6 +2882,8 @@ const ViewReqView = ({ ctx }) => {
       const ownsReq = isHospital && String(req?.hospitalId) === String(ctx.currentUser?.hospital_id);
       const isPrinted = !!req?.is_printed || !!localPrintedAt;
       const adminEditableStatus = ['Draft','Pending','Rejected','ApprovalFailed'].includes(req?.status);
+      const adminHistoricalRematchOnly = isAdmin && !adminEditableStatus && req?.status === 'Completed';
+      const canAdminRematch = isAdmin && req?.status !== 'Approving';
       // พิมพ์แล้วล็อกเฉพาะผู้ใช้ รพ.สต.; Admin แก้ได้ทุกสถานะก่อน Completed/กำลัง Approve
       const canEdit = isAdmin ? adminEditableStatus : (isPending && ownsReq && !isPrinted);
       // ผู้ใช้สามารถลบใบ Pending/Rejected ที่พิมพ์แล้วเพื่อเริ่มเบิกใหม่ได้
@@ -2900,7 +2934,7 @@ const ViewReqView = ({ ctx }) => {
           const usage = toNonNegativeNumber(it.usage);
           const rb301Usage = getRb301UsageQty(it);
           const lineValue = getRequisitionItemValue(it);
-          const usageValue = isNonBillableInRequisition(it) ? 0 : (rb301Usage / pack) * price;
+          const usageValue = getUsageItemValue(it);
           const target = toNonNegativeNumber(it.targetVMI);
           const credit = toSafeNumber(it.prevExcess) - usage;
           const suggestedQty = getSystemSuggestedQty(it);
@@ -2912,6 +2946,7 @@ const ViewReqView = ({ ctx }) => {
           if (it.manualAdded) flags.push('เพิ่มเอง');
           if (getUsageMultiplier(it) !== 1) flags.push(`Multiplier ${getUsageMultiplier(it)}`);
           if (usage > 0 && qty === 0) flags.push('มีใช้แต่ไม่จ่าย: ตรวจเครดิต/Target');
+          if (Array.isArray(it.analyticsCorrections) && it.analyticsCorrections.length) flags.push('แก้ mapping สถิติย้อนหลังแล้ว');
           if (usageValue >= 5000) flags.push('มูลค่า รบ.301 สูง');
           if (usageValue >= 1000 && lineValue > 0 && usageValue >= lineValue * 3) flags.push('มูลค่าใช้สูงกว่าจ่ายมาก');
           return { ...it, itemIndex, drug, unitName, pack, masterPack, price, masterPrice, qty, usage, rb301Usage, lineValue, usageValue, target, credit, suggestedQty, flags };
@@ -2967,7 +3002,7 @@ const ViewReqView = ({ ctx }) => {
       };
 
       const openRematchDialog = (row) => {
-        if (!isAdmin || !adminEditableStatus) return;
+        if (!canAdminRematch) return;
         setShowValueAudit(false);
         const sourceNames = Array.isArray(row?.sourceRawNames) ? row.sourceRawNames.filter(Boolean) : [];
         const oldAliases = cleanFuzzyAliases(row?.drug?.fuzzy, row?.drug?.drug_name);
@@ -3055,6 +3090,61 @@ const ViewReqView = ({ ctx }) => {
         const selectedIndex = Math.max(0, Math.min(sources.length-1, Number(rematchSourceIndex)||0));
         setIsRematching(true);
         try {
+          // ใบ Completed: แก้เฉพาะ mapping/mูลค่า รบ.301 สำหรับ analytics ย้อนหลัง
+          // ไม่เปลี่ยน drugId, จำนวนจ่าย, newExcess, current_excess หรือ stock_adjustments ของใบที่จัดยาไปแล้ว
+          if (adminHistoricalRematchOnly) {
+            const oldDrug = rematchTarget.drug || ctx.appDb.drugs.find(d => String(d.drug_id) === String(rematchTarget.drugId));
+            const oldPack = safePackSize(rematchTarget.pack ?? oldDrug?.pack_size ?? rematchTarget.packSize);
+            const oldPrice = toNonNegativeNumber(rematchTarget.price ?? oldDrug?.price);
+            const oldContributionValue = (oldNormalizedContribution / oldPack) * oldPrice;
+            const newPack = safePackSize(newDrug.pack_size);
+            const newPrice = toNonNegativeNumber(newDrug.price);
+            const newContributionValue = (normalizedUsage / newPack) * newPrice;
+            const correction = {
+              sourceName, rawUsage, oldNormalizedUsage: oldNormalizedContribution, newNormalizedUsage: normalizedUsage,
+              oldDrugId: String(rematchTarget.drugId || ''), oldDrugName: safeText(rematchTarget.name), oldPack, oldPrice, oldValue: oldContributionValue,
+              newDrugId: String(newDrug.drug_id || ''), newDrugName: safeText(newDrug.drug_name), newPack, newPrice, newValue: newContributionValue,
+              deltaValue: newContributionValue - oldContributionValue, correctedByUid: ctx.currentUser.uid, correctedByName: ctx.currentUser.name,
+              correctedAtIso: new Date().toISOString()
+            };
+            const reqRef = db.collection('requisitions').doc(req.id);
+            const auditRef = db.collection('audit_logs').doc();
+            let persistedItems = null;
+            await db.runTransaction(async tx => {
+              const snap = await tx.get(reqRef);
+              if (!snap.exists) throw new Error('ไม่พบใบเบิก');
+              const current = snap.data();
+              if (current.status !== 'Completed') throw new Error('สถานะใบเบิกเปลี่ยนแล้ว กรุณารีเฟรช');
+              const arr = Array.isArray(current.items) ? current.items.map(x => ({...x})) : [];
+              const idx = arr.findIndex((x,i) => i === rematchTarget.itemIndex || String(x.drugId) === String(rematchTarget.drugId));
+              if (idx < 0) throw new Error('ไม่พบรายการเดิมในใบเบิก');
+              const prior = Array.isArray(arr[idx].analyticsCorrections) ? arr[idx].analyticsCorrections : [];
+              const correctionKey = `${normalizeForMatch(sourceName)}|${rawUsage}|${String(rematchTarget.drugId||'')}`;
+              const cleanedPrior = prior.filter(c => `${normalizeForMatch(c?.sourceName)}|${toNonNegativeNumber(c?.rawUsage)}|${String(c?.oldDrugId||'')}` !== correctionKey);
+              arr[idx].analyticsCorrections = [...cleanedPrior, correction];
+              arr[idx].analyticsRematched = true;
+              arr[idx].analyticsRematchedToDrugId = String(newDrug.drug_id);
+              arr[idx].analyticsRematchedToDrugName = safeText(newDrug.drug_name);
+              arr[idx].analyticsRematchedAtIso = new Date().toISOString();
+              persistedItems = arr;
+              tx.update(reqRef, { items: arr, analytics_corrected_at: firebase.firestore.FieldValue.serverTimestamp(), analytics_corrected_by: ctx.currentUser.name });
+              tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_ANALYTICS_REMATCH', 'requisitions', req.id, {
+                sourceName, oldDrugId: rematchTarget.drugId, newDrugId: newDrug.drug_id, oldValue: oldContributionValue, newValue: newContributionValue
+              }));
+            });
+            if (sourceName) {
+              try { await persistAdminRematchAlias(sourceName, rematchTarget.drugId, newDrug.drug_id); }
+              catch (fuzzyErr) { console.warn('Admin historical rematch fuzzy persist failed:', fuzzyErr); }
+            }
+            if (persistedItems) setEditableItems(persistedItems);
+            if (ctx.setAppDb && persistedItems) {
+              ctx.setAppDb(prev => ({...prev, requisitions:(prev.requisitions||[]).map(r=>r.id===req.id?{...r,items:persistedItems,analytics_corrected_by:ctx.currentUser.name}:r)}));
+            }
+            ctx.showToast(`แก้ mapping สถิติย้อนหลัง ${sourceName || rematchTarget.name} → ${newDrug.drug_name} แล้ว โดยไม่เปลี่ยนจำนวนจัดยา/stock`);
+            setRematchTarget(null); setRematchDrugId(''); setRematchRawName(''); setRematchRawUsage(''); setRematchSourceIndex(0);
+            return;
+          }
+
           setEditableItems(prev => {
             const original = prev[rematchTarget.itemIndex];
             if (!original) return prev;
@@ -3961,7 +4051,7 @@ const ViewReqView = ({ ctx }) => {
                 <div className="text-xs text-slate-600 bg-slate-50 border rounded-xl px-4 py-3 space-y-1">
                   <div><b>มูลค่าตาม รบ.301 = ยอดใช้จาก รบ.301 ก่อนปรับ ÷ Pack × ราคา/หน่วย</b> ส่วน <b>มูลค่าเบิก = จำนวนจ่าย ÷ Pack × ราคา/หน่วย</b></div>
                   <div>ยอดใช้กับจำนวนจ่ายไม่จำเป็นต้องเท่ากัน เพราะจำนวนจ่ายขึ้นกับ <b>Target Stock และเครดิต/คงเหลือหลังหักยอดใช้</b> แล้วจึงปัดตามรอบจ่าย</div>
-                  {topUsageRow && topUsageRow.usageValue > 0 && <div className="mt-2 bg-rose-50 border border-rose-200 rounded-lg p-2 text-rose-800"><b>ตัวทำมูลค่าตาม รบ.301 สูงสุด:</b> {topUsageRow.name} = {topUsageRow.rb301Usage.toLocaleString()} ÷ {topUsageRow.pack.toLocaleString()} × {formatUnitPrice(topUsageRow.price)} = <b>฿{topUsageRow.usageValue.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</b> ({topUsagePct.toFixed(1)}% ของมูลค่าตาม รบ.301 ทั้งหมด)</div>}
+                  {topUsageRow && topUsageRow.usageValue > 0 && <div className="mt-2 bg-rose-50 border border-rose-200 rounded-lg p-2 text-rose-800"><b>ตัวทำมูลค่าตาม รบ.301 สูงสุด:</b> {topUsageRow.name} {Array.isArray(topUsageRow.analyticsCorrections) && topUsageRow.analyticsCorrections.length ? <><span className="text-emerald-700">(แก้ mapping สถิติย้อนหลังแล้ว)</span> = <b>฿{topUsageRow.usageValue.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</b></> : <>= {topUsageRow.rb301Usage.toLocaleString()} ÷ {topUsageRow.pack.toLocaleString()} × {formatUnitPrice(topUsageRow.price)} = <b>฿{topUsageRow.usageValue.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</b></>} ({topUsagePct.toFixed(1)}% ของมูลค่าตาม รบ.301 ทั้งหมด)</div>}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button onClick={()=>setAuditSortMode('usage')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${auditSortMode==='usage'?'bg-emerald-600 text-white border-emerald-600':'bg-white text-emerald-700 border-emerald-200'}`}><i className="fa-solid fa-arrow-down-wide-short mr-1"></i>เรียงตามมูลค่า รบ.301</button>
@@ -3970,19 +4060,19 @@ const ViewReqView = ({ ctx }) => {
                 <div className="overflow-auto max-h-[55vh] border rounded-xl">
                   <table className="w-full text-xs whitespace-nowrap">
                     <thead className="bg-slate-100 sticky top-0 z-10"><tr><th className="p-2 text-left">ยา</th><th className="p-2 text-right">ยอดใช้ รบ.301</th><th className="p-2 text-right">มูลค่าตาม รบ.301</th><th className="p-2 text-right">Target</th><th className="p-2 text-right">เครดิตหลังหักใช้</th><th className="p-2 text-right">ระบบแนะนำ</th><th className="p-2 text-right">จำนวนจ่าย</th><th className="p-2 text-right">Pack</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">มูลค่าเบิก</th><th className="p-2 text-left">จุดที่ควรตรวจ</th><th className="p-2"></th></tr></thead>
-                    <tbody>{auditRowsToDisplay.map((r,idx)=><tr key={`audit-${r.drugId}-${idx}`} className={`border-t ${r.flags.length?'bg-amber-50/50':''}`}><td className="p-2"><div className="font-bold">{r.name}</div><div className="text-[10px] text-slate-400">{r.drugId} · {r.unitName}</div>{Array.isArray(r.sourceRawNames) && r.sourceRawNames.length>0 && <div className="text-[10px] text-rose-500 mt-0.5">รบ.301: {r.sourceRawNames.join(" / ")}</div>}</td><td className="p-2 text-right">{r.rb301Usage.toLocaleString()}</td><td className={`p-2 text-right font-black ${r.usageValue>=5000?'text-rose-700':'text-emerald-700'}`}>฿{r.usageValue.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="p-2 text-right">{r.target.toLocaleString()}</td><td className={`p-2 text-right ${r.credit<0?'text-rose-600 font-bold':'text-sky-700'}`}>{r.credit.toLocaleString()}</td><td className="p-2 text-right">{r.suggestedQty.toLocaleString()}</td><td className="p-2 text-right font-bold">{r.qty.toLocaleString()}</td><td className="p-2 text-right">{r.pack.toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(r.price)}</td><td className="p-2 text-right font-black text-indigo-700">฿{r.lineValue.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="p-2 whitespace-normal min-w-[240px]">{r.flags.length?r.flags.map((f,i)=><span key={i} className={`inline-block mr-1 mb-1 border rounded px-1.5 py-0.5 ${f.includes('มูลค่า รบ.301 สูง')?'bg-rose-100 text-rose-800 border-rose-200':'bg-amber-100 text-amber-800 border-amber-200'}`}>{f}</span>):<span className="text-slate-300">-</span>}</td><td className="p-2"><div className="flex flex-col gap-1 items-start"><button onClick={()=>{setShowValueAudit(false);setShowHiddenItems(true);setTimeout(()=>document.getElementById(`req-item-${r.drugId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),120)}} className="text-indigo-600 hover:underline font-bold">ไปที่รายการ</button>{isAdmin && adminEditableStatus && <button onClick={()=>openRematchDialog(r)} className="text-rose-600 hover:underline font-bold whitespace-nowrap"><i className="fa-solid fa-arrows-rotate mr-1"></i>จับคู่ใหม่</button>}</div></td></tr>)}</tbody>
+                    <tbody>{auditRowsToDisplay.map((r,idx)=><tr key={`audit-${r.drugId}-${idx}`} className={`border-t ${r.flags.length?'bg-amber-50/50':''}`}><td className="p-2"><div className="font-bold">{r.name}</div><div className="text-[10px] text-slate-400">{r.drugId} · {r.unitName}</div>{Array.isArray(r.sourceRawNames) && r.sourceRawNames.length>0 && <div className="text-[10px] text-rose-500 mt-0.5">รบ.301: {r.sourceRawNames.join(" / ")}</div>}{r.analyticsRematchedToDrugName && <div className="text-[10px] font-bold text-emerald-700 mt-1">สถิติแก้ mapping → {r.analyticsRematchedToDrugName}</div>}{canAdminRematch && <button onClick={()=>openRematchDialog(r)} className="mt-1 inline-flex items-center text-[11px] bg-rose-50 text-rose-700 border border-rose-200 px-2 py-1 rounded-lg font-black hover:bg-rose-100"><i className="fa-solid fa-arrows-rotate mr-1"></i>จับคู่ใหม่</button>}{isAdmin && req?.status==='Approving' && <div className="text-[10px] text-slate-400 mt-1">กำลังบันทึกจัดยา — รอให้เสร็จก่อนแก้ mapping</div>}</td><td className="p-2 text-right">{r.rb301Usage.toLocaleString()}</td><td className={`p-2 text-right font-black ${r.usageValue>=5000?'text-rose-700':'text-emerald-700'}`}>฿{r.usageValue.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="p-2 text-right">{r.target.toLocaleString()}</td><td className={`p-2 text-right ${r.credit<0?'text-rose-600 font-bold':'text-sky-700'}`}>{r.credit.toLocaleString()}</td><td className="p-2 text-right">{r.suggestedQty.toLocaleString()}</td><td className="p-2 text-right font-bold">{r.qty.toLocaleString()}</td><td className="p-2 text-right">{r.pack.toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(r.price)}</td><td className="p-2 text-right font-black text-indigo-700">฿{r.lineValue.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="p-2 whitespace-normal min-w-[240px]">{r.flags.length?r.flags.map((f,i)=><span key={i} className={`inline-block mr-1 mb-1 border rounded px-1.5 py-0.5 ${f.includes('มูลค่า รบ.301 สูง')?'bg-rose-100 text-rose-800 border-rose-200':'bg-amber-100 text-amber-800 border-amber-200'}`}>{f}</span>):<span className="text-slate-300">-</span>}</td><td className="p-2"><div className="flex flex-col gap-1 items-start"><button onClick={()=>{setShowValueAudit(false);setShowHiddenItems(true);setTimeout(()=>document.getElementById(`req-item-${r.drugId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),120)}} className="text-indigo-600 hover:underline font-bold">ไปที่รายการ</button></div></td></tr>)}</tbody>
                   </table>
                 </div>
               </div>
             </Modal>
           )}
           {rematchTarget && (
-            <Modal title="จับคู่ยาใหม่ (Admin)" isOpen={true} onClose={()=>!isRematching && setRematchTarget(null)} maxWidth="max-w-2xl">
+            <Modal title={adminHistoricalRematchOnly ? "จับคู่ใหม่เพื่อแก้สถิติย้อนหลัง (Admin)" : "จับคู่ยาใหม่ (Admin)"} isOpen={true} onClose={()=>!isRematching && setRematchTarget(null)} maxWidth="max-w-2xl">
               <div className="space-y-4">
                 <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-800">
                   <div className="font-black mb-1"><i className="fa-solid fa-triangle-exclamation mr-2"></i>รายการที่จับคู่ปัจจุบันอาจผิด</div>
                   <div><b>{rematchTarget.name}</b> ({rematchTarget.drugId}) • Pack {rematchTarget.pack?.toLocaleString()} • ราคา {formatUnitPrice(rematchTarget.price)} บาท/หน่วย</div>
-                  <div className="text-xs mt-1">เมื่อจับคู่ใหม่ ระบบจะทิ้งสูตรของยาตัวเดิม และคำนวณ Target / เครดิต / จำนวนจ่ายใหม่จาก Master Drug ตัวที่ถูกต้อง</div>
+                  <div className="text-xs mt-1">{adminHistoricalRematchOnly ? 'เอกสารนี้จัดยาเสร็จแล้ว: ระบบจะแก้เฉพาะ mapping และมูลค่า รบ.301 สำหรับ Dashboard/สถิติย้อนหลัง โดยไม่เปลี่ยนจำนวนจัดยา เครดิต หรือ stock ที่บันทึกไปแล้ว' : 'เมื่อจับคู่ใหม่ ระบบจะทิ้งสูตรของยาตัวเดิม และคำนวณ Target / เครดิต / จำนวนจ่ายใหม่จาก Master Drug ตัวที่ถูกต้อง'}</div>
                 </div>
 
                 {Array.isArray(rematchTarget.sourceImportsResolved) && rematchTarget.sourceImportsResolved.length > 1 && <div>
@@ -4016,7 +4106,7 @@ const ViewReqView = ({ ctx }) => {
                 {rematchDrugId && (()=>{ const d=ctx.appDb.drugs.find(x=>String(x.drug_id)===String(rematchDrugId)); if(!d) return <div className="text-sm text-rose-600">ไม่พบรหัสยานี้ใน Master Drug</div>; const u=ctx.appDb.units.find(x=>String(x.unit_id)===String(d.unit_id)); const normalized=convertImportedUsage(rematchRawUsage,d); return <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-sm"><div className="font-black text-indigo-800">{d.drug_name}</div><div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-xs"><div>หน่วย <b>{u?.unit_name||d.unit_id||'-'}</b></div><div>Pack <b>{safePackSize(d.pack_size).toLocaleString()}</b></div><div>ราคา <b>{formatUnitPrice(d.price)}</b></div><div>ยอดหลังแปลง <b>{normalized.toLocaleString()}</b></div></div>{isDrugDiscontinued(d)&&<div className="text-rose-700 font-bold mt-2">ยานี้มีสถานะยกเลิกใช้ — จำนวนจ่ายจะเป็น 0</div>}</div> })()}
 
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-                  <b>สำคัญ:</b> การกด “จับคู่ใหม่” จะเปลี่ยนข้อมูลในตารางหน้านี้ก่อน จากนั้นต้องกด <b>บันทึกการแก้ไขข้อมูล</b> เพื่อบันทึกใบเบิก ส่วน Fuzzy จะถูกแก้ทันทีเมื่อระบุชื่อดิบจาก รบ.301
+                  <b>สำคัญ:</b> {adminHistoricalRematchOnly ? 'ใบนี้ Completed แล้ว การจับคู่ใหม่จะบันทึกการแก้สถิติทันที แต่จะไม่แก้จำนวนจัดยา/stock เดิม' : <>การกด “จับคู่ใหม่” จะเปลี่ยนข้อมูลในตารางหน้านี้ก่อน จากนั้นต้องกด <b>บันทึกการแก้ไขข้อมูล</b> เพื่อบันทึกใบเบิก</>} ส่วน Fuzzy จะถูกแก้ทันทีเมื่อระบุชื่อดิบจาก รบ.301
                 </div>
 
                 <div className="flex justify-end gap-2">
@@ -6004,7 +6094,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.9 Production</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.9.2 Production</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

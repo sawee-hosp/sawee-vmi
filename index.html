@@ -173,8 +173,8 @@
        return `${p}(${r})`;
     };
 
-    const APP_SCHEMA_VERSION = 11;
-    const APP_VERSION = '4.11.0-production';
+    const APP_SCHEMA_VERSION = 12;
+    const APP_VERSION = '4.12.0-production';
     const MAX_BATCH_WRITES = 400;
     let fuzzyAutoCleanDone = false;
     
@@ -1344,12 +1344,18 @@ const ReturnDrugView = ({ ctx }) => {
 
           return { 
               drugId: p.drug_id, name: drug ? drug.drug_name : 'N/A', unit: unitName, 
-              packSize: drug ? safePackSize(drug.pack_size) : 1, type: drug ? String(drug.type || '1') : '1',
+              packSize: drug ? safePackSize(drug.pack_size) : 1, packPrevious: drug ? toNonNegativeNumber(drug.pack_size_previous) : 0,
+              unitId: drug ? safeText(drug.unit_id) : '', unitIdPrevious: drug ? safeText(drug.unit_id_previous) : '',
+              type: drug ? String(drug.type || '1') : '1',
               price: drug ? toNonNegativeNumber(drug.price) : 0,
               pricePrevious: drug ? toNonNegativeNumber(drug.price_previous) : 0,
               priceSource: drug ? safeText(drug.price_source) : '',
               priceInvsLastDatetime: drug ? safeText(drug.price_invs_last_datetime) : '',
               priceUpdatedAt: drug?.price_updated_at || null,
+              packUpdatedAt: drug?.pack_size_updated_at || null,
+              unitUpdatedAt: drug?.unit_updated_at || null,
+              masterSyncSource: drug ? safeText(drug.master_sync_source) : '',
+              masterSyncedAt: drug?.invs_master_synced_at || null,
               targetVMI: toNonNegativeNumber(p.par_qty), currentBal: bal ? toSafeNumber(bal.excess_balance) : 0 
           };
         }).sort(sortDrugs);
@@ -1494,19 +1500,46 @@ const ReturnDrugView = ({ ctx }) => {
          if (isRefreshingInvsPrice) return;
          setIsRefreshingInvsPrice(true);
          try {
-           const snap = await db.collection('master_drugs').get();
-           const freshDrugs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-           const oldMap = new Map((ctx.appDb.drugs || []).map(d => [String(d.drug_id), toNonNegativeNumber(d.price)]));
-           const changedCount = freshDrugs.reduce((n,d) => n + (Math.abs(toNonNegativeNumber(d.price) - toNonNegativeNumber(oldMap.get(String(d.drug_id)))) >= 0.005 ? 1 : 0), 0);
-           ctx.setAppDb(prev => ({ ...prev, drugs: freshDrugs }));
+           const [drugSnap, unitSnap] = await Promise.all([
+             db.collection('master_drugs').get(),
+             db.collection('master_unit').get()
+           ]);
+           const freshDrugs = drugSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+           const freshUnits = unitSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+           const oldMap = new Map((ctx.appDb.drugs || []).map(d => [String(d.drug_id), {
+             price:toNonNegativeNumber(d.price), pack:safePackSize(d.pack_size), unit:safeText(d.unit_id)
+           }]));
+           let priceChanged=0, packChanged=0, unitChanged=0, newDrugs=0;
+           freshDrugs.forEach(d => {
+             const old = oldMap.get(String(d.drug_id));
+             if (!old) { newDrugs++; return; }
+             if (Math.abs(toNonNegativeNumber(d.price)-old.price) >= 0.005) priceChanged++;
+             if (Math.abs(safePackSize(d.pack_size)-old.pack) >= 0.0001) packChanged++;
+             if (safeText(d.unit_id) !== old.unit) unitChanged++;
+           });
+           ctx.setAppDb(prev => ({ ...prev, drugs:freshDrugs, units:freshUnits }));
            setDetailItem(prev => {
              if (!prev) return prev;
              const d = freshDrugs.find(x => String(x.drug_id) === String(prev.drugId));
-             return d ? { ...prev, price:toNonNegativeNumber(d.price), pricePrevious:toNonNegativeNumber(d.price_previous), priceSource:safeText(d.price_source), priceInvsLastDatetime:safeText(d.price_invs_last_datetime), priceUpdatedAt:d.price_updated_at || null } : prev;
+             if (!d) return prev;
+             const u = freshUnits.find(x => String(x.unit_id) === String(d.unit_id));
+             return { ...prev,
+               price:toNonNegativeNumber(d.price), pricePrevious:toNonNegativeNumber(d.price_previous),
+               packSize:safePackSize(d.pack_size), packPrevious:toNonNegativeNumber(d.pack_size_previous),
+               unitId:safeText(d.unit_id), unitIdPrevious:safeText(d.unit_id_previous), unit:u?.unit_name || d.unit_id || '-',
+               priceSource:safeText(d.price_source), priceInvsLastDatetime:safeText(d.price_invs_last_datetime),
+               priceUpdatedAt:d.price_updated_at || null, packUpdatedAt:d.pack_size_updated_at || null,
+               unitUpdatedAt:d.unit_updated_at || null, masterSyncSource:safeText(d.master_sync_source), masterSyncedAt:d.invs_master_synced_at || null
+             };
            });
-           ctx.showToast(changedCount > 0 ? `รีเฟรชราคา INVS แล้ว พบราคาเปลี่ยน ${changedCount} รายการ` : 'ราคา INVS เป็นข้อมูลล่าสุดแล้ว');
+           const pieces=[];
+           if(priceChanged) pieces.push(`ราคา ${priceChanged}`);
+           if(packChanged) pieces.push(`Pack ${packChanged}`);
+           if(unitChanged) pieces.push(`หน่วย ${unitChanged}`);
+           if(newDrugs) pieces.push(`ยาใหม่ ${newDrugs}`);
+           ctx.showToast(pieces.length ? `รีเฟรชข้อมูล INVS แล้ว: ${pieces.join(' • ')}` : 'ข้อมูล INVS เป็นข้อมูลล่าสุดแล้ว');
          } catch(err) {
-           ctx.showToast('รีเฟรชราคา INVS ไม่สำเร็จ: ' + (err?.message || err), 'error');
+           ctx.showToast('รีเฟรชข้อมูล INVS ไม่สำเร็จ: ' + (err?.message || err), 'error');
          } finally {
            setIsRefreshingInvsPrice(false);
          }
@@ -1720,7 +1753,7 @@ const ReturnDrugView = ({ ctx }) => {
                         <button onClick={()=>setStockDisplayMode('shelf')} className={`px-3 py-2 rounded-lg text-xs font-bold ${stockDisplayMode==='shelf'?'bg-slate-800 text-white':'text-slate-500 hover:bg-slate-100'}`}><i className="fa-solid fa-border-all mr-1"></i> ชั้นยา</button>
                         <button onClick={()=>setStockDisplayMode('table')} className={`px-3 py-2 rounded-lg text-xs font-bold ${stockDisplayMode==='table'?'bg-slate-800 text-white':'text-slate-500 hover:bg-slate-100'}`}><i className="fa-solid fa-table-list mr-1"></i> ตาราง</button>
                       </div>
-                      <button onClick={refreshInvsMasterPrice} disabled={isRefreshingInvsPrice} className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-100 disabled:opacity-50"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i> {isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชราคา INVS'}</button>
+                      <button onClick={refreshInvsMasterPrice} disabled={isRefreshingInvsPrice} className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-100 disabled:opacity-50"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i> {isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชข้อมูล INVS'}</button>
                       <button onClick={resetShelfLayout} className="bg-white border border-slate-300 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100"><i className="fa-solid fa-wand-magic-sparkles mr-1"></i> จัดชั้นอัตโนมัติ</button>
                       <button onClick={() => { setEditItem({ isNew: true }); setShowModal(true); }} className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-emerald-700"><i className="fa-solid fa-plus mr-1"></i> เพิ่มยาเข้าคลัง</button>
                     </div>
@@ -1868,6 +1901,8 @@ const ReturnDrugView = ({ ctx }) => {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                     <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3"><div className="text-[10px] font-black text-emerald-600">แหล่งราคา</div><div className="font-bold text-emerald-800 mt-1">{detailItem.priceSource === 'INVS_LATEST_PRICE' ? 'INVS — ราคาล่าสุด' : 'Master เดิม'}</div></div>
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-[10px] font-black text-slate-500">ราคาก่อน Sync ล่าสุด</div><div className="font-bold text-slate-800 mt-1">{detailItem.pricePrevious > 0 ? `฿${formatUnitPrice(detailItem.pricePrevious)}` : '-'}</div></div>
+                    <div className="bg-blue-50 border border-blue-100 rounded-xl p-3"><div className="text-[10px] font-black text-blue-600">Pack จาก INVS</div><div className="font-bold text-blue-800 mt-1">{safePackSize(detailItem.packSize).toLocaleString('th-TH')} {detailItem.unit}</div><div className="text-[9px] text-blue-500 mt-1">{detailItem.packPrevious > 0 && Math.abs(detailItem.packPrevious-detailItem.packSize)>0.0001 ? `เดิม ${detailItem.packPrevious.toLocaleString('th-TH')} → ${detailItem.packSize.toLocaleString('th-TH')}` : 'ตรงกับ Master ปัจจุบัน'}</div></div>
+                    <div className="bg-cyan-50 border border-cyan-100 rounded-xl p-3"><div className="text-[10px] font-black text-cyan-600">หน่วยจาก sale_unit</div><div className="font-bold text-cyan-800 mt-1">{detailItem.unit || '-'}</div><div className="text-[9px] text-cyan-600 mt-1">SU_ID: {detailItem.unitId || '-'}</div></div>
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-[10px] font-black text-slate-500">อัปเดตราคา</div><div className="font-bold text-slate-800 mt-1">{detailItem.priceUpdatedAt ? formatAppDateTime(detailItem.priceUpdatedAt) : (detailItem.priceInvsLastDatetime || '-')}</div></div>
                   </div>
 
@@ -2790,7 +2825,12 @@ const CreateReqView = ({ ctx }) => {
           (Array.isArray(r.items) ? r.items : []).forEach(it => {
             const key = String(it.drugId || '');
             const price = toNonNegativeNumber(it.price);
-            if (key && price > 0 && !map.has(key)) map.set(key, { price, reqId:r.id, month:Number(r.month), year:Number(r.year), status:r.status });
+            if (key && !map.has(key)) map.set(key, {
+              price,
+              packSize:safePackSize(it.packSize ?? it.pack_size),
+              unit:safeText(it.unit),
+              reqId:r.id, month:Number(r.month), year:Number(r.year), status:r.status
+            });
           });
         });
         return map;
@@ -2804,28 +2844,63 @@ const CreateReqView = ({ ctx }) => {
         return { ...prev, current, pct, delta:current-prev.price };
       };
 
+      const getReqPackChange = (item) => {
+        const prev = previousReqPriceByDrug.get(String(item?.drugId || ''));
+        const current = safePackSize(item?.packSize ?? item?.pack_size);
+        if (!prev || !prev.packSize || Math.abs(current - prev.packSize) < 0.0001) return null;
+        const pct = prev.packSize > 0 ? ((current-prev.packSize)/prev.packSize)*100 : 0;
+        return { ...prev, current, pct, delta:current-prev.packSize };
+      };
+
       const priceChangedItems = items.map(item => ({ item, change:getReqPriceChange(item) })).filter(x => x.change);
+      const packChangedItems = items.map(item => ({ item, change:getReqPackChange(item) })).filter(x => x.change);
 
       const refreshInvsPriceForRequisition = async () => {
         if (isRefreshingInvsPrice) return;
         setIsRefreshingInvsPrice(true);
         try {
-          const snap = await db.collection('master_drugs').get();
-          const freshDrugs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+          const [drugSnap, unitSnap] = await Promise.all([
+            db.collection('master_drugs').get(),
+            db.collection('master_unit').get()
+          ]);
+          const freshDrugs = drugSnap.docs.map(d => ({ id:d.id, ...d.data() }));
+          const freshUnits = unitSnap.docs.map(d => ({ id:d.id, ...d.data() }));
           const freshMap = new Map(freshDrugs.map(d => [String(d.drug_id), d]));
-          const changed = items.filter(item => {
-            const d = freshMap.get(String(item.drugId));
-            return d && Math.abs(toNonNegativeNumber(d.price) - toNonNegativeNumber(item.price)) >= 0.005;
+          const unitMap = new Map(freshUnits.map(u => [String(u.unit_id), u]));
+          let priceChanged=0, packChanged=0, unitChanged=0;
+          items.forEach(item => {
+            const d=freshMap.get(String(item.drugId)); if(!d) return;
+            if(Math.abs(toNonNegativeNumber(d.price)-toNonNegativeNumber(item.price))>=0.005) priceChanged++;
+            if(Math.abs(safePackSize(d.pack_size)-safePackSize(item.packSize))>=0.0001) packChanged++;
+            const u=unitMap.get(String(d.unit_id));
+            const freshUnit=safeText(u?.unit_name || d.unit_id);
+            if(freshUnit && freshUnit!==safeText(item.unit)) unitChanged++;
           });
           setItems(prev => prev.map(item => {
             const d = freshMap.get(String(item.drugId));
-            return d ? { ...item, price:toNonNegativeNumber(d.price) } : item;
+            if (!d) return item;
+            const u=unitMap.get(String(d.unit_id));
+            const next={ ...item,
+              price:toNonNegativeNumber(d.price),
+              packSize:safePackSize(d.pack_size),
+              unit:safeText(u?.unit_name || d.unit_id || item.unit),
+              type:safeText(d.type ?? item.type,'1') || '1',
+              isUnpacked:!!d.unpacked,
+              dispenseStep:toNonNegativeNumber(d.dispense_step ?? item.dispenseStep ?? item.dispense_step,0),
+              usageMultiplier:getUsageMultiplier(d || item)
+            };
+            return recalcWorkingItem(next);
           }));
-          ctx.setAppDb(prev => ({ ...prev, drugs:freshDrugs }));
-          if (changed.length > 0) markDirty();
-          ctx.showToast(changed.length > 0 ? `อัปเดตราคา INVS ในใบเบิกแล้ว ${changed.length} รายการ` : 'ราคาในใบเบิกเป็นราคา INVS ล่าสุดแล้ว');
+          ctx.setAppDb(prev => ({ ...prev, drugs:freshDrugs, units:freshUnits }));
+          const totalChanged=priceChanged+packChanged+unitChanged;
+          if (totalChanged > 0) markDirty();
+          const pieces=[];
+          if(priceChanged) pieces.push(`ราคา ${priceChanged}`);
+          if(packChanged) pieces.push(`Pack ${packChanged}`);
+          if(unitChanged) pieces.push(`หน่วย ${unitChanged}`);
+          ctx.showToast(pieces.length ? `อัปเดตข้อมูล INVS ในใบเบิกแล้ว: ${pieces.join(' • ')}` : 'ข้อมูลในใบเบิกตรงกับ INVS ล่าสุดแล้ว');
         } catch(err) {
-          ctx.showToast('รีเฟรชราคา INVS ไม่สำเร็จ: ' + (err?.message || err), 'error');
+          ctx.showToast('รีเฟรชข้อมูล INVS ไม่สำเร็จ: ' + (err?.message || err), 'error');
         } finally {
           setIsRefreshingInvsPrice(false);
         }
@@ -2925,7 +3000,7 @@ const CreateReqView = ({ ctx }) => {
               </label>
             )}
             {(excelFile || uploadedExcelUrl || editingReq?.excel_url) && <span className="text-xs text-emerald-700"><i className="fa-solid fa-circle-check mr-1"></i>มีไฟล์ รบ.301</span>}
-            <button onClick={refreshInvsPriceForRequisition} disabled={isRefreshingInvsPrice} className="h-9 px-3 rounded-lg border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 font-bold text-xs disabled:opacity-50" title="โหลดราคาปัจจุบันจาก master_drugs หลัง INVS Sync"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>{isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชราคา INVS'}</button>
+            <button onClick={refreshInvsPriceForRequisition} disabled={isRefreshingInvsPrice} className="h-9 px-3 rounded-lg border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 font-bold text-xs disabled:opacity-50" title="โหลดราคา Pack และหน่วยปัจจุบันจาก INVS Master Sync"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>{isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชข้อมูล INVS'}</button>
 
             <div className="flex-1 min-w-[180px]"></div>
             <div className="relative min-w-[220px] max-w-sm flex-1">
@@ -2969,7 +3044,7 @@ const CreateReqView = ({ ctx }) => {
               <span>• ระบบปัดจำนวนจ่ายให้ครบ Pack / รอบเติมอัตโนมัติ</span>
             </div>
 
-            {priceChangedItems.length > 0 && <div className="no-print mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900"><div className="font-black"><i className="fa-solid fa-tags mr-2"></i>พบราคาปัจจุบันต่างจากใบเบิกครั้งก่อน {priceChangedItems.length} รายการ</div><div className="mt-1 text-amber-700">เป็นการแจ้งเตือนเท่านั้น ระบบยังใช้ราคาปัจจุบันจาก INVS และไม่ขัดขวางการส่งใบเบิก</div></div>}
+            {(priceChangedItems.length > 0 || packChangedItems.length > 0) && <div className="no-print mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900"><div className="font-black"><i className="fa-solid fa-triangle-exclamation mr-2"></i>ข้อมูล INVS ต่างจากใบเบิกครั้งก่อน</div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1"><span>ราคาเปลี่ยน <b>{priceChangedItems.length}</b> รายการ</span><span>Pack เปลี่ยน <b>{packChangedItems.length}</b> รายการ</span></div><div className="mt-1 text-amber-700">เป็นการแจ้งเตือนเท่านั้น ระบบใช้ราคาและ Pack ปัจจุบันจาก INVS และไม่ขัดขวางการส่งใบเบิก</div></div>}
 
             <div className="overflow-x-auto">
               <table className={`official-table w-full text-[11px] border-collapse border border-black mb-2 ${showCalc?'min-w-[1500px]':'min-w-[1250px]'}`}>
@@ -3008,6 +3083,7 @@ const CreateReqView = ({ ctx }) => {
                       const actualStockDisplay = item.actualStockTouched ? toNonNegativeNumber(item.actualStock) : Math.max(0,toSafeNumber(item.systemStock));
                       const itemValue = getRequisitionItemValue({...item,isDiscontinued});
                       const priceChange = getReqPriceChange(item);
+                      const packChange = getReqPackChange(item);
                       const masterPriceSource = safeText(drug?.price_source);
                       return (
                         <tr id={`req-row-${item.drugId}`} key={item.drugId} className={rowClass}>
@@ -3020,9 +3096,10 @@ const CreateReqView = ({ ctx }) => {
                            
                             {isVaccine && <span className="ml-1 text-[9px] font-bold text-red-600">ไม่ร่วมระบบเบิก</span>}
                             {priceChange && !isVaccine && <span className="no-print ml-1 text-[9px] font-black text-amber-800 border border-amber-300 bg-amber-50 rounded px-1" title={`ใบก่อน ${priceChange.month}/${priceChange.year+543}: ${formatUnitPrice(priceChange.price)} → ปัจจุบัน ${formatUnitPrice(priceChange.current)}`}>ราคาเปลี่ยน {priceChange.pct>=0?'+':''}{priceChange.pct.toFixed(1)}%</span>}
+                            {packChange && !isVaccine && <span className="no-print ml-1 text-[9px] font-black text-blue-800 border border-blue-300 bg-blue-50 rounded px-1" title={`ใบก่อน ${packChange.month}/${packChange.year+543}: Pack ${packChange.packSize} → ปัจจุบัน ${packChange.current}`}>Pack เปลี่ยน {packChange.packSize}→{packChange.current}</span>}
                           </td>
                           <td className="text-center">{displayUnit}</td>
-                          <td className="text-center">{item.packSize}</td>
+                          <td className="text-center"><div className="font-bold">{item.packSize}</div>{packChange && <div className="no-print text-[8px] font-bold text-blue-700 whitespace-nowrap">เดิม {packChange.packSize} → {packChange.current}</div>}</td>
                           <td className="text-center">
                             <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                               <span>{formatQty(item.targetVMI,item.packSize)}</span>
@@ -5566,6 +5643,8 @@ const AdminConfigView = ({ ctx }) => {
              pack_size: packSize, usage_multiplier: Math.max(1, toNonNegativeNumber(data.usage_multiplier, 1)), dispense_step: lockedDispenseStep,
              price: toNonNegativeNumber(data.price), unit_id: safeText(data.unit_id), unpacked, fuzzy: finalFuzzy,
              status: data.status === 'discontinued' ? 'ยกเลิกใช้' : 'Active',
+             needs_vmi_setup: false,
+             app_master_reviewed_at: firebase.firestore.FieldValue.serverTimestamp(),
              schema_version: APP_SCHEMA_VERSION
            };
            if (!unpacked && rawDispenseStep > 0 && lockedDispenseStep !== rawDispenseStep) {
@@ -5735,7 +5814,7 @@ const AdminConfigView = ({ ctx }) => {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-indigo-50 p-4 rounded-xl mb-6 gap-4 border border-indigo-100">
               <div>
                 <h3 className="font-bold text-indigo-800">นำเข้า/อัปเดตยาด้วยไฟล์ CSV</h3>
-                <p className="text-xs text-indigo-600 mt-1">คอลัมน์ที่ต้องการ: drug_id, drug_name, pack_size, unit_id, price, type, unpacked, fuzzy (เสริม: usage_multiplier, dispense_step, status = Active/ยกเลิกใช้)</p>
+                <p className="text-xs text-indigo-600 mt-1">INVS Master Sync เป็นแหล่งหลักของ price / pack_size / unit_id ส่วน CSV นี้ใช้สำหรับงานเฉพาะกิจ; type / unpacked / fuzzy / usage_multiplier / dispense_step / status ยังคงเป็นค่าที่ดูแลใน Sawee Rxfill</p>
               </div>
               <label className="bg-indigo-600 text-white px-4 py-2 rounded-lg cursor-pointer font-bold hover:bg-indigo-700 shrink-0 shadow-lg">
                 <i className="fa-solid fa-file-csv mr-2"></i>อัปโหลด CSV ยา <input type="file" accept=".csv" className="hidden" onChange={handleCSVUpload}/>
@@ -5767,7 +5846,7 @@ const AdminConfigView = ({ ctx }) => {
                     <tr key={d.id} className={`border-b transition ${isDrugDiscontinued(d) ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'hover:bg-slate-50'}`}>
                       <td className="p-4 font-mono text-slate-500">{d.drug_id}</td>
                       <td className="p-4 font-bold text-slate-600">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type] || DEFAULT_DRUG_TYPES['1']}</td>
-                      <td className="p-4 font-bold text-slate-800">{d.drug_name}</td>
+                      <td className="p-4 font-bold text-slate-800"><div>{d.drug_name}</div>{d.needs_vmi_setup && <div className="mt-1"><span className="bg-amber-100 text-amber-800 border border-amber-200 rounded px-2 py-0.5 text-[10px] font-black">ใหม่จาก INVS • รอตั้งค่า VMI</span></div>}{safeText(d.master_sync_source)==='INVS' && <div className="text-[9px] text-emerald-600 mt-1">INVS Master Sync</div>}</td>
                       <td className="p-4 text-center">{isDrugDiscontinued(d) ? <span className="bg-slate-700 text-white px-2 py-1 rounded-full text-[10px] font-bold">ยกเลิกใช้</span> : <span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full text-[10px] font-bold">Active</span>}</td>
                       <td className="p-4 whitespace-normal">
                         <div className="flex flex-wrap gap-1 max-w-[250px]">
@@ -6256,6 +6335,7 @@ const AdminConfigView = ({ ctx }) => {
                         </select>
                         <p className="text-[10px] text-slate-500 mt-1">สถานะนี้ใช้ร่วมกันทุก รพ.สต. ไม่มีการเปิด/ปิดยาแยกรายหน่วยงาน</p>
                       </div>
+                      {safeText(editTarget.data.master_sync_source)==='INVS' && <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800"><b>INVS Master Sync:</b> ราคา, Pack และหน่วยนับจะถูกอัปเดตจาก INVS อัตโนมัติ ส่วนสถานะ, หมวด, แตกแพ็ค, รอบจ่าย, Usage Multiplier และ Fuzzy เป็นค่าของ Sawee Rxfill และจะไม่ถูก Sync ทับ</div>}
                       <div className="flex gap-4">
                         <div className="w-1/2">
                           <label className="text-sm font-bold text-slate-600 block mb-1">หมวดหมู่</label>
@@ -6264,7 +6344,7 @@ const AdminConfigView = ({ ctx }) => {
                           </select>
                         </div>
                         <div className="w-1/2">
-                          <label className="text-sm font-bold text-slate-600 block mb-1">ขนาดบรรจุ (Pack)</label>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">ขนาดบรรจุ (Pack) <span className="text-emerald-600 text-[10px]">• INVS</span></label>
                           <input name="pack_size" type="number" min="1" step="1" defaultValue={editTarget.data.pack_size} placeholder="เช่น 100" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                         </div>
                       </div>
@@ -6275,14 +6355,14 @@ const AdminConfigView = ({ ctx }) => {
                       </div>
                       <div className="flex gap-4">
                         <div className="w-1/2">
-                          <label className="text-sm font-bold text-slate-600 block mb-1">หน่วยนับ</label>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">หน่วยนับ <span className="text-emerald-600 text-[10px]">• sale_unit</span></label>
                           <select name="unit_id" defaultValue={editTarget.data.unit_id} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
                             <option value="">- เลือกหน่วย -</option>
                             {ctx.appDb.units.map(u=><option key={u.id} value={u.unit_id}>{u.unit_name}</option>)}
                           </select>
                         </div>
                         <div className="w-1/2">
-                          <label className="text-sm font-bold text-slate-600 block mb-1">ราคา (฿) - ต่อ Pack</label>
+                          <label className="text-sm font-bold text-slate-600 block mb-1">ราคา (฿) - ต่อ Pack <span className="text-emerald-600 text-[10px]">• INVS</span></label>
                           <input name="price" type="number" step="0.0001" min="0" defaultValue={editTarget.data.price} placeholder="เช่น 12.3456" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
                           <p className="text-[10px] text-slate-400 mt-1">รองรับราคาทศนิยมได้สูงสุด 4 ตำแหน่ง</p>
                         </div>

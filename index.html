@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <title>Sawee Rxfill (VMI Edition v4.9.2 Production)</title>
+  <title>Sawee Rxfill (VMI Edition v4.10 Production)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
   
@@ -174,7 +174,7 @@
     };
 
     const APP_SCHEMA_VERSION = 11;
-    const APP_VERSION = '4.9.2-production';
+    const APP_VERSION = '4.10.0-production';
     const MAX_BATCH_WRITES = 400;
     let fuzzyAutoCleanDone = false;
     
@@ -1310,7 +1310,13 @@ const ReturnDrugView = ({ ctx }) => {
       const [searchTerm, setSearchTerm] = useState('');
       const [showModal, setShowModal] = useState(false);
       const [editItem, setEditItem] = useState(null);
+      const [detailItem, setDetailItem] = useState(null);
       const [stockTab, setStockTab] = useState('current');
+      const [stockDisplayMode, setStockDisplayMode] = useState('shelf');
+      const [dragState, setDragState] = useState(null);
+      const dragWasActiveRef = useRef(false);
+      const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+      const shelfStorageKey = `sawee_rxfill_shelf_layout_${String(hospId || 'unknown')}`;
 
       const drugList = useMemo(() => {
         if (!ctx.appDb) return [];
@@ -1318,29 +1324,195 @@ const ReturnDrugView = ({ ctx }) => {
         return myPars.map(p => {
           const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(p.drug_id));
           const bal = ctx.appDb.balances.find(b => String(b.hospital_id) === String(hospId) && String(b.drug_id) === String(p.drug_id));
-          
           const unitObj = drug ? ctx.appDb.units.find(u => String(u.unit_id) === String(drug.unit_id)) : null;
           const unitName = unitObj ? unitObj.unit_name : (drug?.unit_id || '');
 
           return { 
               drugId: p.drug_id, name: drug ? drug.drug_name : 'N/A', unit: unitName, 
-              packSize: drug ? Number(drug.pack_size) : 1, type: drug ? drug.type : '1', price: drug ? drug.price : 0,
-              targetVMI: p.par_qty, currentBal: bal ? Number(bal.excess_balance) : 0 
+              packSize: drug ? safePackSize(drug.pack_size) : 1, type: drug ? String(drug.type || '1') : '1',
+              price: drug ? toNonNegativeNumber(drug.price) : 0,
+              targetVMI: toNonNegativeNumber(p.par_qty), currentBal: bal ? toSafeNumber(bal.excess_balance) : 0 
           };
         }).sort(sortDrugs);
       }, [ctx.appDb, hospId]);
 
-      const filteredList = drugList.filter(d => d.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(d.drugId).includes(searchTerm.toLowerCase()));
+      const [shelfOrder, setShelfOrder] = useState(() => {
+        try {
+          const raw = window.localStorage.getItem(shelfStorageKey);
+          const parsed = raw ? JSON.parse(raw) : {};
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch(e) { return {}; }
+      });
+
+      useEffect(() => {
+        try {
+          const raw = window.localStorage.getItem(shelfStorageKey);
+          const parsed = raw ? JSON.parse(raw) : {};
+          setShelfOrder(parsed && typeof parsed === 'object' ? parsed : {});
+        } catch(e) { setShelfOrder({}); }
+      }, [shelfStorageKey]);
+
+      useEffect(() => {
+        if (!drugList.length) return;
+        setShelfOrder(prev => {
+          const next = { ...(prev || {}) };
+          const typeKeys = [...new Set(drugList.map(d => String(d.type || '1')))];
+          typeKeys.forEach(typeKey => {
+            const validIds = drugList.filter(d => String(d.type || '1') === typeKey).map(d => String(d.drugId));
+            const validSet = new Set(validIds);
+            const existing = Array.isArray(next[typeKey]) ? next[typeKey].map(String).filter(id => validSet.has(id)) : [];
+            const existingSet = new Set(existing);
+            const missing = validIds.filter(id => !existingSet.has(id));
+            next[typeKey] = [...existing, ...missing];
+          });
+          Object.keys(next).forEach(k => {
+            if (!typeKeys.includes(String(k))) delete next[k];
+          });
+          return next;
+        });
+      }, [drugList]);
+
+      useEffect(() => {
+        try { window.localStorage.setItem(shelfStorageKey, JSON.stringify(shelfOrder || {})); } catch(e) {}
+      }, [shelfOrder, shelfStorageKey]);
+
+      const filteredList = useMemo(() => {
+        const q = searchTerm.trim().toLowerCase();
+        if (!q) return drugList;
+        return drugList.filter(d =>
+          String(d.name || '').toLowerCase().includes(q) ||
+          String(d.drugId || '').toLowerCase().includes(q) ||
+          String(typesSource[d.type] || '').toLowerCase().includes(q)
+        );
+      }, [drugList, searchTerm, typesSource]);
+
+      const shelfGroups = useMemo(() => {
+        const groups = {};
+        const visibleIds = new Set(filteredList.map(d => String(d.drugId)));
+        const byId = new Map(drugList.map(d => [String(d.drugId), d]));
+        const allTypeKeys = [...new Set(drugList.map(d => String(d.type || '1')))].sort((a,b) => {
+          const na = String(typesSource[a] || a);
+          const nb = String(typesSource[b] || b);
+          if (a === '25' && b !== '25') return -1;
+          if (b === '25' && a !== '25') return 1;
+          return na.localeCompare(nb, 'th');
+        });
+
+        allTypeKeys.forEach(typeKey => {
+          const fallback = drugList.filter(d => String(d.type || '1') === typeKey).map(d => String(d.drugId));
+          const orderedIds = Array.isArray(shelfOrder[typeKey]) && shelfOrder[typeKey].length ? shelfOrder[typeKey] : fallback;
+          groups[typeKey] = orderedIds
+            .map(id => byId.get(String(id)))
+            .filter(Boolean)
+            .filter(item => visibleIds.has(String(item.drugId)));
+        });
+        return { groups, typeKeys: allTypeKeys.filter(k => (groups[k] || []).length > 0) };
+      }, [drugList, filteredList, shelfOrder, typesSource]);
+
+      const usageStatsByDrug = useMemo(() => {
+        const map = {};
+        const today = new Date();
+        const currentMonth = today.getMonth() + 1;
+        const currentYear = today.getFullYear();
+
+        drugList.forEach(item => {
+          const months = [];
+          for (let i = 6; i >= 1; i--) {
+            let m = currentMonth - i;
+            let y = currentYear;
+            while (m <= 0) { m += 12; y -= 1; }
+
+            const oldReq = (ctx.appDb.requisitions || []).find(r =>
+              String(r.hospitalId) === String(hospId) &&
+              Number(r.month) === Number(m) &&
+              Number(r.year) === Number(y) &&
+              !String(r.id || '').startsWith('HIST-')
+            );
+
+            let usage = 0;
+            if (oldReq && Array.isArray(oldReq.items)) {
+              const oldItem = oldReq.items.find(it => String(it.drugId) === String(item.drugId));
+              if (oldItem) usage = typeof getRb301UsageQty === 'function' ? getRb301UsageQty(oldItem) : toNonNegativeNumber(oldItem.usage);
+            } else {
+              const key = getYearMonthKey(m, y);
+              const hist = (ctx.appDb.historicalUsages || []).find(h =>
+                String(h.hospital_id) === String(hospId) &&
+                String(h.drug_id) === String(item.drugId)
+              );
+              usage = (hist && hist.history && hist.history[key]) ? toNonNegativeNumber(hist.history[key]) : 0;
+            }
+            months.push({ m, y, usage: toNonNegativeNumber(usage) });
+          }
+
+          const active = months.filter(x => x.usage > 0).map(x => x.usage);
+          const count = active.length || 1;
+          const mean = active.reduce((a,b) => a+b, 0) / count;
+          const variance = active.reduce((acc,val) => acc + Math.pow(val - mean, 2), 0) / (count === 1 ? 1 : count - 1);
+          const sd = Math.sqrt(variance);
+          map[String(item.drugId)] = {
+            months,
+            mean,
+            adu: mean / 30,
+            sd,
+            sdz: sd * 1.645,
+            maxUsage: Math.max(1, ...months.map(x => x.usage))
+          };
+        });
+        return map;
+      }, [drugList, ctx.appDb.requisitions, ctx.appDb.historicalUsages, hospId]);
 
       let totalValue = 0;
       let typeCounts = {};
-      Object.keys(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES).forEach(k => typeCounts[k] = 0);
-      
+      Object.keys(typesSource).forEach(k => typeCounts[k] = 0);
+
       drugList.forEach(d => {
-         const val = (d.currentBal / d.packSize) * d.price;
+         const val = (toSafeNumber(d.currentBal) / safePackSize(d.packSize)) * toNonNegativeNumber(d.price);
          totalValue += (val || 0);
          if(typeCounts[d.type] !== undefined) typeCounts[d.type]++;
       });
+
+      const resetShelfLayout = () => {
+        const next = {};
+        [...new Set(drugList.map(d => String(d.type || '1')))].forEach(typeKey => {
+          next[typeKey] = drugList.filter(d => String(d.type || '1') === typeKey).sort(sortDrugs).map(d => String(d.drugId));
+        });
+        setShelfOrder(next);
+        ctx.showToast('จัดชั้นยาอัตโนมัติตามหมวดและชื่อยาแล้ว');
+      };
+
+      const handleCardDrop = (e, targetItem, typeKey) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!dragState) return;
+        if (String(dragState.typeKey) !== String(typeKey)) {
+          ctx.showToast('ชั้นยาแบ่งตามหมวด จึงย้ายข้ามหมวดไม่ได้', 'error');
+          return;
+        }
+        setShelfOrder(prev => {
+          const current = Array.isArray(prev?.[typeKey]) ? [...prev[typeKey].map(String)] :
+            drugList.filter(d => String(d.type || '1') === String(typeKey)).map(d => String(d.drugId));
+          const from = current.indexOf(String(dragState.drugId));
+          const to = current.indexOf(String(targetItem.drugId));
+          if (from < 0 || to < 0 || from === to) return prev;
+          current.splice(from, 1);
+          current.splice(to, 0, String(dragState.drugId));
+          return { ...(prev || {}), [typeKey]: current };
+        });
+      };
+
+      const handleShelfEndDrop = (e, typeKey) => {
+        e.preventDefault();
+        if (!dragState || String(dragState.typeKey) !== String(typeKey)) return;
+        setShelfOrder(prev => {
+          const current = Array.isArray(prev?.[typeKey]) ? [...prev[typeKey].map(String)] :
+            drugList.filter(d => String(d.type || '1') === String(typeKey)).map(d => String(d.drugId));
+          const from = current.indexOf(String(dragState.drugId));
+          if (from < 0 || from === current.length - 1) return prev;
+          current.splice(from, 1);
+          current.push(String(dragState.drugId));
+          return { ...(prev || {}), [typeKey]: current };
+        });
+      };
 
       const handleSaveAdjust = async (e) => {
          e.preventDefault();
@@ -1387,7 +1559,9 @@ const ReturnDrugView = ({ ctx }) => {
             }
 
             ctx.showToast(isAdmin ? 'ปรับสต๊อกเรียบร้อยแล้ว' : 'ส่งคำขอปรับสต๊อกแล้ว รออนุมัติ');
-            setShowModal(false); await ctx.refreshData();
+            setShowModal(false);
+            setDetailItem(null);
+            await ctx.refreshData();
          } catch(err) { ctx.showToast(err.message, 'error'); }
       };
 
@@ -1402,88 +1576,195 @@ const ReturnDrugView = ({ ctx }) => {
             batch.delete(db.collection('current_excess').doc(`${hospId}_${drugId}`));
             addAuditToBatch(batch, ctx.currentUser, 'STOCK_ITEM_REMOVE', 'config_par', `${hospId}_${drugId}`, { hospital_id: hospId, drug_id: drugId });
             await batch.commit();
-            ctx.showToast('นำออกจากคลังเรียบร้อย'); await ctx.refreshData();
+            setDetailItem(null);
+            ctx.showToast('นำออกจากคลังเรียบร้อย');
+            await ctx.refreshData();
          } catch(err) { ctx.showToast(err.message, 'error'); }
       };
 
       const myHistory = ctx.appDb.stockAdjustments.filter(a => a.hospital_id === hospId).sort((a,b) => (b.date?.seconds || 0) - (a.date?.seconds || 0));
 
+      const renderShelfCard = (item, typeKey) => {
+        const stockValue = (toSafeNumber(item.currentBal) / safePackSize(item.packSize)) * toNonNegativeNumber(item.price);
+        return (
+          <div
+            key={item.drugId}
+            draggable
+            onDragStart={(e) => {
+              dragWasActiveRef.current = true;
+              setDragState({ drugId: String(item.drugId), typeKey: String(typeKey) });
+              try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(item.drugId)); } catch(err) {}
+            }}
+            onDragEnd={() => {
+              setDragState(null);
+              setTimeout(() => { dragWasActiveRef.current = false; }, 80);
+            }}
+            onDragOver={(e) => { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch(err) {} }}
+            onDrop={(e) => handleCardDrop(e, item, typeKey)}
+            onClick={() => {
+              if (dragWasActiveRef.current) return;
+              setDetailItem(item);
+            }}
+            className={`relative group cursor-grab active:cursor-grabbing rounded-xl border bg-white shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition select-none min-h-[155px] overflow-hidden ${dragState?.drugId === String(item.drugId) ? 'opacity-40 border-dashed border-emerald-400' : 'border-slate-200'}`}
+            title="ลากเพื่อจัดตำแหน่งบนชั้น • คลิกเพื่อดูรายละเอียด"
+          >
+            <div className="h-2 bg-gradient-to-r from-slate-700 to-slate-500"></div>
+            <div className="p-3">
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <span className="font-mono text-[10px] font-bold text-slate-400">{item.drugId}</span>
+                <span className="text-[10px] text-slate-400"><i className="fa-solid fa-grip-vertical"></i></span>
+              </div>
+              <div className="font-extrabold text-slate-800 text-[13px] leading-snug line-clamp-2 min-h-[36px]">{item.name}</div>
+              <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
+                <div><span className="text-slate-400">หน่วย</span><div className="font-bold text-slate-700 truncate">{item.unit || '-'}</div></div>
+                <div><span className="text-slate-400">ราคา/หน่วย</span><div className="font-bold text-emerald-700">฿{formatUnitPrice(item.price)}</div></div>
+                <div><span className="text-slate-400">Target</span><div className="font-bold text-blue-700">{toNonNegativeNumber(item.targetVMI).toLocaleString('th-TH')}</div></div>
+                <div><span className="text-slate-400">คงเหลือ</span><div className={`font-black ${toSafeNumber(item.currentBal) <= 0 ? 'text-red-600' : 'text-amber-700'}`}>{toSafeNumber(item.currentBal).toLocaleString('th-TH')}</div></div>
+              </div>
+              <div className="mt-2 pt-2 border-t border-dashed border-slate-200 flex justify-between text-[9px] text-slate-400">
+                <span>1 หน่วย = {safePackSize(item.packSize).toLocaleString('th-TH')} {item.unit || ''}</span>
+                <span>≈ ฿{stockValue.toLocaleString('th-TH',{maximumFractionDigits:0})}</span>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
       return (
         <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in relative min-h-[80vh]">
-          <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
+          <div className="flex flex-col lg:flex-row justify-between lg:items-center gap-4 mb-6 pb-4 border-b border-slate-100">
             <div>
-               <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-boxes-stacked text-emerald-500 mr-2"></i> คลังยาของฉัน (My Stock)</h2>
-               <p className="text-slate-500 mt-1">บริหารจัดการรายการยาและเวชภัณฑ์ใน รพ.สต.</p>
+               <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-layer-group text-emerald-500 mr-2"></i> คลังยาของฉัน — Virtual Shelf</h2>
+               <p className="text-slate-500 mt-1">จัดชั้นยาเสมือนให้ตรงกับชั้นจริง • ลากการ์ดเพื่อสลับตำแหน่ง • คลิกยาเพื่อดูยอดใช้และ VMI Parameter</p>
             </div>
-            <button onClick={() => ctx.setCurrentView('dashboard')} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">กลับหน้าหลัก</button>
+            <button onClick={() => ctx.setCurrentView('dashboard')} className="text-slate-500 hover:text-slate-700 bg-slate-100 px-4 py-2 rounded-xl font-medium shrink-0">กลับหน้าหลัก</button>
           </div>
 
           <div className="flex flex-wrap gap-2 mb-6">
-             <button onClick={()=>setStockTab('current')} className={`px-6 py-2 rounded-xl font-bold transition ${stockTab==='current'?'bg-emerald-600 text-white shadow-lg':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>รายการยาในคลัง</button>
-             <button onClick={()=>setStockTab('history')} className={`px-6 py-2 rounded-xl font-bold transition ${stockTab==='history'?'bg-emerald-600 text-white shadow-lg':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>ประวัติการปรับยอด</button>
+             <button onClick={()=>setStockTab('current')} className={`px-5 py-2 rounded-xl font-bold transition ${stockTab==='current'?'bg-emerald-600 text-white shadow-lg':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}><i className="fa-solid fa-layer-group mr-2"></i>ชั้นยาเสมือน</button>
+             <button onClick={()=>setStockTab('history')} className={`px-5 py-2 rounded-xl font-bold transition ${stockTab==='history'?'bg-emerald-600 text-white shadow-lg':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}><i className="fa-solid fa-clock-rotate-left mr-2"></i>ประวัติการปรับยอด</button>
              <div className="flex-1"></div>
-             <button onClick={() => ctx.setCurrentView('return_drug')} className="bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 px-6 py-2 rounded-xl font-bold transition shadow-sm"><i className="fa-solid fa-right-left mr-2"></i> เช็คสต็อกและคืนยา</button>
+             <button onClick={() => ctx.setCurrentView('return_drug')} className="bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 px-5 py-2 rounded-xl font-bold transition shadow-sm"><i className="fa-solid fa-right-left mr-2"></i> เช็คสต็อกและคืนยา</button>
           </div>
 
           {stockTab === 'current' ? (
              <>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
                    <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-                      <div className="text-xs font-bold text-indigo-500 uppercase">รวมรายการทั้งหมด</div>
+                      <div className="text-[11px] font-bold text-indigo-500 uppercase">รวมรายการทั้งหมด</div>
                       <div className="text-2xl font-black text-indigo-700">{drugList.length} รายการ</div>
                    </div>
                    <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
-                      <div className="text-xs font-bold text-emerald-500 uppercase">มูลค่าคงคลังโดยประมาณ</div>
+                      <div className="text-[11px] font-bold text-emerald-500 uppercase">มูลค่าคงคลังโดยประมาณ</div>
                       <div className="text-2xl font-black text-emerald-700">฿ {totalValue.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
                    </div>
-                   {Object.keys(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES).slice(0,2).map(k => (
-                      <div key={k} className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                         <div className="text-xs font-bold text-slate-500 uppercase">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[k]}</div>
-                         <div className="text-xl font-bold text-slate-700">{typeCounts[k]} รายการ</div>
-                      </div>
-                   ))}
-                </div>
-
-                <div className="flex flex-wrap justify-between items-center mb-4 gap-4">
-                   <div className="relative w-full max-w-md">
-                     <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
-                     <input type="text" placeholder="ค้นหาชื่อหรือรหัสยา..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      <div className="text-[11px] font-bold text-slate-500 uppercase">จำนวนหมวดบนชั้น</div>
+                      <div className="text-2xl font-black text-slate-700">{shelfGroups.typeKeys.length} หมวด</div>
                    </div>
-                   <button onClick={() => { setEditItem({ isNew: true }); setShowModal(true); }} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg hover:scale-105 transition shrink-0"><i className="fa-solid fa-plus mr-2"></i> เพิ่มยาเข้าคลัง</button>
+                   <div className="bg-amber-50 p-4 rounded-xl border border-amber-100">
+                      <div className="text-[11px] font-bold text-amber-600 uppercase">รูปแบบชั้น</div>
+                      <div className="text-lg font-black text-amber-800">5 รายการ / แถว</div>
+                   </div>
                 </div>
 
-                <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
-                  <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
-                    <thead className="bg-slate-100 text-slate-700">
-                      <tr>
-                        <th className="p-3 font-bold border-b">รหัส</th>
-                        <th className="p-3 font-bold border-b">ชื่อรายการยา/เวชภัณฑ์</th>
-                        <th className="p-3 font-bold border-b">หมวดหมู่</th>
-                        <th className="p-3 text-center font-bold border-b">ขนาดบรรจุ</th>
-                        <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">Target (VMI)</th>
-                        <th className="p-3 text-center font-bold border-b text-amber-700 bg-amber-50">เครดิตค้าง</th>
-                        <th className="p-3 text-center font-bold border-b">จัดการ</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredList.map((item) => (
-                        <tr key={item.drugId} className="border-b border-slate-200 hover:bg-slate-50 transition">
-                          <td className="p-3 font-mono text-slate-500">{item.drugId}</td>
-                          <td className="p-3 font-bold text-slate-800">{item.name}</td>
-                          <td className="p-3 text-slate-600">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[item.type]}</td>
-                          <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
-                          <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.targetVMI}</td>
-                          <td className="p-3 text-center font-extrabold text-amber-600 bg-amber-50/30 text-[15px]">{item.currentBal}</td>
-                          <td className="p-3 text-center space-x-2">
-                             <button onClick={() => { setEditItem({ ...item, isNew: false }); setShowModal(true); }} className="bg-slate-200 text-slate-700 hover:bg-amber-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-sliders mr-1"></i> ปรับสต๊อก</button>
-                             <button onClick={() => ctx.setConfirmDialog({title:'ยืนยันนำออก', message:'คุณต้องการลบยานี้ออกจากคลัง รพ.สต. ใช่หรือไม่? (ประวัติการเบิกจะไม่หายไป)', iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600', onConfirm: ()=>handleDelete(item.drugId)})} className="bg-slate-200 text-slate-600 hover:bg-red-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-trash"></i></button>
-                          </td>
-                        </tr>
-                      ))}
-                      {filteredList.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่มีข้อมูลในคลัง</td></tr>}
-                    </tbody>
-                  </table>
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 mb-5">
+                  <div className="flex flex-col xl:flex-row xl:items-center gap-3">
+                    <div className="relative flex-1 min-w-[240px]">
+                      <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
+                      <input type="text" placeholder="ค้นหาชื่อยา รหัส หรือหมวด..." className="w-full pl-10 pr-4 py-3 border bg-white rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <div className="bg-white border border-slate-200 rounded-xl p-1 flex">
+                        <button onClick={()=>setStockDisplayMode('shelf')} className={`px-3 py-2 rounded-lg text-xs font-bold ${stockDisplayMode==='shelf'?'bg-slate-800 text-white':'text-slate-500 hover:bg-slate-100'}`}><i className="fa-solid fa-border-all mr-1"></i> ชั้นยา</button>
+                        <button onClick={()=>setStockDisplayMode('table')} className={`px-3 py-2 rounded-lg text-xs font-bold ${stockDisplayMode==='table'?'bg-slate-800 text-white':'text-slate-500 hover:bg-slate-100'}`}><i className="fa-solid fa-table-list mr-1"></i> ตาราง</button>
+                      </div>
+                      <button onClick={resetShelfLayout} className="bg-white border border-slate-300 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100"><i className="fa-solid fa-wand-magic-sparkles mr-1"></i> จัดชั้นอัตโนมัติ</button>
+                      <button onClick={() => { setEditItem({ isNew: true }); setShowModal(true); }} className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-emerald-700"><i className="fa-solid fa-plus mr-1"></i> เพิ่มยาเข้าคลัง</button>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-[11px] text-slate-500 flex items-center gap-2">
+                    <i className="fa-solid fa-circle-info text-blue-500"></i>
+                    <span>ตำแหน่งชั้นจำอัตโนมัติบนอุปกรณ์นี้ก่อน โดยไม่เขียน Firestore เพิ่มในรุ่นนี้ เพื่อไม่กระทบระบบเบิกที่ใช้งานอยู่</span>
+                  </div>
                 </div>
+
+                {stockDisplayMode === 'shelf' ? (
+                  <div className="space-y-7">
+                    {shelfGroups.typeKeys.map(typeKey => {
+                      const items = shelfGroups.groups[typeKey] || [];
+                      const fullRows = Math.max(1, Math.ceil(items.length / 5));
+                      const emptyCount = Math.max(0, fullRows * 5 - items.length);
+                      const categoryValue = items.reduce((s,item) => s + ((toSafeNumber(item.currentBal)/safePackSize(item.packSize))*toNonNegativeNumber(item.price)),0);
+                      return (
+                        <section key={typeKey} className="rounded-2xl border border-slate-300 bg-slate-100/70 overflow-hidden shadow-sm">
+                          <div className={`px-4 py-3 flex flex-wrap items-center justify-between gap-2 ${typeKey === '25' ? 'bg-blue-900 text-white' : 'bg-slate-800 text-white'}`}>
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center"><i className="fa-solid fa-boxes-stacked"></i></div>
+                              <div>
+                                <div className="font-black text-base">ชั้น {typesSource[typeKey] || `หมวด ${typeKey}`}</div>
+                                <div className="text-[10px] opacity-70">{items.length} รายการ • {fullRows} แถว</div>
+                              </div>
+                            </div>
+                            <div className="text-xs font-bold opacity-90">มูลค่าคงคลังในชั้น ≈ ฿{categoryValue.toLocaleString('th-TH',{maximumFractionDigits:0})}</div>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <div className="min-w-[1020px] p-4">
+                              <div className="grid grid-cols-5 gap-3">
+                                {items.map(item => renderShelfCard(item, typeKey))}
+                                {Array.from({length: emptyCount}).map((_,idx) => (
+                                  <div
+                                    key={`empty-${typeKey}-${idx}`}
+                                    onDragOver={(e)=>e.preventDefault()}
+                                    onDrop={(e)=>handleShelfEndDrop(e,typeKey)}
+                                    className="min-h-[155px] rounded-xl border-2 border-dashed border-slate-300 bg-white/40 flex items-center justify-center text-slate-300 text-xs"
+                                  >
+                                    <i className="fa-solid fa-arrow-down mr-2"></i>วางที่นี่
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="h-3 mt-3 rounded-b-lg bg-gradient-to-b from-slate-400 to-slate-600 shadow-inner"></div>
+                            </div>
+                          </div>
+                        </section>
+                      );
+                    })}
+                    {shelfGroups.typeKeys.length === 0 && <div className="p-10 text-center text-slate-400 border border-dashed rounded-2xl">ไม่พบยาในชั้นตามคำค้น</div>}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
+                    <table className="w-full text-left border-collapse whitespace-nowrap text-[13px]">
+                      <thead className="bg-slate-100 text-slate-700">
+                        <tr>
+                          <th className="p-3 font-bold border-b">รหัส</th>
+                          <th className="p-3 font-bold border-b">ชื่อรายการยา/เวชภัณฑ์</th>
+                          <th className="p-3 font-bold border-b">หมวดหมู่</th>
+                          <th className="p-3 text-center font-bold border-b">ขนาดบรรจุ</th>
+                          <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">Target (VMI)</th>
+                          <th className="p-3 text-center font-bold border-b text-amber-700 bg-amber-50">เครดิตค้าง</th>
+                          <th className="p-3 text-center font-bold border-b">จัดการ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredList.map((item) => (
+                          <tr key={item.drugId} className="border-b border-slate-200 hover:bg-slate-50 transition cursor-pointer" onClick={()=>setDetailItem(item)}>
+                            <td className="p-3 font-mono text-slate-500">{item.drugId}</td>
+                            <td className="p-3 font-bold text-slate-800">{item.name}</td>
+                            <td className="p-3 text-slate-600">{typesSource[item.type]}</td>
+                            <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
+                            <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.targetVMI}</td>
+                            <td className="p-3 text-center font-extrabold text-amber-600 bg-amber-50/30 text-[15px]">{item.currentBal}</td>
+                            <td className="p-3 text-center space-x-2" onClick={e=>e.stopPropagation()}>
+                               <button onClick={() => { setEditItem({ ...item, isNew: false }); setShowModal(true); }} className="bg-slate-200 text-slate-700 hover:bg-amber-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-sliders mr-1"></i> ปรับสต๊อก</button>
+                               <button onClick={() => ctx.setConfirmDialog({title:'ยืนยันนำออก', message:'คุณต้องการลบยานี้ออกจากคลัง รพ.สต. ใช่หรือไม่? (ประวัติการเบิกจะไม่หายไป)', iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600', onConfirm: ()=>handleDelete(item.drugId)})} className="bg-slate-200 text-slate-600 hover:bg-red-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-trash"></i></button>
+                            </td>
+                          </tr>
+                        ))}
+                        {filteredList.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่มีข้อมูลในคลัง</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
              </>
           ) : (
              <div className="overflow-x-auto border border-slate-200 rounded-xl w-full">
@@ -1522,6 +1803,82 @@ const ReturnDrugView = ({ ctx }) => {
                 </table>
              </div>
           )}
+
+          {detailItem && (() => {
+            const stats = usageStatsByDrug[String(detailItem.drugId)] || { months:[], mean:0, adu:0, sd:0, sdz:0, maxUsage:1 };
+            const currentValue = (toSafeNumber(detailItem.currentBal) / safePackSize(detailItem.packSize)) * toNonNegativeNumber(detailItem.price);
+            return (
+              <Modal title="รายละเอียดยาในชั้น" isOpen={true} onClose={()=>setDetailItem(null)}>
+                <div className="space-y-5">
+                  <div className="rounded-2xl bg-slate-900 text-white p-5">
+                    <div className="text-xs font-mono text-slate-400">{detailItem.drugId}</div>
+                    <div className="text-xl font-black mt-1">{detailItem.name}</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-sm">
+                      <div><div className="text-slate-400 text-[10px]">หมวด</div><div className="font-bold">{typesSource[detailItem.type] || detailItem.type}</div></div>
+                      <div><div className="text-slate-400 text-[10px]">หน่วย</div><div className="font-bold">{detailItem.unit || '-'}</div></div>
+                      <div><div className="text-slate-400 text-[10px]">ขนาดบรรจุ</div><div className="font-bold">{safePackSize(detailItem.packSize).toLocaleString('th-TH')} {detailItem.unit}</div></div>
+                      <div><div className="text-slate-400 text-[10px]">ราคา/หน่วย</div><div className="font-bold text-emerald-300">฿{formatUnitPrice(detailItem.price)}</div></div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-blue-50 border border-blue-100 p-3 rounded-xl"><div className="text-[10px] font-bold text-blue-500">TARGET VMI</div><div className="text-xl font-black text-blue-800">{toNonNegativeNumber(detailItem.targetVMI).toLocaleString('th-TH')}</div><div className="text-[10px] text-blue-500">{detailItem.unit}</div></div>
+                    <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl"><div className="text-[10px] font-bold text-amber-600">คงเหลือในระบบ</div><div className="text-xl font-black text-amber-800">{toSafeNumber(detailItem.currentBal).toLocaleString('th-TH')}</div><div className="text-[10px] text-amber-600">{detailItem.unit}</div></div>
+                    <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-xl"><div className="text-[10px] font-bold text-emerald-600">มูลค่าคงเหลือ</div><div className="text-xl font-black text-emerald-800">฿{currentValue.toLocaleString('th-TH',{maximumFractionDigits:2})}</div></div>
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl"><div className="text-[10px] font-bold text-slate-500">AMU 6 เดือน</div><div className="text-xl font-black text-slate-800">{stats.mean.toLocaleString('th-TH',{maximumFractionDigits:2})}</div><div className="text-[10px] text-slate-500">{detailItem.unit}/เดือน</div></div>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-2xl p-4">
+                    <div className="flex justify-between items-end gap-3 mb-3">
+                      <div>
+                        <div className="font-black text-slate-800">ยอดใช้ย้อนหลัง 6 เดือน</div>
+                        <div className="text-[10px] text-slate-400">ใช้ข้อมูล รบ.301 ในใบเบิก หากไม่มีจึงใช้ประวัติย้อนหลัง</div>
+                      </div>
+                      <div className="text-xs text-slate-500">สูงสุด {stats.maxUsage.toLocaleString('th-TH')} {detailItem.unit}</div>
+                    </div>
+                    <div className="h-44 flex items-end gap-2 border-b border-slate-200 px-1">
+                      {stats.months.map((m,idx) => {
+                        const pct = m.usage > 0 ? Math.max(5, (m.usage / stats.maxUsage) * 100) : 2;
+                        return (
+                          <div key={idx} className="flex-1 h-full flex flex-col justify-end items-center min-w-0">
+                            <div className="text-[9px] font-bold text-slate-600 mb-1">{m.usage > 0 ? m.usage.toLocaleString('th-TH') : '-'}</div>
+                            <div className={`w-full max-w-[46px] rounded-t-md ${m.usage > 0 ? 'bg-emerald-500' : 'bg-slate-200'}`} style={{height:`${pct}%`}}></div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex gap-2 px-1 mt-2">
+                      {stats.months.map((m,idx) => (
+                        <div key={idx} className="flex-1 text-center text-[9px] text-slate-500 min-w-0">{THAI_MONTHS[m.m-1].slice(0,3)} {(m.y+543).toString().slice(-2)}</div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="border rounded-xl p-3"><div className="text-[10px] text-slate-400 font-bold">ADU</div><div className="font-black text-blue-700 text-lg">{stats.adu.toFixed(2)}</div><div className="text-[9px] text-slate-400">{detailItem.unit}/วัน</div></div>
+                    <div className="border rounded-xl p-3"><div className="text-[10px] text-slate-400 font-bold">AMU</div><div className="font-black text-blue-700 text-lg">{stats.mean.toFixed(2)}</div><div className="text-[9px] text-slate-400">{detailItem.unit}/เดือน</div></div>
+                    <div className="border rounded-xl p-3"><div className="text-[10px] text-slate-400 font-bold">SD</div><div className="font-black text-slate-700 text-lg">{stats.sd.toFixed(2)}</div></div>
+                    <div className="border border-amber-200 bg-amber-50 rounded-xl p-3"><div className="text-[10px] text-amber-600 font-bold">SD × 1.645</div><div className="font-black text-amber-700 text-lg">{stats.sdz.toFixed(2)}</div><div className="text-[9px] text-amber-600">Safety variation</div></div>
+                  </div>
+
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 text-xs text-indigo-700">
+                    <i className="fa-solid fa-barcode mr-2"></i>
+                    Lot / วันหมดอายุ จะเพิ่มใน Card นี้เมื่อรับข้อมูลจ่ายจริงจาก INVS โดยแยกเป็นราย Lot ไม่ปนกับยอดใช้จาก รบ.301
+                  </div>
+
+                  <div className="flex flex-wrap justify-end gap-2 pt-2">
+                    <button onClick={()=>setDetailItem(null)} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 font-bold">ปิด</button>
+                    <button onClick={() => { const item={...detailItem,isNew:false}; setDetailItem(null); setEditItem(item); setShowModal(true); }} className="px-4 py-2 rounded-xl bg-amber-500 text-white font-bold"><i className="fa-solid fa-sliders mr-1"></i> ปรับสต๊อก</button>
+                    <button onClick={() => {
+                      const item = detailItem;
+                      setDetailItem(null);
+                      ctx.setConfirmDialog({title:'ยืนยันนำออก', message:'คุณต้องการลบยานี้ออกจากคลัง รพ.สต. ใช่หรือไม่? (ประวัติการเบิกจะไม่หายไป)', iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600', onConfirm: ()=>handleDelete(item.drugId)});
+                    }} className="px-4 py-2 rounded-xl bg-red-50 border border-red-200 text-red-600 font-bold"><i className="fa-solid fa-trash mr-1"></i> นำออกจากคลัง</button>
+                  </div>
+                </div>
+              </Modal>
+            );
+          })()}
 
           {showModal && editItem && (
              <Modal title={editItem.isNew ? 'เพิ่มยาเข้าคลัง' : 'ขอปรับปรุงสต๊อก (Adjust)'} isOpen={true} onClose={()=>setShowModal(false)}>
@@ -6094,7 +6451,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.9.2 Production</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.10 Production</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

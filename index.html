@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <title>Sawee Rxfill (VMI Edition v4.10 Production)</title>
+  <title>Sawee Rxfill (VMI Edition v4.11 Production)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
   
@@ -174,7 +174,7 @@
     };
 
     const APP_SCHEMA_VERSION = 11;
-    const APP_VERSION = '4.10.0-production';
+    const APP_VERSION = '4.11.0-production';
     const MAX_BATCH_WRITES = 400;
     let fuzzyAutoCleanDone = false;
     
@@ -402,6 +402,20 @@
       minimumFractionDigits: 0,
       maximumFractionDigits: 4
     });
+
+
+    const formatAppDateTime = (value) => {
+      if (!value) return '-';
+      try {
+        const d = typeof value?.toDate === 'function'
+          ? value.toDate()
+          : value?.seconds
+            ? new Date(Number(value.seconds) * 1000)
+            : new Date(value);
+        if (!Number.isFinite(d.getTime())) return safeText(value, '-');
+        return d.toLocaleString('th-TH', { dateStyle:'short', timeStyle:'short' });
+      } catch(e) { return safeText(value, '-'); }
+    };
 
     const buildRequisitionId = (hospitalId, month, year) => {
       const hosp = String(hospitalId || 'UNKNOWN').replace(/[^A-Za-z0-9_-]/g, '_');
@@ -1314,6 +1328,7 @@ const ReturnDrugView = ({ ctx }) => {
       const [stockTab, setStockTab] = useState('current');
       const [stockDisplayMode, setStockDisplayMode] = useState('shelf');
       const [dragState, setDragState] = useState(null);
+      const [isRefreshingInvsPrice, setIsRefreshingInvsPrice] = useState(false);
       const dragWasActiveRef = useRef(false);
       const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
       const shelfStorageKey = `sawee_rxfill_shelf_layout_${String(hospId || 'unknown')}`;
@@ -1331,6 +1346,10 @@ const ReturnDrugView = ({ ctx }) => {
               drugId: p.drug_id, name: drug ? drug.drug_name : 'N/A', unit: unitName, 
               packSize: drug ? safePackSize(drug.pack_size) : 1, type: drug ? String(drug.type || '1') : '1',
               price: drug ? toNonNegativeNumber(drug.price) : 0,
+              pricePrevious: drug ? toNonNegativeNumber(drug.price_previous) : 0,
+              priceSource: drug ? safeText(drug.price_source) : '',
+              priceInvsLastDatetime: drug ? safeText(drug.price_invs_last_datetime) : '',
+              priceUpdatedAt: drug?.price_updated_at || null,
               targetVMI: toNonNegativeNumber(p.par_qty), currentBal: bal ? toSafeNumber(bal.excess_balance) : 0 
           };
         }).sort(sortDrugs);
@@ -1470,6 +1489,28 @@ const ReturnDrugView = ({ ctx }) => {
          totalValue += (val || 0);
          if(typeCounts[d.type] !== undefined) typeCounts[d.type]++;
       });
+
+       const refreshInvsMasterPrice = async () => {
+         if (isRefreshingInvsPrice) return;
+         setIsRefreshingInvsPrice(true);
+         try {
+           const snap = await db.collection('master_drugs').get();
+           const freshDrugs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+           const oldMap = new Map((ctx.appDb.drugs || []).map(d => [String(d.drug_id), toNonNegativeNumber(d.price)]));
+           const changedCount = freshDrugs.reduce((n,d) => n + (Math.abs(toNonNegativeNumber(d.price) - toNonNegativeNumber(oldMap.get(String(d.drug_id)))) >= 0.005 ? 1 : 0), 0);
+           ctx.setAppDb(prev => ({ ...prev, drugs: freshDrugs }));
+           setDetailItem(prev => {
+             if (!prev) return prev;
+             const d = freshDrugs.find(x => String(x.drug_id) === String(prev.drugId));
+             return d ? { ...prev, price:toNonNegativeNumber(d.price), pricePrevious:toNonNegativeNumber(d.price_previous), priceSource:safeText(d.price_source), priceInvsLastDatetime:safeText(d.price_invs_last_datetime), priceUpdatedAt:d.price_updated_at || null } : prev;
+           });
+           ctx.showToast(changedCount > 0 ? `รีเฟรชราคา INVS แล้ว พบราคาเปลี่ยน ${changedCount} รายการ` : 'ราคา INVS เป็นข้อมูลล่าสุดแล้ว');
+         } catch(err) {
+           ctx.showToast('รีเฟรชราคา INVS ไม่สำเร็จ: ' + (err?.message || err), 'error');
+         } finally {
+           setIsRefreshingInvsPrice(false);
+         }
+       };
 
       const resetShelfLayout = () => {
         const next = {};
@@ -1611,7 +1652,7 @@ const ReturnDrugView = ({ ctx }) => {
             <div className="h-2 bg-gradient-to-r from-slate-700 to-slate-500"></div>
             <div className="p-3">
               <div className="flex items-start justify-between gap-2 mb-1">
-                <span className="font-mono text-[10px] font-bold text-slate-400">{item.drugId}</span>
+                <div className="flex items-center gap-1"><span className="font-mono text-[10px] font-bold text-slate-400">{item.drugId}</span>{item.priceSource === 'INVS_LATEST_PRICE' && <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1">INVS</span>}</div>
                 <span className="text-[10px] text-slate-400"><i className="fa-solid fa-grip-vertical"></i></span>
               </div>
               <div className="font-extrabold text-slate-800 text-[13px] leading-snug line-clamp-2 min-h-[36px]">{item.name}</div>
@@ -1679,6 +1720,7 @@ const ReturnDrugView = ({ ctx }) => {
                         <button onClick={()=>setStockDisplayMode('shelf')} className={`px-3 py-2 rounded-lg text-xs font-bold ${stockDisplayMode==='shelf'?'bg-slate-800 text-white':'text-slate-500 hover:bg-slate-100'}`}><i className="fa-solid fa-border-all mr-1"></i> ชั้นยา</button>
                         <button onClick={()=>setStockDisplayMode('table')} className={`px-3 py-2 rounded-lg text-xs font-bold ${stockDisplayMode==='table'?'bg-slate-800 text-white':'text-slate-500 hover:bg-slate-100'}`}><i className="fa-solid fa-table-list mr-1"></i> ตาราง</button>
                       </div>
+                      <button onClick={refreshInvsMasterPrice} disabled={isRefreshingInvsPrice} className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-100 disabled:opacity-50"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i> {isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชราคา INVS'}</button>
                       <button onClick={resetShelfLayout} className="bg-white border border-slate-300 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-100"><i className="fa-solid fa-wand-magic-sparkles mr-1"></i> จัดชั้นอัตโนมัติ</button>
                       <button onClick={() => { setEditItem({ isNew: true }); setShowModal(true); }} className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-emerald-700"><i className="fa-solid fa-plus mr-1"></i> เพิ่มยาเข้าคลัง</button>
                     </div>
@@ -1742,6 +1784,7 @@ const ReturnDrugView = ({ ctx }) => {
                           <th className="p-3 text-center font-bold border-b">ขนาดบรรจุ</th>
                           <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">Target (VMI)</th>
                           <th className="p-3 text-center font-bold border-b text-amber-700 bg-amber-50">เครดิตค้าง</th>
+                          <th className="p-3 text-right font-bold border-b text-emerald-700 bg-emerald-50">ราคาปัจจุบัน</th>
                           <th className="p-3 text-center font-bold border-b">จัดการ</th>
                         </tr>
                       </thead>
@@ -1754,13 +1797,14 @@ const ReturnDrugView = ({ ctx }) => {
                             <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
                             <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.targetVMI}</td>
                             <td className="p-3 text-center font-extrabold text-amber-600 bg-amber-50/30 text-[15px]">{item.currentBal}</td>
+                            <td className="p-3 text-right bg-emerald-50/30"><div className="font-black text-emerald-700">฿{formatUnitPrice(item.price)}</div>{item.priceSource === 'INVS_LATEST_PRICE' && <div className="text-[9px] text-emerald-600">INVS</div>}</td>
                             <td className="p-3 text-center space-x-2" onClick={e=>e.stopPropagation()}>
                                <button onClick={() => { setEditItem({ ...item, isNew: false }); setShowModal(true); }} className="bg-slate-200 text-slate-700 hover:bg-amber-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-sliders mr-1"></i> ปรับสต๊อก</button>
                                <button onClick={() => ctx.setConfirmDialog({title:'ยืนยันนำออก', message:'คุณต้องการลบยานี้ออกจากคลัง รพ.สต. ใช่หรือไม่? (ประวัติการเบิกจะไม่หายไป)', iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600', onConfirm: ()=>handleDelete(item.drugId)})} className="bg-slate-200 text-slate-600 hover:bg-red-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"><i className="fa-solid fa-trash"></i></button>
                             </td>
                           </tr>
                         ))}
-                        {filteredList.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ไม่มีข้อมูลในคลัง</td></tr>}
+                        {filteredList.length === 0 && <tr><td colSpan="8" className="p-8 text-center text-slate-400">ไม่มีข้อมูลในคลัง</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -1819,6 +1863,12 @@ const ReturnDrugView = ({ ctx }) => {
                       <div><div className="text-slate-400 text-[10px]">ขนาดบรรจุ</div><div className="font-bold">{safePackSize(detailItem.packSize).toLocaleString('th-TH')} {detailItem.unit}</div></div>
                       <div><div className="text-slate-400 text-[10px]">ราคา/หน่วย</div><div className="font-bold text-emerald-300">฿{formatUnitPrice(detailItem.price)}</div></div>
                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3"><div className="text-[10px] font-black text-emerald-600">แหล่งราคา</div><div className="font-bold text-emerald-800 mt-1">{detailItem.priceSource === 'INVS_LATEST_PRICE' ? 'INVS — ราคาล่าสุด' : 'Master เดิม'}</div></div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-[10px] font-black text-slate-500">ราคาก่อน Sync ล่าสุด</div><div className="font-bold text-slate-800 mt-1">{detailItem.pricePrevious > 0 ? `฿${formatUnitPrice(detailItem.pricePrevious)}` : '-'}</div></div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><div className="text-[10px] font-black text-slate-500">อัปเดตราคา</div><div className="font-bold text-slate-800 mt-1">{detailItem.priceUpdatedAt ? formatAppDateTime(detailItem.priceUpdatedAt) : (detailItem.priceInvsLastDatetime || '-')}</div></div>
                   </div>
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1960,6 +2010,7 @@ const CreateReqView = ({ ctx }) => {
       const [uploadedExcelUrl, setUploadedExcelUrl] = useState(editingReq?.excel_url || '');
       const [isSubmitting, setIsSubmitting] = useState(false);
       const [isProcessing, setIsProcessing] = useState(false);
+      const [isRefreshingInvsPrice, setIsRefreshingInvsPrice] = useState(false);
 
       const [showImportModal, setShowImportModal] = useState(false);
       const [importData, setImportData] = useState({ hospInfo: '', periodInfo: '', isDateValid: true, items: [] });
@@ -2726,6 +2777,60 @@ const CreateReqView = ({ ctx }) => {
          });
       };
 
+      const previousReqPriceByDrug = useMemo(() => {
+        const currentKey = currentYear * 100 + currentMonth;
+        const previousReqs = (ctx.appDb.requisitions || [])
+          .filter(r => String(r.hospitalId) === String(hospId)
+            && !String(r.id || '').startsWith('HIST-')
+            && (Number(r.year) * 100 + Number(r.month)) < currentKey
+            && ['Completed','Pending','Approving','ApprovalFailed'].includes(String(r.status || '')))
+          .sort((a,b) => (Number(b.year)*100+Number(b.month)) - (Number(a.year)*100+Number(a.month)));
+        const map = new Map();
+        previousReqs.forEach(r => {
+          (Array.isArray(r.items) ? r.items : []).forEach(it => {
+            const key = String(it.drugId || '');
+            const price = toNonNegativeNumber(it.price);
+            if (key && price > 0 && !map.has(key)) map.set(key, { price, reqId:r.id, month:Number(r.month), year:Number(r.year), status:r.status });
+          });
+        });
+        return map;
+      }, [ctx.appDb.requisitions, hospId, currentMonth, currentYear]);
+
+      const getReqPriceChange = (item) => {
+        const prev = previousReqPriceByDrug.get(String(item?.drugId || ''));
+        const current = toNonNegativeNumber(item?.price);
+        if (!prev || prev.price <= 0 || current <= 0 || Math.abs(current - prev.price) < 0.005) return null;
+        const pct = ((current - prev.price) / prev.price) * 100;
+        return { ...prev, current, pct, delta:current-prev.price };
+      };
+
+      const priceChangedItems = items.map(item => ({ item, change:getReqPriceChange(item) })).filter(x => x.change);
+
+      const refreshInvsPriceForRequisition = async () => {
+        if (isRefreshingInvsPrice) return;
+        setIsRefreshingInvsPrice(true);
+        try {
+          const snap = await db.collection('master_drugs').get();
+          const freshDrugs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+          const freshMap = new Map(freshDrugs.map(d => [String(d.drug_id), d]));
+          const changed = items.filter(item => {
+            const d = freshMap.get(String(item.drugId));
+            return d && Math.abs(toNonNegativeNumber(d.price) - toNonNegativeNumber(item.price)) >= 0.005;
+          });
+          setItems(prev => prev.map(item => {
+            const d = freshMap.get(String(item.drugId));
+            return d ? { ...item, price:toNonNegativeNumber(d.price) } : item;
+          }));
+          ctx.setAppDb(prev => ({ ...prev, drugs:freshDrugs }));
+          if (changed.length > 0) markDirty();
+          ctx.showToast(changed.length > 0 ? `อัปเดตราคา INVS ในใบเบิกแล้ว ${changed.length} รายการ` : 'ราคาในใบเบิกเป็นราคา INVS ล่าสุดแล้ว');
+        } catch(err) {
+          ctx.showToast('รีเฟรชราคา INVS ไม่สำเร็จ: ' + (err?.message || err), 'error');
+        } finally {
+          setIsRefreshingInvsPrice(false);
+        }
+      };
+
       const filteredItems = items.filter(item => {
         const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(item.drugId).includes(searchTerm.toLowerCase());
         const matchType = filterType === 'all' ? true : filterType === item.type;
@@ -2820,6 +2925,7 @@ const CreateReqView = ({ ctx }) => {
               </label>
             )}
             {(excelFile || uploadedExcelUrl || editingReq?.excel_url) && <span className="text-xs text-emerald-700"><i className="fa-solid fa-circle-check mr-1"></i>มีไฟล์ รบ.301</span>}
+            <button onClick={refreshInvsPriceForRequisition} disabled={isRefreshingInvsPrice} className="h-9 px-3 rounded-lg border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 font-bold text-xs disabled:opacity-50" title="โหลดราคาปัจจุบันจาก master_drugs หลัง INVS Sync"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>{isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชราคา INVS'}</button>
 
             <div className="flex-1 min-w-[180px]"></div>
             <div className="relative min-w-[220px] max-w-sm flex-1">
@@ -2863,6 +2969,8 @@ const CreateReqView = ({ ctx }) => {
               <span>• ระบบปัดจำนวนจ่ายให้ครบ Pack / รอบเติมอัตโนมัติ</span>
             </div>
 
+            {priceChangedItems.length > 0 && <div className="no-print mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900"><div className="font-black"><i className="fa-solid fa-tags mr-2"></i>พบราคาปัจจุบันต่างจากใบเบิกครั้งก่อน {priceChangedItems.length} รายการ</div><div className="mt-1 text-amber-700">เป็นการแจ้งเตือนเท่านั้น ระบบยังใช้ราคาปัจจุบันจาก INVS และไม่ขัดขวางการส่งใบเบิก</div></div>}
+
             <div className="overflow-x-auto">
               <table className={`official-table w-full text-[11px] border-collapse border border-black mb-2 ${showCalc?'min-w-[1500px]':'min-w-[1250px]'}`}>
                 <thead>
@@ -2899,6 +3007,8 @@ const CreateReqView = ({ ctx }) => {
                       const rowClass = focused ? 'bg-yellow-100 ring-2 ring-inset ring-yellow-400' : isDiscontinued || isDisabled ? 'bg-slate-200 text-slate-500' : isVaccine ? 'bg-red-50/50' : inactive ? 'text-slate-400' : '';
                       const actualStockDisplay = item.actualStockTouched ? toNonNegativeNumber(item.actualStock) : Math.max(0,toSafeNumber(item.systemStock));
                       const itemValue = getRequisitionItemValue({...item,isDiscontinued});
+                      const priceChange = getReqPriceChange(item);
+                      const masterPriceSource = safeText(drug?.price_source);
                       return (
                         <tr id={`req-row-${item.drugId}`} key={item.drugId} className={rowClass}>
                           <td className="text-center">{rowNumberByDrug.get(String(item.drugId))}</td>
@@ -2909,6 +3019,7 @@ const CreateReqView = ({ ctx }) => {
                             {isDiscontinued && <span className="ml-1 text-[9px] font-bold text-slate-700 border border-slate-400 bg-slate-100 rounded px-1">ยกเลิกใช้</span>}
                            
                             {isVaccine && <span className="ml-1 text-[9px] font-bold text-red-600">ไม่ร่วมระบบเบิก</span>}
+                            {priceChange && !isVaccine && <span className="no-print ml-1 text-[9px] font-black text-amber-800 border border-amber-300 bg-amber-50 rounded px-1" title={`ใบก่อน ${priceChange.month}/${priceChange.year+543}: ${formatUnitPrice(priceChange.price)} → ปัจจุบัน ${formatUnitPrice(priceChange.current)}`}>ราคาเปลี่ยน {priceChange.pct>=0?'+':''}{priceChange.pct.toFixed(1)}%</span>}
                           </td>
                           <td className="text-center">{displayUnit}</td>
                           <td className="text-center">{item.packSize}</td>
@@ -2944,7 +3055,7 @@ const CreateReqView = ({ ctx }) => {
                               <div className="flex items-center justify-center gap-1 whitespace-nowrap"><span>{formatQty(item.finalRequestedQty ?? item.dispenseQty,item.packSize)}</span><button onClick={()=>setEditingQtyDrugId(item.drugId)} className="no-print text-[9px] text-emerald-700 font-bold hover:underline"><i className="fa-solid fa-pen mr-0.5"></i>แก้ไข</button></div>
                             )}
                           </td>
-                          <td className="text-right pr-1 text-slate-500">{isVaccine ? 'ไม่ร่วมระบบเบิก' : formatUnitPrice(item.price)}</td>
+                          <td className="text-right pr-1 text-slate-500">{isVaccine ? 'ไม่ร่วมระบบเบิก' : <div><div className="font-bold text-slate-700">{formatUnitPrice(item.price)}</div>{masterPriceSource === 'INVS_LATEST_PRICE' && <div className="no-print text-[8px] font-bold text-emerald-600">INVS</div>}{priceChange && <div className="no-print text-[8px] font-bold text-amber-700 whitespace-nowrap">เดิม {formatUnitPrice(priceChange.price)} → {formatUnitPrice(priceChange.current)}</div>}</div>}</td>
                           <td className="text-right pr-1 font-semibold">{isVaccine ? 'ไม่ร่วมระบบเบิก' : (isDisabled || isDiscontinued) ? '0.00' : itemValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                           <td className="text-center">{formatQty(Math.max(0,toSafeNumber(item.newExcess)),item.packSize)}</td>
                           <td className="text-center font-mono text-gray-600">{item.drugId}</td>
@@ -4616,7 +4727,7 @@ const ViewReqView = ({ ctx }) => {
 
                       itemStats[it.drugId] = { 
                           id: it.drugId, name: it.name, type: it.type, unit: displayUnit, packSize: it.packSize,
-                          unitPrice: toNonNegativeNumber(drug?.price ?? it.price), isDisabledForHospital: false,
+                          unitPrice: toNonNegativeNumber(it.price ?? drug?.price), isDisabledForHospital: false,
                           qty: 0, val: 0 
                       };
                    }
@@ -6451,7 +6562,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.10 Production</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.11 Production</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
   <meta charset="UTF-8">
-  <title>Sawee Rxfill (VMI Edition v4.13 Production)</title>
+  <title>Sawee Rxfill (VMI Edition v4.14 Production)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
   
@@ -152,6 +152,22 @@
        return `${year}-${String(month).padStart(2, '0')}`;
     };
 
+    // รอบเบิกที่ทำช่วงวันที่ 20-31 เป็นการเติมยาเพื่อใช้ในเดือนถัดไป
+    // เช่น 20 ก.ย. 2569 => รอบเดือน ต.ค. 2569 => ปีงบ 2570
+    const getNextCalendarPeriod = (month, year) => {
+      let m = Number(month) + 1;
+      let y = Number(year);
+      if (m > 12) { m = 1; y += 1; }
+      return { month:m, year:y };
+    };
+
+    const getPreviousCalendarPeriod = (month, year) => {
+      let m = Number(month) - 1;
+      let y = Number(year);
+      if (m < 1) { m = 12; y -= 1; }
+      return { month:m, year:y };
+    };
+
     const sortDrugs = (a, b) => {
       const idA = String(a.drugId || a.drug_id || "");
       const idB = String(b.drugId || b.drug_id || "");
@@ -173,8 +189,8 @@
        return `${p}(${r})`;
     };
 
-    const APP_SCHEMA_VERSION = 13;
-    const APP_VERSION = '4.13.0-production';
+    const APP_SCHEMA_VERSION = 14;
+    const APP_VERSION = '4.14.0-production';
     const MAX_BATCH_WRITES = 400;
     let fuzzyAutoCleanDone = false;
     
@@ -187,6 +203,53 @@
     const toNonNegativeInt = (value, fallback = 0) => Math.max(0, Math.round(toSafeNumber(value, fallback)));
     const safePackSize = (value) => Math.max(1, Math.round(toSafeNumber(value, 1)));
     const safeText = (value, fallback = '') => String(value ?? fallback).trim();
+
+    // FY2569 เป็นปีเปลี่ยนผ่านของระบบ: default เลขครั้งตามลำดับเดือนงบ (ต.ค.=1 ... ก.ย.=12)
+    // ตั้งแต่ FY2570 เป็นต้นไป เลขครั้ง run ตามใบเบิกที่เกิดขึ้นจริงของแต่ละ รพ.สต. และ reset เมื่อขึ้นปีงบใหม่
+    const RXFILL_TRANSITION_FISCAL_YEAR = 2569;
+
+    const getStoredFiscalTerm = (req) => {
+      const raw = req?.fiscal_term ?? req?.requisition_term ?? req?.term;
+      const n = Math.round(Number(raw));
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+
+    const getReqFiscalYear = (req) => {
+      const stored = Math.round(Number(req?.fiscal_year));
+      if (Number.isFinite(stored) && stored > 0) return stored;
+      if (!req) return 0;
+      return getFiscalInfo(Number(req.month), Number(req.year)).fiscalYear;
+    };
+
+    const getEffectiveFiscalTerm = (req, requisitions = []) => {
+      if (!req) return 1;
+      const stored = getStoredFiscalTerm(req);
+      if (stored > 0) return stored;
+      const info = getFiscalInfo(Number(req.month), Number(req.year));
+      if (info.fiscalYear <= RXFILL_TRANSITION_FISCAL_YEAR) return info.term;
+      const sameFY = (requisitions || []).filter(r =>
+        r && !String(r.id || '').startsWith('HIST-') &&
+        String(r.hospitalId) === String(req.hospitalId) &&
+        getReqFiscalYear(r) === info.fiscalYear
+      ).sort((a,b) => (Number(a.year)*100+Number(a.month)) - (Number(b.year)*100+Number(b.month)));
+      const idx = sameFY.findIndex(r => String(r.id) === String(req.id));
+      return idx >= 0 ? idx + 1 : info.term;
+    };
+
+    const getNextFiscalTerm = (hospitalId, month, year, requisitions = []) => {
+      const info = getFiscalInfo(Number(month), Number(year));
+      if (info.fiscalYear <= RXFILL_TRANSITION_FISCAL_YEAR) return info.term;
+      const sameFY = (requisitions || []).filter(r =>
+        r && !String(r.id || '').startsWith('HIST-') &&
+        String(r.hospitalId) === String(hospitalId) &&
+        getReqFiscalYear(r) === info.fiscalYear
+      );
+      const storedTerms = sameFY.map(getStoredFiscalTerm).filter(n => n > 0);
+      if (storedTerms.length) return Math.max(...storedTerms) + 1;
+      return sameFY.length + 1;
+    };
+
+    const formatRequisitionNo = (term, fiscalYear) => `${Math.max(1, toNonNegativeInt(term,1))}/${fiscalYear}`;
 
     // สถานะยาหลักใช้ร่วมกันทุก รพ.สต. จาก master_drugs เท่านั้น
     // Active = ใช้งานปกติ, ยกเลิกใช้ = แสดงย้อนหลัง/ยอดใช้ได้ แต่จำนวนจ่ายเป็น 0 และเพิ่มเองไม่ได้
@@ -823,11 +886,14 @@ const RegisterView = ({ ctx }) => {
 
       const today = new Date();
       const currentDay = today.getDate();
-      const currentMonth = today.getMonth() + 1;
-      const currentYear = today.getFullYear();
+      const sourceMonth = today.getMonth() + 1;
+      const sourceYear = today.getFullYear();
+      const roundPeriod = getNextCalendarPeriod(sourceMonth, sourceYear);
+      const currentMonth = roundPeriod.month;
+      const currentYear = roundPeriod.year;
       const isRequisitionPeriod = currentDay >= 20 && currentDay <= 31;
 
-      const currentMonthReq = isHospital ? validReqs.find(r => r.month === currentMonth && r.year === currentYear) : null;
+      const currentMonthReq = isHospital ? validReqs.find(r => Number(r.month) === currentMonth && Number(r.year) === currentYear) : null;
       
       const [adminFilterMonth, setAdminFilterMonth] = useState(currentMonth);
       const [adminFilterYear, setAdminFilterYear] = useState(currentYear);
@@ -905,7 +971,7 @@ const RegisterView = ({ ctx }) => {
             {!isHospital && (
                <div onClick={() => setAdminSelectedCard('month')} className={`rounded-2xl shadow-sm p-6 border flex items-center cursor-pointer transition bg-white hover:bg-slate-50 ${adminSelectedCard === 'month' ? 'ring-2 ring-indigo-500 border-indigo-500' : 'border-slate-200'}`}>
                  <div className="bg-indigo-100 p-4 rounded-xl text-indigo-600 mr-4"><i className="fa-regular fa-calendar-check text-2xl"></i></div>
-                 <div><div className="text-slate-500 font-medium">สถานะเบิกเดือนนี้</div><div className="text-xl font-extrabold text-indigo-600">ตรวจสอบการส่ง</div></div>
+                 <div><div className="text-slate-500 font-medium">สถานะรอบ {THAI_MONTHS[currentMonth-1]}</div><div className="text-xl font-extrabold text-indigo-600">ตรวจสอบการส่ง</div></div>
                </div>
             )}
 
@@ -2050,13 +2116,21 @@ const CreateReqView = ({ ctx }) => {
       const hospId = ctx.targetUploadHosp || ctx.currentUser.hospital_id; 
       const isAdmin = ctx.currentUser.role === 'admin';
       const today = new Date();
-      const currentMonth = today.getMonth() + 1;
-      const currentYear = today.getFullYear();
-      const uploadPeriodLabel = getUploadPeriodLabel(currentMonth, currentYear);
-      
-      const isOutOfPeriod = !isAdmin && (today.getDate() < 20 || today.getDate() > 31);
       const hasExistingReq = !!ctx.editReqId;
       const editingReq = ctx.editReqId ? ctx.appDb.requisitions.find(r => r.id === ctx.editReqId) : null;
+
+      // วันที่ 20-31 ของเดือน M = ใบเติมยาสำหรับรอบเดือน M+1
+      // ถ้าเปิดใบเดิม ให้ยึด month/year ที่บันทึกในใบเดิม ไม่เลื่อนไปตามวันที่ปัจจุบัน
+      const sourceMonth = today.getMonth() + 1;
+      const sourceYear = today.getFullYear();
+      const autoRoundPeriod = getNextCalendarPeriod(sourceMonth, sourceYear);
+      const currentMonth = editingReq ? Number(editingReq.month) : autoRoundPeriod.month;
+      const currentYear = editingReq ? Number(editingReq.year) : autoRoundPeriod.year;
+      const usagePeriodEnd = getPreviousCalendarPeriod(currentMonth, currentYear);
+      const uploadPeriodLabel = getUploadPeriodLabel(usagePeriodEnd.month, usagePeriodEnd.year);
+      const requisitionFiscalYear = getFiscalInfo(currentMonth, currentYear).fiscalYear;
+      
+      const isOutOfPeriod = !isAdmin && (today.getDate() < 20 || today.getDate() > 31);
       const existingReqForMonth = ctx.appDb.requisitions.find(r =>
         String(r.hospitalId) === String(hospId) && Number(r.month) === currentMonth && Number(r.year) === currentYear && !String(r.id || '').startsWith('HIST-')
       );
@@ -2072,6 +2146,11 @@ const CreateReqView = ({ ctx }) => {
       const [isDirty, setIsDirty] = useState(false);
       const dirtyRef = useRef(false);
       const [pendingLeaveAction, setPendingLeaveAction] = useState(null);
+      const [requisitionTerm, setRequisitionTerm] = useState(() =>
+        editingReq
+          ? getEffectiveFiscalTerm(editingReq, ctx.appDb.requisitions)
+          : getNextFiscalTerm(hospId, currentMonth, currentYear, ctx.appDb.requisitions)
+      );
       
       const [excelFile, setExcelFile] = useState(null);
       const [uploadedExcelUrl, setUploadedExcelUrl] = useState(editingReq?.excel_url || '');
@@ -2100,6 +2179,13 @@ const CreateReqView = ({ ctx }) => {
         ctx.setEditReqId(null);
         ctx.forceSetCurrentView ? ctx.forceSetCurrentView('view_req') : ctx.setCurrentView('view_req');
       }, [editingReq?.id, editingReq?.is_printed]);
+
+      useEffect(() => {
+        const nextTerm = editingReq
+          ? getEffectiveFiscalTerm(editingReq, ctx.appDb.requisitions)
+          : getNextFiscalTerm(hospId, currentMonth, currentYear, ctx.appDb.requisitions);
+        setRequisitionTerm(nextTerm);
+      }, [editingReq?.id, hospId, currentMonth, currentYear]);
 
       const [items, setItems] = useState(() => {
         if (!ctx.appDb || !ctx.appDb.parLevels) return [];
@@ -2637,6 +2723,9 @@ const CreateReqView = ({ ctx }) => {
          let uploadFailed = false;
          let savedReqForLocal = null;
          let uploadedThisSave = false;
+         const resolvedFiscalTerm = Math.max(1, toNonNegativeInt(requisitionTerm, 1));
+         const resolvedFiscalYear = getFiscalInfo(currentMonth, currentYear).fiscalYear;
+         const resolvedRequisitionNo = formatRequisitionNo(resolvedFiscalTerm, resolvedFiscalYear);
          try {
            const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: safeText(i.rawName), usage: toNonNegativeNumber(i.usage) }));
            const sanitizedItems = items.filter(item => toNonNegativeNumber(item.usage) > 0 || toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty) > 0).map(item => {
@@ -2732,12 +2821,15 @@ const CreateReqView = ({ ctx }) => {
                    updated_by_uid: ctx.currentUser.uid,
                    updated_by_name: ctx.currentUser.name,
                    status: finalStatus,
+                   fiscal_year: resolvedFiscalYear,
+                   fiscal_term: resolvedFiscalTerm,
+                   requisition_no: resolvedRequisitionNo,
                    revision: toNonNegativeInt(current.revision, 0) + 1,
                    schema_version: APP_SCHEMA_VERSION
                  };
                  if (fileUrl) payload.excel_url = fileUrl;
                  tx.update(reqRef, payload);
-                 auditDetails = { hospital_id: current.hospitalId, month: current.month, year: current.year, revision: payload.revision };
+                 auditDetails = { hospital_id: current.hospitalId, month: current.month, year: current.year, fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo, revision: payload.revision };
                });
              } catch (err) {
                const msg = err?.message || String(err);
@@ -2750,6 +2842,7 @@ const CreateReqView = ({ ctx }) => {
                ...(editingReq || {}),
                id: ctx.editReqId, hospitalId: hospId, month: currentMonth, year: currentYear,
                status: finalStatus, excel_url: fileUrl || editingReq?.excel_url || '',
+               fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo,
                items: sanitizedItems, skipped_items: skipped,
                updated_at: firebase.firestore.Timestamp.now(),
                revision: toNonNegativeInt(editingReq?.revision, 0) + 1, schema_version: APP_SCHEMA_VERSION
@@ -2782,6 +2875,9 @@ const CreateReqView = ({ ctx }) => {
                hospitalId: hospId,
                month: currentMonth,
                year: currentYear,
+               fiscal_year: resolvedFiscalYear,
+               fiscal_term: resolvedFiscalTerm,
+               requisition_no: resolvedRequisitionNo,
                status: finalStatus,
                is_printed: false,
                excel_url: fileUrl || '',
@@ -2805,10 +2901,11 @@ const CreateReqView = ({ ctx }) => {
                throw err;
              }
              // Audit แยกออกจาก write หลัก เพื่อไม่ให้ audit permission ทำให้ใบเบิกล้ม
-             await writeAuditLog(ctx.currentUser, 'REQUISITION_CREATE', 'requisitions', newId, { hospital_id: hospId, month: currentMonth, year: currentYear, item_count: sanitizedItems.length });
+             await writeAuditLog(ctx.currentUser, 'REQUISITION_CREATE', 'requisitions', newId, { hospital_id: hospId, month: currentMonth, year: currentYear, fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo, item_count: sanitizedItems.length });
 
              savedReqForLocal = {
                id: newId, hospitalId: hospId, month: currentMonth, year: currentYear, status: finalStatus,
+               fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo,
                is_printed: false, excel_url: fileUrl || '', items: sanitizedItems, skipped_items: skipped,
                created_by_uid: ctx.currentUser?.uid || '', created_by_name: ctx.currentUser?.name || 'System',
                created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่',
@@ -3047,8 +3144,13 @@ const CreateReqView = ({ ctx }) => {
             )}
             {(excelFile || uploadedExcelUrl || editingReq?.excel_url) && <span className="text-xs text-emerald-700"><i className="fa-solid fa-circle-check mr-1"></i>มีไฟล์ รบ.301</span>}
             <button onClick={refreshInvsPriceForRequisition} disabled={isRefreshingInvsPrice} className="h-9 px-3 rounded-lg border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 font-bold text-xs disabled:opacity-50" title="โหลดราคา Pack และหน่วยปัจจุบันจาก INVS Master Sync"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>{isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชข้อมูล INVS'}</button>
+            <div className="h-9 px-3 rounded-lg border border-indigo-200 bg-indigo-50 flex items-center gap-1 text-xs text-indigo-800" title={requisitionFiscalYear <= RXFILL_TRANSITION_FISCAL_YEAR ? 'ปีเริ่มระบบ: ค่าเริ่มต้นตามลำดับเดือนงบ และแก้เลขได้' : 'เลข run ตามใบเบิกจริงของ รพ.สต. และ reset ทุกปีงบประมาณ'}>
+              <span className="font-bold">เลขใบเบิก</span>
+              <input type="number" min="1" step="1" value={requisitionTerm} onChange={e=>{setRequisitionTerm(Math.max(1,toNonNegativeInt(e.target.value,1)));markDirty();}} className="w-14 h-7 rounded border border-indigo-200 bg-white text-center font-black outline-none focus:ring-2 focus:ring-indigo-400" />
+              <span className="font-black">/{requisitionFiscalYear}</span>
+            </div>
 
-            <div className="flex-1 min-w-[180px]"></div>
+            <div className="flex-1 min-w-[120px]"></div>
             <div className="relative min-w-[220px] max-w-sm flex-1">
               <i className="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-sm"></i>
               <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="ค้นหายา / รหัสยา" className="w-full h-9 pl-9 pr-3 border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-400" />
@@ -3081,7 +3183,7 @@ const CreateReqView = ({ ctx }) => {
               <h1 className="text-lg font-bold mb-1">แบบเบิกเวชภัณฑ์สำหรับโรงพยาบาลส่งเสริมสุขภาพระดับตำบล (รพ.สต)</h1>
               <div className="text-left text-[14px] leading-relaxed mt-4">
                 <p>ข้าพเจ้า <span className="font-semibold border-b border-dotted border-black inline-block px-2">{ctx.currentUser?.name || '................................'}</span> ตำแหน่ง <span className="font-semibold border-b border-dotted border-black inline-block px-2">{ctx.currentUser?.position || '................................'}</span> หน่วยงาน <span className="font-semibold border-b border-dotted border-black inline-block px-2">{ctx.appDb.hospitals.find(h=>String(h.hospital_id)===String(hospId))?.hospital_name || hospId}</span> อ.สวี จ.ชุมพร</p>
-                <p>มีความประสงค์เบิกเวชภัณฑ์ ประจำเดือน <span className="font-semibold border-b border-dotted border-black inline-block px-2">{THAI_MONTHS[currentMonth-1]} {currentYear+543}</span> ดังนี้</p>
+                <p>มีความประสงค์เบิกเวชภัณฑ์ ประจำเดือน <span className="font-semibold border-b border-dotted border-black inline-block px-2">{THAI_MONTHS[currentMonth-1]} {currentYear+543}</span> เลขใบเบิก <span className="font-semibold border-b border-dotted border-black inline-block px-2">{Math.max(1,toNonNegativeInt(requisitionTerm,1))}/{requisitionFiscalYear}</span> ดังนี้</p>
               </div>
             </div>
 
@@ -3486,6 +3588,8 @@ const ViewReqView = ({ ctx }) => {
       const userInfo = ctx.appDb.usersList.find(u => u.name === req?.created_by_name) || { position: 'เจ้าหน้าที่', role: '' };
       const [reqName, setReqName] = useState(req?.created_by_name || '');
       const [reqPosition, setReqPosition] = useState(req?.created_by_position || userInfo?.position || 'เจ้าหน้าที่');
+      const [fiscalTermDraft, setFiscalTermDraft] = useState(() => req ? getEffectiveFiscalTerm(req, ctx.appDb.requisitions) : 1);
+      const [isSavingReqNo, setIsSavingReqNo] = useState(false);
       
       const [manualAddSearch, setManualAddSearch] = useState('');
       const [editingPreviewQtyDrugId, setEditingPreviewQtyDrugId] = useState(null);
@@ -3829,7 +3933,8 @@ const ViewReqView = ({ ctx }) => {
       const hosp = ctx.appDb.hospitals.find(h => h.hospital_id === req.hospitalId);
       const hospNameClean = hosp?.hospital_name?.replace('รพ.สต.', '') || '';
 
-      const { fiscalYear, term } = getFiscalInfo(req.month, req.year);
+      const { fiscalYear } = getFiscalInfo(req.month, req.year);
+      const term = getEffectiveFiscalTerm(req, ctx.appDb.requisitions);
 
       const handleAdjust = (idx, val) => {
         const current = editableItems[idx];
@@ -4341,6 +4446,30 @@ const ViewReqView = ({ ctx }) => {
          }
       };
 
+      const handleSaveRequisitionNumber = async () => {
+        if (!isAdmin || !req) return;
+        const info = getFiscalInfo(req.month, req.year);
+        const nextTerm = Math.max(1, toNonNegativeInt(fiscalTermDraft, 1));
+        const nextNo = formatRequisitionNo(nextTerm, info.fiscalYear);
+        setIsSavingReqNo(true);
+        try {
+          await db.collection('requisitions').doc(req.id).update({
+            fiscal_year: info.fiscalYear,
+            fiscal_term: nextTerm,
+            requisition_no: nextNo,
+            requisition_no_updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+            requisition_no_updated_by_uid: ctx.currentUser.uid,
+            requisition_no_updated_by_name: ctx.currentUser.name,
+            schema_version: APP_SCHEMA_VERSION
+          });
+          await writeAuditLog(ctx.currentUser, 'REQUISITION_NUMBER_UPDATE', 'requisitions', req.id, { fiscal_year:info.fiscalYear, fiscal_term:nextTerm, requisition_no:nextNo });
+          if (ctx.setAppDb) ctx.setAppDb(prev => ({ ...prev, requisitions:(prev.requisitions || []).map(r => String(r.id)===String(req.id) ? { ...r, fiscal_year:info.fiscalYear, fiscal_term:nextTerm, requisition_no:nextNo } : r) }));
+          ctx.showToast(`บันทึกเลขใบเบิก ${nextNo} แล้ว`);
+        } catch(e) {
+          ctx.showToast('บันทึกเลขใบเบิกไม่สำเร็จ: ' + (e?.message || e), 'error');
+        } finally { setIsSavingReqNo(false); }
+      };
+
       const groupedItems = {};
       const typeKeys = Object.keys(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES);
       typeKeys.forEach(k => groupedItems[k] = []);
@@ -4366,6 +4495,7 @@ const ViewReqView = ({ ctx }) => {
             <div className="flex gap-2">
               {req.excel_url && <a href={req.excel_url} target="_blank" rel="noopener noreferrer" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
               {isAdmin && <button onClick={()=>setShowValueAudit(true)} className="bg-violet-100 text-violet-700 border border-violet-200 px-4 py-2 rounded-xl font-bold shadow-sm hover:bg-violet-200 transition"><i className="fa-solid fa-magnifying-glass-chart mr-2"></i>ตรวจสอบมูลค่า</button>}
+              {isAdmin && <div className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded-xl px-2 py-1 text-xs text-indigo-800" title="Admin แก้เลขใบเบิกได้โดยไม่กระทบจำนวนยา/Stock"><span className="font-bold">เลขใบเบิก</span><input type="number" min="1" step="1" value={fiscalTermDraft} onChange={e=>setFiscalTermDraft(Math.max(1,toNonNegativeInt(e.target.value,1)))} className="w-14 h-7 border border-indigo-200 rounded bg-white text-center font-black outline-none"/><span className="font-black">/{fiscalYear}</span><button onClick={handleSaveRequisitionNumber} disabled={isSavingReqNo} className="h-7 px-2 rounded bg-indigo-600 text-white font-bold disabled:opacity-50">{isSavingReqNo?'...':'บันทึก'}</button></div>}
               {isAdmin && canEdit && <button onClick={()=>setShowHiddenItems(v=>!v)} className={`border px-4 py-2 rounded-xl font-bold shadow-sm transition ${showHiddenItems?'bg-slate-800 text-white border-slate-800':'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'}`}><i className={`fa-solid ${showHiddenItems?'fa-eye-slash':'fa-eye'} mr-2`}></i>{showHiddenItems?'ซ่อนรายการ 0':`แสดงรายการที่ซ่อน (${hiddenItemCount})`}</button>}
               <button onClick={() => {
                 if (isPrinted) return handleTriggerPrint();
@@ -6382,7 +6512,7 @@ const AdminConfigView = ({ ctx }) => {
             <TabBtn id="hist_manager" icon="fa-history" label="จัดการประวัติย้อนหลัง" />
           </div>
           <div className="bg-white">
-            {activeTab === 'drugs' && <DrugManager />}
+            {activeTab === 'drugs' && DrugManager()}
             {activeTab === 'types' && <TypeManager />}
             {activeTab === 'units' && <UnitManager />}
             {activeTab === 'hospitals' && <HospitalManager />}
@@ -6758,7 +6888,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.13 Production</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v4.14 Production</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

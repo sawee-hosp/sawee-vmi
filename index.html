@@ -189,8 +189,36 @@
        return `${p}(${r})`;
     };
 
-    const APP_SCHEMA_VERSION = 14;
-    const APP_VERSION = '4.14.0-production';
+    const APP_SCHEMA_VERSION = 16;
+    const APP_VERSION = '4.16.1-production';
+    // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
+    const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
+
+    const callInvsBridge = async (action, requisitionId) => {
+      if (!auth.currentUser) throw new Error('กรุณา Login ใหม่ก่อนเชื่อม INVS');
+      const idToken = await auth.currentUser.getIdToken(true);
+      let response;
+      try {
+        response = await fetch(INVS_BRIDGE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${idToken}` },
+          body: JSON.stringify({ action, requisition_id: requisitionId })
+        });
+      } catch (networkErr) {
+        const e = new Error('ติดต่อ INVS Bridge ไม่ได้ กรุณาเปิด XAMPP Apache และตรวจ http://127.0.0.1/SaweeRxfillINVS/invs_api.php?action=health');
+        e.cause = networkErr;
+        throw e;
+      }
+      let data = null;
+      try { data = await response.json(); } catch(e) {}
+      if (!response.ok || !data?.ok) {
+        const err = new Error(data?.message || `INVS Bridge HTTP ${response.status}`);
+        err.payload = data;
+        err.httpStatus = response.status;
+        throw err;
+      }
+      return data;
+    };
     const MAX_BATCH_WRITES = 400;
     let fuzzyAutoCleanDone = false;
     
@@ -3576,14 +3604,21 @@ const ViewReqView = ({ ctx }) => {
       const isApprovingStatus = req?.status === 'Approving';
       const ownsReq = isHospital && String(req?.hospitalId) === String(ctx.currentUser?.hospital_id);
       const isPrinted = !!req?.is_printed || !!localPrintedAt;
+      const invsSent = String(req?.invs_status || '').toUpperCase() === 'SENT' || !!req?.invs_sub_po_no;
+      const invsDisplayItems = Array.isArray(req?.invs_dispense_snapshot) && req.invs_dispense_snapshot.length
+        ? req.invs_dispense_snapshot
+        : (Array.isArray(req?.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length
+          ? req.invs_request_lot_snapshot
+          : (Array.isArray(req?.invs_items_snapshot) ? req.invs_items_snapshot : []));
+      const invsConfirmed = String(req?.invs_confirm_flag || '').toUpperCase() === 'Y';
       const adminEditableStatus = ['Draft','Pending','Rejected','ApprovalFailed'].includes(req?.status);
       const adminHistoricalRematchOnly = isAdmin && !adminEditableStatus && req?.status === 'Completed';
-      const canAdminRematch = isAdmin && req?.status !== 'Approving';
-      // พิมพ์แล้วล็อกเฉพาะผู้ใช้ รพ.สต.; Admin แก้ได้ทุกสถานะก่อน Completed/กำลัง Approve
-      const canEdit = isAdmin ? adminEditableStatus : (isPending && ownsReq && !isPrinted);
-      // ผู้ใช้สามารถลบใบ Pending/Rejected ที่พิมพ์แล้วเพื่อเริ่มเบิกใหม่ได้
-      const canDeleteReq = isAdmin ? ['Draft','Pending','Rejected','ApprovalFailed'].includes(req?.status) : (ownsReq && ['Draft','Pending','Rejected'].includes(req?.status));
+      const canAdminRematch = isAdmin && req?.status !== 'Approving' && (!invsSent || req?.status === 'Completed');
+      // เมื่อส่งเข้า INVS แล้ว ล็อกการแก้รายการ/ลบ/Reject เพื่อไม่ให้ Sawee VMI ต่างจากใบที่อยู่ใน INVS
+      const canEdit = !invsSent && (isAdmin ? adminEditableStatus : (isPending && ownsReq && !isPrinted));
+      const canDeleteReq = !invsSent && (isAdmin ? ['Draft','Pending','Rejected','ApprovalFailed'].includes(req?.status) : (ownsReq && ['Draft','Pending','Rejected'].includes(req?.status)));
       const canApproveReq = isAdmin && (isPending || isApprovalFailed);
+      const canSendInvs = isAdmin && isPending && !invsSent;
       
       const userInfo = ctx.appDb.usersList.find(u => u.name === req?.created_by_name) || { position: 'เจ้าหน้าที่', role: '' };
       const [reqName, setReqName] = useState(req?.created_by_name || '');
@@ -3604,6 +3639,9 @@ const ViewReqView = ({ ctx }) => {
       const [rematchRawUsage, setRematchRawUsage] = useState('');
       const [rematchSourceIndex, setRematchSourceIndex] = useState(0);
       const [isRematching, setIsRematching] = useState(false);
+      const [showInvsModal, setShowInvsModal] = useState(false);
+      const [invsPreflight, setInvsPreflight] = useState(null);
+      const [isInvsBusy, setIsInvsBusy] = useState(false);
 
       const toDateSafe = (value) => {
         if (!value) return null;
@@ -3907,7 +3945,7 @@ const ViewReqView = ({ ctx }) => {
         if(!req) return;
         const merged = (req.items || []).map(item => {
           // เอกสาร Completed เป็นหลักฐานย้อนหลัง: ห้าม re-normalize/เปลี่ยนราคา/สถานะตาม master ปัจจุบัน
-          if (req.status === 'Completed' || (req.is_printed && !isAdmin)) return { ...item };
+          if (req.status === 'Completed' || invsSent || (req.is_printed && !isAdmin)) return { ...item };
           const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(req.hospitalId) && String(p.drug_id) === String(item.drugId));
           const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(item.drugId));
           const isDisabledForHospital = false;
@@ -3927,7 +3965,7 @@ const ViewReqView = ({ ctx }) => {
           return lockRequisitionItem(mergedItem);
         });
         setEditableItems(merged);
-      }, [req, ctx.appDb.parLevels, ctx.appDb.drugs]);
+      }, [req, ctx.appDb.parLevels, ctx.appDb.drugs, invsSent]);
       if(!req) return null;
       
       const hosp = ctx.appDb.hospitals.find(h => h.hospital_id === req.hospitalId);
@@ -4147,6 +4185,47 @@ const ViewReqView = ({ ctx }) => {
           ctx.showToast(`นำยา ${drug.drug_name} เข้ารายการแล้ว`);
       };
 
+      const invsItemsSignature = (items) => JSON.stringify((items || []).map(it => ({
+        drugId: String(it?.drugId || ''), qty: toNonNegativeNumber(it?.dispenseQty ?? it?.finalRequestedQty),
+        pack: safePackSize(it?.packSize), type: safeText(it?.type), discontinued: !!it?.isDiscontinued
+      })).sort((a,b)=>a.drugId.localeCompare(b.drugId)));
+
+      const handleInvsPreflight = async () => {
+        if (!isAdmin || !req || invsSent) return;
+        if (invsItemsSignature(editableItems) !== invsItemsSignature(req.items || [])) {
+          return ctx.showToast('มีรายการที่แก้ไขแต่ยังไม่ได้บันทึก กรุณากด “บันทึกการแก้ไขข้อมูล” ก่อนตรวจ/ส่งเข้า INVS', 'error');
+        }
+        setIsInvsBusy(true);
+        try {
+          const data = await callInvsBridge('preflight', req.id);
+          setInvsPreflight(data);
+          setShowInvsModal(true);
+          if (data.already_sent) await ctx.refreshData();
+        } catch(e) {
+          if (e?.payload && (Array.isArray(e.payload.items) || Array.isArray(e.payload.errors))) {
+            setInvsPreflight(e.payload);
+            setShowInvsModal(true);
+          } else {
+            ctx.showToast('ตรวจ INVS ไม่สำเร็จ: ' + (e?.message || e), 'error');
+          }
+        } finally { setIsInvsBusy(false); }
+      };
+
+      const handleInvsSend = async () => {
+        if (!isAdmin || !req || invsSent || isInvsBusy) return;
+        setIsInvsBusy(true);
+        try {
+          const data = await callInvsBridge('send', req.id);
+          setInvsPreflight(data);
+          ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
+          await ctx.refreshData();
+          setShowInvsModal(false);
+        } catch(e) {
+          if (e?.payload) setInvsPreflight(e.payload);
+          ctx.showToast('ส่งเข้า INVS ไม่สำเร็จ: ' + (e?.message || e), 'error');
+        } finally { setIsInvsBusy(false); }
+      };
+
       const handleSaveChanges = async () => {
           setIsApproving(true);
           try {
@@ -4158,6 +4237,7 @@ const ViewReqView = ({ ctx }) => {
                 const current = snap.data();
                 const editableNow = isAdmin ? ['Draft','Pending','Rejected','ApprovalFailed'].includes(current.status) : ['Draft','Pending'].includes(current.status);
                 if (!editableNow) throw new Error('ใบเบิกนี้ถูกเปลี่ยนสถานะแล้ว กรุณารีเฟรช');
+                if (String(current.invs_status || '').toUpperCase() === 'SENT' || current.invs_sub_po_no) throw new Error('ใบเบิกนี้ส่งเข้า INVS แล้ว จึงล็อกการแก้ไข');
                 if (current.is_printed && !isAdmin) throw new Error('ใบเบิกนี้พิมพ์แล้ว จึงล็อกการแก้ไขสำหรับผู้ใช้ รพ.สต.');
                 if (!isAdmin && String(current.hospitalId) !== String(ctx.currentUser.hospital_id)) throw new Error('ไม่มีสิทธิ์แก้ไขใบเบิกของหน่วยงานอื่น');
                 const revision = toNonNegativeInt(current.revision, 0) + 1;
@@ -4372,6 +4452,7 @@ const ViewReqView = ({ ctx }) => {
               const snap = await tx.get(reqRef);
               if (!snap.exists) throw new Error('ไม่พบใบเบิก');
               if (!['Draft','Pending'].includes(snap.data().status)) throw new Error('ใบเบิกนี้ถูกเปลี่ยนสถานะแล้ว');
+              if (String(snap.data().invs_status || '').toUpperCase() === 'SENT' || snap.data().invs_sub_po_no) throw new Error('ใบเบิกนี้ส่งเข้า INVS แล้ว ไม่สามารถ Reject ได้');
               tx.update(reqRef, {
                 status: 'Rejected',
                 rejected_at: firebase.firestore.FieldValue.serverTimestamp(),
@@ -4396,6 +4477,7 @@ const ViewReqView = ({ ctx }) => {
               const snap = await tx.get(reqRef);
               if (!snap.exists) throw new Error('ไม่พบใบเบิก');
               const current = snap.data();
+              if (String(current.invs_status || '').toUpperCase() === 'SENT' || current.invs_sub_po_no) throw new Error('ใบเบิกนี้ส่งเข้า INVS แล้ว ไม่สามารถลบจาก Sawee VMI ได้');
               const hospitalOwnPending = !isAdmin && String(current.hospitalId) === String(ctx.currentUser.hospital_id) && ['Draft','Pending','Rejected'].includes(current.status);
               const adminAllowed = isAdmin && ['Draft','Pending','Rejected','ApprovalFailed'].includes(current.status);
               if (!hospitalOwnPending && !adminAllowed) throw new Error('ใบเบิกสถานะนี้ไม่อนุญาตให้ลบ');
@@ -4495,6 +4577,8 @@ const ViewReqView = ({ ctx }) => {
             <div className="flex gap-2">
               {req.excel_url && <a href={req.excel_url} target="_blank" rel="noopener noreferrer" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
               {isAdmin && <button onClick={()=>setShowValueAudit(true)} className="bg-violet-100 text-violet-700 border border-violet-200 px-4 py-2 rounded-xl font-bold shadow-sm hover:bg-violet-200 transition"><i className="fa-solid fa-magnifying-glass-chart mr-2"></i>ตรวจสอบมูลค่า</button>}
+              {canSendInvs && <button onClick={handleInvsPreflight} disabled={isInvsBusy} className="bg-cyan-600 text-white border border-cyan-700 px-4 py-2 rounded-xl font-bold shadow hover:bg-cyan-700 transition disabled:opacity-50"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{isInvsBusy?'กำลังตรวจ INVS...':'ส่งเข้า INVS'}</button>}
+              {isAdmin && invsSent && <div className="bg-cyan-50 text-cyan-800 border border-cyan-200 px-3 py-2 rounded-xl text-xs font-black"><i className="fa-solid fa-circle-check mr-1"></i>INVS {req.invs_sub_po_no || 'SENT'}</div>}
               {isAdmin && <div className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded-xl px-2 py-1 text-xs text-indigo-800" title="Admin แก้เลขใบเบิกได้โดยไม่กระทบจำนวนยา/Stock"><span className="font-bold">เลขใบเบิก</span><input type="number" min="1" step="1" value={fiscalTermDraft} onChange={e=>setFiscalTermDraft(Math.max(1,toNonNegativeInt(e.target.value,1)))} className="w-14 h-7 border border-indigo-200 rounded bg-white text-center font-black outline-none"/><span className="font-black">/{fiscalYear}</span><button onClick={handleSaveRequisitionNumber} disabled={isSavingReqNo} className="h-7 px-2 rounded bg-indigo-600 text-white font-bold disabled:opacity-50">{isSavingReqNo?'...':'บันทึก'}</button></div>}
               {isAdmin && canEdit && <button onClick={()=>setShowHiddenItems(v=>!v)} className={`border px-4 py-2 rounded-xl font-bold shadow-sm transition ${showHiddenItems?'bg-slate-800 text-white border-slate-800':'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'}`}><i className={`fa-solid ${showHiddenItems?'fa-eye-slash':'fa-eye'} mr-2`}></i>{showHiddenItems?'ซ่อนรายการ 0':`แสดงรายการที่ซ่อน (${hiddenItemCount})`}</button>}
               <button onClick={() => {
@@ -4527,6 +4611,32 @@ const ViewReqView = ({ ctx }) => {
               )}
             </div>
           </div>
+
+          {invsSent && (
+            <div className="mb-5 no-print bg-cyan-50 border border-cyan-200 rounded-xl p-4 text-cyan-900 relative z-10">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                <div>
+                  <div className="font-black"><i className="fa-solid fa-database mr-2"></i>INVS {req.invs_sub_po_no ? `เลข ${req.invs_sub_po_no}` : ''} <span className={`ml-2 text-xs px-2 py-1 rounded-full ${invsConfirmed?'bg-emerald-100 text-emerald-800':'bg-amber-100 text-amber-800'}`}>{invsConfirmed?'ยืนยันจ่ายแล้ว':'ส่งใบเบิกแล้ว'}</span></div>
+                  <div className="text-xs mt-1">{isAdmin ? 'รายการถูกล็อกหลังส่งเข้า INVS เพื่อป้องกันข้อมูลสองระบบไม่ตรงกัน' : 'ข้อมูล Lot/EXP ด้านล่างมาจาก INVS ที่ sync กลับเข้าสู่ Sawee VMI'}</div>
+                </div>
+                {req.invs_last_status_sync_at && <div className="text-[10px] text-cyan-700">Sync สถานะล่าสุด {formatAppDateTime(req.invs_last_status_sync_at)}</div>}
+              </div>
+              {invsDisplayItems.length>0 && <div className="mt-3 overflow-auto border border-cyan-200 rounded-lg bg-white">
+                <table className="w-full text-xs whitespace-nowrap">
+                  <thead className="bg-cyan-100/60"><tr><th className="p-2 text-left">ยา</th><th className="p-2 text-right">เบิก</th><th className="p-2 text-right">รับ/จ่าย</th><th className="p-2">Lot</th><th className="p-2">EXP</th><th className="p-2">สถานะ</th></tr></thead>
+                  <tbody>{invsDisplayItems.map((x,i)=><tr key={`invs-lot-${x.drug_id||x.WORKING_CODE||i}-${i}`} className="border-t border-cyan-100">
+                    <td className="p-2"><div className="font-bold">{x.drug_name || ctx.appDb.drugs.find(d=>String(d.drug_id)===String(x.drug_id||x.WORKING_CODE))?.drug_name || ''}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE || '-'}</div></td>
+                    <td className="p-2 text-right">{toNonNegativeNumber(x.qty_order ?? x.qty ?? x.QTY_ORDER).toLocaleString()}</td>
+                    <td className="p-2 text-right font-bold">{toNonNegativeNumber(x.qty_rcv ?? x.QTY_RCV ?? x.qty ?? x.QTY_ORDER).toLocaleString()}</td>
+                    <td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td>
+                    <td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td>
+                    <td className="p-2">{String(x.confirm_flag || x.CONFIRM_FLAG || req.invs_confirm_flag || '').toUpperCase()==='Y'?<span className="text-emerald-700 font-bold">ยืนยันแล้ว</span>:<span className="text-amber-700">รอยืนยัน</span>}</td>
+                  </tr>)}</tbody>
+                </table>
+              </div>}
+              {!invsDisplayItems.length && <div className="text-xs mt-2 text-cyan-700">ยังไม่มีข้อมูล Lot/EXP ที่ sync กลับมา</div>}
+            </div>
+          )}
 
           {canEdit && (
             <div className="mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200 no-print flex flex-col md:flex-row gap-4 items-end">
@@ -4770,6 +4880,36 @@ const ViewReqView = ({ ctx }) => {
                  พิมพ์เมื่อ: {new Date().toLocaleString('th-TH')}
              </div>
           </div>
+          {showInvsModal && invsPreflight && (
+            <Modal title="ตรวจสอบก่อนส่งเข้า INVS (Admin)" isOpen={true} onClose={()=>!isInvsBusy && setShowInvsModal(false)} maxWidth="max-w-6xl">
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                  <div className="bg-slate-50 border rounded-xl p-3"><div className="text-xs text-slate-500 font-bold">หน่วยเบิก INVS</div><div className="font-black">{invsPreflight.dept_id || '-'}</div><div className="text-[10px] text-slate-400">{invsPreflight.dept_name || ''}</div></div>
+                  <div className="bg-slate-50 border rounded-xl p-3"><div className="text-xs text-slate-500 font-bold">คลังจ่าย</div><div className="font-black">{invsPreflight.stock_id || '-'}</div><div className="text-[10px] text-slate-400">{invsPreflight.stock_name || ''}</div></div>
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3"><div className="text-xs text-indigo-600 font-bold">จำนวนรายการ</div><div className="text-xl font-black text-indigo-800">{toNonNegativeInt(invsPreflight.item_count,0)}</div></div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3"><div className="text-xs text-emerald-600 font-bold">มูลค่าตาม Lot</div><div className="text-xl font-black text-emerald-800">฿{toNonNegativeNumber(invsPreflight.total_value).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
+                  <div className={`border rounded-xl p-3 ${invsPreflight.ok?'bg-cyan-50 border-cyan-200':'bg-rose-50 border-rose-200'}`}><div className="text-xs font-bold">ผลตรวจ</div><div className={`font-black ${invsPreflight.ok?'text-cyan-800':'text-rose-700'}`}>{invsPreflight.already_sent?'ส่งแล้ว':invsPreflight.ok?'พร้อมส่ง':'ยังไม่พร้อม'}</div></div>
+                </div>
+
+                {Array.isArray(invsPreflight.errors) && invsPreflight.errors.length>0 && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-rose-800"><div className="font-black mb-1">ต้องแก้ก่อนส่ง</div>{invsPreflight.errors.map((x,i)=><div key={i}>• {x}</div>)}</div>}
+                {Array.isArray(invsPreflight.warnings) && invsPreflight.warnings.length>0 && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800"><div className="font-black mb-1">คำเตือน</div>{invsPreflight.warnings.map((x,i)=><div key={i}>• {x}</div>)}</div>}
+
+                <div className="overflow-auto max-h-[52vh] border rounded-xl">
+                  <table className="w-full text-xs whitespace-nowrap">
+                    <thead className="bg-slate-100 sticky top-0"><tr><th className="p-2 text-left">ยา</th><th className="p-2 text-right">จำนวน</th><th className="p-2">Lot</th><th className="p-2">หมดอายุ</th><th className="p-2 text-right">เหลือใน Lot</th><th className="p-2 text-right">Pack</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">ราคา/Pack</th><th className="p-2 text-right">มูลค่า</th></tr></thead>
+                    <tbody>{(invsPreflight.items || []).map((x,i)=><tr key={`${x.drug_id||x.WORKING_CODE}-${i}`} className="border-t"><td className="p-2"><div className="font-bold">{x.drug_name || ''}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE}</div></td><td className="p-2 text-right font-black">{toNonNegativeNumber(x.qty ?? x.QTY_ORDER).toLocaleString()}</td><td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td><td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td><td className="p-2 text-right">{x.lot_qty_on_hand !== undefined ? toNonNegativeNumber(x.lot_qty_on_hand).toLocaleString() : '-'}</td><td className="p-2 text-right">{toNonNegativeNumber(x.pack_ratio ?? x.PACK_RATIO).toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(x.cost ?? x.COST)}</td><td className="p-2 text-right">{formatUnitPrice(x.pack_cost ?? x.PACK_COST)}</td><td className="p-2 text-right font-black text-indigo-700">฿{toNonNegativeNumber(x.value ?? x.VALUE).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>)}</tbody>
+                  </table>
+                </div>
+
+                {!invsPreflight.live_send_enabled && !invsPreflight.already_sent && <div className="bg-slate-900 text-white rounded-xl p-3 text-xs"><b>Dry-run mode:</b> Bridge ยังตั้ง <code>allow_live_send=false</code> จึงยังไม่มีการ INSERT ลง INVS เมื่อผลตรวจถูกต้องแล้วค่อยเปิด LIVE ใน config.php</div>}
+                <div className="flex justify-end gap-2">
+                  <button onClick={()=>setShowInvsModal(false)} disabled={isInvsBusy} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold">ปิด</button>
+                  {!invsPreflight.already_sent && <button disabled={isInvsBusy || !invsPreflight.ok || !invsPreflight.live_send_enabled} onClick={()=>ctx.setConfirmDialog({title:'ยืนยันส่งเข้า INVS',message:`ระบบจะสร้าง SM_PO + SM_PO_C จำนวน ${invsPreflight.item_count || 0} รายการในฐาน INVS และล็อกการแก้ใบนี้ใน Sawee VMI หลังส่งสำเร็จ ยืนยันหรือไม่?`,icon:'fa-database',iconColor:'text-cyan-600',confirmBtnClass:'bg-cyan-600 hover:bg-cyan-700',confirmText:'ส่งเข้า INVS จริง',onConfirm:handleInvsSend})} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-black disabled:opacity-40"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>ส่งเข้า INVS จริง</button>}
+                </div>
+              </div>
+            </Modal>
+          )}
+
           {showValueAudit && (
             <Modal title="ตรวจสอบมูลค่าใบเบิก" isOpen={true} onClose={()=>setShowValueAudit(false)} maxWidth="max-w-6xl">
               <div className="space-y-4">
@@ -5860,7 +6000,7 @@ const AdminConfigView = ({ ctx }) => {
           await batch.commit();
           ctx.showToast('อัปเดตหมวดหมู่สำเร็จ'); await ctx.refreshData(); setEditTarget(null); return;
         } else if (editTarget.col === 'master_hospitals') {
-           docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation };
+           docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation, invs_dept_id: safeText(data.invs_dept_id), invs_stock_id: safeText(data.invs_stock_id) };
         } else if (editTarget.col === 'users') {
           docId = editTarget.data.id;
           payload = {
@@ -6212,7 +6352,9 @@ const AdminConfigView = ({ ctx }) => {
         const [searchTerm, setSearchTerm] = useState('');
         const filteredHosp = ctx.appDb.hospitals.filter(h => 
           (h.hospital_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-          (h.hospital_id || '').toLowerCase().includes(searchTerm.toLowerCase())
+          (h.hospital_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (h.invs_dept_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (h.invs_stock_id || '').toLowerCase().includes(searchTerm.toLowerCase())
         );
         return (
           <div className="p-6">
@@ -6227,13 +6369,15 @@ const AdminConfigView = ({ ctx }) => {
             </div>
             <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <table className="w-full text-left text-sm border-collapse">
-                <thead className="bg-slate-50 border-b"><tr><th className="p-4">รหัส</th><th className="p-4">สังกัด</th><th className="p-4">ชื่อ รพ.สต.</th><th className="p-4 text-center">จัดการ</th></tr></thead>
+                <thead className="bg-slate-50 border-b"><tr><th className="p-4">รหัส</th><th className="p-4">สังกัด</th><th className="p-4">ชื่อ รพ.สต.</th><th className="p-4">INVS Dept</th><th className="p-4">INVS Stock</th><th className="p-4 text-center">จัดการ</th></tr></thead>
                 <tbody>
                   {filteredHosp.map(h=>(
                     <tr key={h.id} className="border-b hover:bg-slate-50">
                       <td className="p-4 font-mono">{h.hospital_id}</td>
                       <td className="p-4 font-bold text-indigo-600">{h.affiliation === 'OPT' ? 'อปท.' : 'สสอ.'}</td>
                       <td className="p-4 font-bold text-slate-800">{h.hospital_name}</td>
+                      <td className="p-4 font-mono font-bold text-cyan-700">{h.invs_dept_id || '-'}</td>
+                      <td className="p-4 font-mono text-slate-600">{h.invs_stock_id || '10'}</td>
                       <td className="p-4 text-center space-x-2">
                         <button onClick={()=>setEditTarget({ col: 'master_hospitals', data: h, isNew: false })} className="text-blue-500 hover:text-blue-700 bg-blue-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-pen-to-square"></i></button>
                         <button onClick={()=>ctx.setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบ ${h.hospital_name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('master_hospitals', h.hospital_id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})} className="text-red-500 hover:text-red-700 bg-red-50 w-8 h-8 rounded-lg"><i className="fa-solid fa-trash"></i></button>
@@ -6667,6 +6811,15 @@ const AdminConfigView = ({ ctx }) => {
                            <option value="SSO">สสอ. (สาธารณสุขอำเภอ)</option>
                            <option value="OPT">อปท. (องค์การบริหารส่วนท้องถิ่น)</option>
                         </select>
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-600 block mb-1">INVS Dept ID (หน่วยเบิก)</label>
+                        <input name="invs_dept_id" defaultValue={editTarget.data.invs_dept_id || ''} placeholder="เช่น 01" maxLength="6" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono" />
+                        <div className="text-[10px] text-slate-400 mt-1">ต้องตรงกับ DEPT_ID ใน INVS ของ รพ.สต. นี้</div>
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-600 block mb-1">INVS Stock ID (คลังจ่าย)</label>
+                        <input name="invs_stock_id" defaultValue={editTarget.data.invs_stock_id || '10'} placeholder="10" maxLength="6" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono" />
                       </div>
                     </>
                   )}

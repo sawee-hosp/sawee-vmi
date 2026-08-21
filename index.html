@@ -190,7 +190,7 @@
     };
 
     const APP_SCHEMA_VERSION = 16;
-    const APP_VERSION = '4.16.3-production';
+    const APP_VERSION = '4.16.4-production';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -3633,6 +3633,9 @@ const ViewReqView = ({ ctx }) => {
       const [isSavingReqNo, setIsSavingReqNo] = useState(false);
       
       const [manualAddSearch, setManualAddSearch] = useState('');
+      const [manualAddCandidate, setManualAddCandidate] = useState(null);
+      const [manualAddQty, setManualAddQty] = useState('');
+      const [isManualAddSaving, setIsManualAddSaving] = useState(false);
       const [editingPreviewQtyDrugId, setEditingPreviewQtyDrugId] = useState(null);
       const [editingQtyDraft, setEditingQtyDraft] = useState({});
       const [showHiddenItems, setShowHiddenItems] = useState(false);
@@ -4064,32 +4067,130 @@ const ViewReqView = ({ ctx }) => {
          });
       };
 
-      // ⭐️ ฟังก์ชันเพิ่มรายการยาในหน้า Preview แบบ Realtime
+      // ⭐️ เพิ่มยาในหน้า Admin Preview: เลือกยา -> ถามจำนวน -> บันทึก Firestore ทันที
       const handleManualAdd = () => {
-         if(!manualAddSearch) return;
-         const drug = ctx.appDb.drugs.find(d => d.drug_id === manualAddSearch);
-         if(!drug) return ctx.showToast('ไม่พบรหัสยานี้ในระบบ', 'error');
+         const selected = safeText(manualAddSearch);
+         if(!selected) return ctx.showToast('กรุณาเลือกยาที่ต้องการเพิ่ม', 'error');
+         const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === selected) || ctx.appDb.drugs.find(d => safeText(d.drug_name).toLowerCase() === selected.toLowerCase());
+         if(!drug) return ctx.showToast('ไม่พบยานี้ใน Master Drug กรุณาเลือกจากรายการ', 'error');
          if(isDrugDiscontinued(drug)) return ctx.showToast(`${drug.drug_name} มีสถานะ "ยกเลิกใช้" ไม่สามารถเพิ่มเข้ามาเพื่อเบิกได้`, 'error');
-         if(editableItems.find(i => i.drugId === drug.drug_id)) return ctx.showToast('มีรายการนี้ในใบเบิกอยู่แล้ว', 'error');
+         if(editableItems.find(i => String(i.drugId) === String(drug.drug_id))) return ctx.showToast('มีรายการนี้ในใบเบิกอยู่แล้ว', 'error');
+         if(String(drug.type || '') === '6') return ctx.showToast('วัคซีนเป็นรายการไม่ร่วมระบบเบิก จึงไม่สามารถเพิ่มจำนวนเบิกผ่านเมนูนี้ได้', 'error');
 
          const unitObj = ctx.appDb.units.find(u => String(u.unit_id) === String(drug.unit_id));
          const unitDisplay = unitObj ? unitObj.unit_name : (drug.unit_id || '');
-         const bal = ctx.appDb.balances.find(b => String(b.hospital_id) === String(req.hospitalId) && String(b.drug_id) === drug.drug_id);
-         const prevExcess = bal ? Number(bal.excess_balance) : 0;
-
-         const par = ctx.appDb.parLevels.find(p => String(p.hospital_id) === String(req.hospitalId) && String(p.drug_id) === String(drug.drug_id));
-         const newItem = {
-            drugId: drug.drug_id, name: drug.drug_name, unit: unitDisplay,
-            packSize: safePackSize(drug.pack_size), isUnpacked: !!drug.unpacked, type: drug.type || '1', price: toNonNegativeNumber(drug.price),
+         const bal = ctx.appDb.balances.find(b => String(b.hospital_id) === String(req.hospitalId) && String(b.drug_id) === String(drug.drug_id));
+         const prevExcess = bal ? toSafeNumber(bal.excess_balance) : 0;
+         const candidate = {
+            drugId: safeText(drug.drug_id), name: safeText(drug.drug_name), unit: unitDisplay,
+            packSize: safePackSize(drug.pack_size), isUnpacked: !!drug.unpacked, type: safeText(drug.type, '1') || '1', price: toNonNegativeNumber(drug.price),
             dispenseStep: toNonNegativeNumber(drug.dispense_step, 0), usageMultiplier: getUsageMultiplier(drug), maximumQty: getMaximumQty(drug), isDisabledForHospital: false,
             isDiscontinued: false, drugStatus: getDrugStatusText(drug),
-            prevExcess: prevExcess, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess,
-            isSpecial: false, requestMore: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: true,
-            manualAdded: true, usageSource: 'manual_admin', importedUsageQty: 0
+            prevExcess, usage: 0, targetVMI: 0, netNeed: 0, dispensePack: 0, dispenseQty: 0, newExcess: prevExcess,
+            isSpecial: false, requestMore: 0, requestLess: 0, isUnlocked: false, isNewDrug: true, pastHistory: [0,0,0,0,0], isAdjusted: true,
+            manualAdded: true, usageSource: 'manual_admin', importedUsageQty: 0, rawImportedUsageQty: 0, sourceRawNames: [], sourceImports: [],
+            actualStock: null, actualStockTouched: false, systemStock: prevExcess, systemSuggestedQty: 0, currentSuggestedQty: 0, finalRequestedQty: 0, manualQtyOverride: true
          };
-         setEditableItems([newItem, ...editableItems].sort(sortDrugs)); 
-         setManualAddSearch(''); 
-         ctx.showToast(`เพิ่ม ${drug.drug_name} ลงในใบเบิกแล้ว`);
+         setManualAddCandidate(candidate);
+         setManualAddQty('');
+      };
+
+      const confirmManualAdd = async () => {
+         if (!manualAddCandidate || isManualAddSaving) return;
+         const rawQty = toNonNegativeNumber(manualAddQty);
+         if (rawQty <= 0) return ctx.showToast('กรุณาระบุจำนวนที่ต้องการเพิ่ม', 'error');
+
+         const prepared = lockRequisitionItem({
+           ...manualAddCandidate,
+           dispenseQty: rawQty,
+           finalRequestedQty: rawQty,
+           manualQtyOverride: true,
+           systemSuggestedQty: 0,
+           currentSuggestedQty: rawQty
+         });
+         const normalizedQty = toNonNegativeNumber(prepared.dispenseQty);
+         if (normalizedQty <= 0) return ctx.showToast('จำนวนที่ระบุไม่สามารถนำมาเบิกได้ กรุณาตรวจ Pack / รอบจ่าย / Maximum', 'error');
+
+         prepared.finalRequestedQty = normalizedQty;
+         prepared.currentSuggestedQty = normalizedQty;
+         prepared.systemSuggestedQty = 0;
+         prepared.requestMore = normalizedQty;
+         prepared.requestLess = 0;
+         prepared.submittedDispenseQty = normalizedQty;
+         prepared.requestedExtraQty = normalizedQty;
+         prepared.extraDispenseQtyAtSubmit = normalizedQty;
+         prepared.manualQtyOverride = true;
+         prepared.manualAdded = true;
+         prepared.usageSource = 'manual_admin';
+
+         setIsManualAddSaving(true);
+         let persistedItems = null;
+         let savedRevision = null;
+         try {
+           const reqRef = db.collection('requisitions').doc(req.id);
+           const auditRef = db.collection('audit_logs').doc();
+           await db.runTransaction(async (tx) => {
+             const snap = await tx.get(reqRef);
+             if (!snap.exists) throw new Error('ไม่พบใบเบิก');
+             const current = snap.data();
+             const editableNow = isAdmin ? ['Draft','Pending','Rejected','ApprovalFailed'].includes(current.status) : ['Draft','Pending'].includes(current.status);
+             if (!editableNow) throw new Error('ใบเบิกนี้ถูกเปลี่ยนสถานะแล้ว กรุณารีเฟรช');
+             if (String(current.invs_status || '').toUpperCase() === 'SENT' || current.invs_sub_po_no) throw new Error('ใบเบิกนี้ส่งเข้า INVS แล้ว จึงเพิ่มยาไม่ได้');
+             const currentItems = Array.isArray(current.items) ? current.items : [];
+             if (currentItems.some(i => String(i.drugId) === String(prepared.drugId))) throw new Error('ยานี้ถูกเพิ่มเข้าใบเบิกแล้วจากอีกหน้าจอ กรุณารีเฟรช');
+
+             persistedItems = [prepared, ...currentItems].sort(sortDrugs).map(it => {
+               const locked = lockRequisitionItem({ ...it, packSize: safePackSize(it.packSize) });
+               locked.systemSuggestedQty = toNonNegativeNumber(it.systemSuggestedQty ?? getSystemSuggestedQty(locked));
+               locked.submittedDispenseQty = toNonNegativeNumber(it.submittedDispenseQty ?? locked.dispenseQty);
+               locked.requestedExtraQty = toNonNegativeNumber(it.requestedExtraQty ?? it.requestMore);
+               locked.extraDispenseQtyAtSubmit = Math.max(0, locked.submittedDispenseQty - locked.systemSuggestedQty);
+               return locked;
+             });
+             savedRevision = toNonNegativeInt(current.revision, 0) + 1;
+             tx.update(reqRef, {
+               items: persistedItems,
+               updated_by_uid: ctx.currentUser.uid,
+               updated_by_name: ctx.currentUser.name,
+               updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+               revision: savedRevision,
+               status: 'Pending'
+             });
+             tx.set(auditRef, buildAuditPayload(ctx.currentUser, 'REQUISITION_MANUAL_DRUG_ADD', 'requisitions', req.id, {
+               drug_id: prepared.drugId,
+               drug_name: prepared.name,
+               requested_qty: rawQty,
+               saved_qty: normalizedQty,
+               unit: prepared.unit,
+               pack_size: prepared.packSize,
+               dispense_step: getDispenseStep(prepared),
+               maximum_qty: getMaximumQty(prepared)
+             }));
+           });
+
+           // เก็บการแก้ไขอื่นที่ Admin ยังไม่ได้กด Save ไว้บนหน้าจอ แต่ appDb สะท้อนเฉพาะสิ่งที่เขียน Firestore จริง
+           const localItems = [prepared, ...editableItems.filter(i => String(i.drugId) !== String(prepared.drugId))].sort(sortDrugs);
+           const storedItems = Array.isArray(persistedItems) ? persistedItems : localItems;
+           setEditableItems(localItems);
+           if (ctx.setAppDb) {
+             ctx.setAppDb(prev => ({
+               ...prev,
+               requisitions: (prev.requisitions || []).map(r => String(r.id) === String(req.id)
+                 ? { ...r, items: storedItems, revision: savedRevision ?? r.revision, status: 'Pending', updated_by_uid: ctx.currentUser.uid, updated_by_name: ctx.currentUser.name }
+                 : r)
+             }));
+           }
+           setManualAddSearch('');
+           setManualAddCandidate(null);
+           setManualAddQty('');
+           const roundedNote = Math.abs(normalizedQty - rawQty) > 0.000001 ? ` (ระบบปรับจาก ${rawQty} → ${normalizedQty} ${prepared.unit || 'หน่วย'})` : '';
+           ctx.showToast(`เพิ่ม ${prepared.name} จำนวน ${normalizedQty} ${prepared.unit || 'หน่วย'} และบันทึกลงใบเบิกแล้ว${roundedNote}`);
+           setTimeout(() => document.getElementById(`req-item-${prepared.drugId}`)?.scrollIntoView({ behavior:'smooth', block:'center' }), 100);
+         } catch(e) {
+           ctx.showToast('เพิ่มยาไม่สำเร็จ: ' + (e?.message || e), 'error');
+         } finally {
+           setIsManualAddSaving(false);
+         }
       };
 
       const handleAddMappedSkipped = (idx, mappedDrugId, usage) => {
@@ -4989,6 +5090,43 @@ const ViewReqView = ({ ctx }) => {
                 <div className="flex justify-end gap-2">
                   <button disabled={isRematching} onClick={()=>setRematchTarget(null)} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 font-bold">ยกเลิก</button>
                   <button disabled={isRematching || !rematchDrugId} onClick={confirmAdminRematch} className="px-5 py-2 rounded-xl bg-rose-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${isRematching?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-2`}></i>{isRematching?'กำลังแก้การจับคู่...':'จับคู่ใหม่'}</button>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {manualAddCandidate && (
+            <Modal title="เพิ่มยาเข้ารายการเบิก (Admin)" isOpen={true} onClose={()=>{ if(!isManualAddSaving){ setManualAddCandidate(null); setManualAddQty(''); } }} maxWidth="max-w-2xl">
+              <div className="space-y-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <div className="font-black text-blue-900 text-base">{manualAddCandidate.name}</div>
+                  <div className="font-mono text-[11px] text-blue-500 mt-0.5">รหัส {manualAddCandidate.drugId}</div>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">หน่วย</div><div className="font-black text-slate-800">{manualAddCandidate.unit || '-'}</div></div>
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">Pack</div><div className="font-black text-slate-800">{manualAddCandidate.packSize.toLocaleString()}</div></div>
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">รอบจ่าย</div><div className="font-black text-slate-800">{getDispenseStep(manualAddCandidate).toLocaleString()} {manualAddCandidate.unit || 'หน่วย'}</div></div>
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">Maximum / รอบ</div><div className="font-black text-slate-800">{getMaximumQty(manualAddCandidate)>0 ? `${getMaximumQty(manualAddCandidate).toLocaleString()} ${manualAddCandidate.unit || 'หน่วย'}` : 'ไม่จำกัด'}</div></div>
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">ราคา / Pack</div><div className="font-black text-emerald-700">฿{formatUnitPrice(manualAddCandidate.price)}</div></div>
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">ราคา / หน่วย</div><div className="font-black text-emerald-700">฿{formatUnitPrice(toNonNegativeNumber(manualAddCandidate.price) / safePackSize(manualAddCandidate.packSize))}</div></div>
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">เครดิตปัจจุบัน</div><div className="font-black text-sky-700">{formatQty(manualAddCandidate.prevExcess, manualAddCandidate.packSize)}</div></div>
+                  <div className="border rounded-xl p-3 bg-white"><div className="text-[10px] text-slate-400">แตก Pack</div><div className="font-black text-slate-800">{manualAddCandidate.isUnpacked ? 'อนุญาต' : 'ไม่อนุญาต'}</div></div>
+                </div>
+                <div className="border-t pt-4">
+                  <label className="block text-sm font-black text-slate-700 mb-1">จำนวนที่ต้องการเพิ่ม</label>
+                  <div className="text-xs text-slate-500 mb-2">กรอกเป็น <b>{manualAddCandidate.unit || 'หน่วยยา'}</b> ระบบจะปัดตามรอบจ่าย/Pack และไม่เกิน Maximum อัตโนมัติ</div>
+                  <div className="flex items-stretch gap-2">
+                    <input autoFocus type="number" min="0" max={getMaximumQty(manualAddCandidate)>0?getMaximumQty(manualAddCandidate):undefined} step={getDispenseStep(manualAddCandidate)} value={manualAddQty} onChange={e=>setManualAddQty(e.target.value)} onKeyDown={e=>{if(e.key==='Enter' && !isManualAddSaving) confirmManualAdd()}} className="flex-1 border-2 border-blue-300 rounded-xl p-3 text-center text-2xl font-black text-blue-800 outline-none focus:border-blue-500" placeholder="0" />
+                    <div className="min-w-[90px] rounded-xl bg-slate-100 px-3 flex items-center justify-center font-bold text-slate-600">{manualAddCandidate.unit || 'หน่วย'}</div>
+                  </div>
+                  {toNonNegativeNumber(manualAddQty)>0 && (()=>{ const q=normalizeDispenseQty(manualAddQty,manualAddCandidate); const val=(q/safePackSize(manualAddCandidate.packSize))*toNonNegativeNumber(manualAddCandidate.price); return <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"><div>ระบบจะบันทึก <b>{q.toLocaleString()} {manualAddCandidate.unit || 'หน่วย'}</b>{Math.abs(q-toNonNegativeNumber(manualAddQty))>0.000001?<span className="text-amber-700"> (ปรับจาก {toNonNegativeNumber(manualAddQty).toLocaleString()})</span>:null}</div><div className="text-xs mt-1">ประมาณ {q/safePackSize(manualAddCandidate.packSize)} Pack • มูลค่า ฿{val.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div> })()}
+                </div>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-800">
+                  <i className="fa-solid fa-floppy-disk mr-1"></i>เมื่อกด <b>เพิ่มลงใบเบิก</b> ระบบจะบันทึกรายการนี้ลง Firestore ทันที ออกจากหน้าแล้วกลับมาก็ยังอยู่ และสามารถ Preflight INVS ต่อได้เลย
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button disabled={isManualAddSaving} onClick={()=>{setManualAddCandidate(null);setManualAddQty('')}} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 font-bold disabled:opacity-50">ยกเลิก</button>
+                  <button disabled={isManualAddSaving || toNonNegativeNumber(manualAddQty)<=0} onClick={confirmManualAdd} className="px-5 py-2 rounded-xl bg-blue-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${isManualAddSaving?'fa-spinner fa-spin':'fa-plus'} mr-2`}></i>{isManualAddSaving?'กำลังบันทึก...':'เพิ่มลงใบเบิก'}</button>
                 </div>
               </div>
             </Modal>

@@ -190,7 +190,7 @@
     };
 
     const APP_SCHEMA_VERSION = 16;
-    const APP_VERSION = '4.16.1-production';
+    const APP_VERSION = '4.16.2-production';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -212,7 +212,12 @@
       let data = null;
       try { data = await response.json(); } catch(e) {}
       if (!response.ok || !data?.ok) {
-        const err = new Error(data?.message || `INVS Bridge HTTP ${response.status}`);
+        let message = data?.message || `INVS Bridge HTTP ${response.status}`;
+        if (data?.auth_debug && !String(message).includes('role=')) {
+          const d = data.auth_debug;
+          message += ` [Bridge role=${d.role_normalized || '-'}, active=${d.active_effective}, project=${d.project_id || '-'}]`;
+        }
+        const err = new Error(message);
         err.payload = data;
         err.httpStatus = response.status;
         throw err;

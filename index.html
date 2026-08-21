@@ -190,7 +190,7 @@
     };
 
     const APP_SCHEMA_VERSION = 16;
-    const APP_VERSION = '4.16.2-production';
+    const APP_VERSION = '4.16.3-production';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -202,7 +202,8 @@
         response = await fetch(INVS_BRIDGE_URL, {
           method: 'POST',
           headers: { 'Content-Type':'application/json', 'Authorization':`Bearer ${idToken}` },
-          body: JSON.stringify({ action, requisition_id: requisitionId })
+          // ส่ง token ซ้ำใน JSON เป็น fallback สำหรับ Apache/XAMPP บางเครื่องที่ตัด Authorization header ก่อนถึง PHP
+          body: JSON.stringify({ action, requisition_id: requisitionId, firebase_id_token: idToken })
         });
       } catch (networkErr) {
         const e = new Error('ติดต่อ INVS Bridge ไม่ได้ กรุณาเปิด XAMPP Apache และตรวจ http://127.0.0.1/SaweeRxfillINVS/invs_api.php?action=health');

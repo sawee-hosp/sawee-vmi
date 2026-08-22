@@ -1148,6 +1148,7 @@ const RegisterView = ({ ctx }) => {
 const ReturnDrugView = ({ ctx }) => {
       const hospId = ctx.currentUser.hospital_id;
       const isAdmin = ctx.currentUser.role === 'admin';
+      const returnQueueKey = `sawee_rxfill_return_queue_${String(hospId || 'unknown')}`;
 
       const [items, setItems] = useState([]);
       const [searchTerm, setSearchTerm] = useState('');
@@ -1172,6 +1173,8 @@ const ReturnDrugView = ({ ctx }) => {
                 if (!grouped[drugId]) grouped[drugId] = [];
                 grouped[drugId].push(row);
               });
+              let queuedIds = [];
+              try { queuedIds = JSON.parse(localStorage.getItem(returnQueueKey)||'[]'); } catch(e) { queuedIds = []; }
               const list = Object.entries(grouped).map(([drugId,lots]) => {
                 const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === drugId);
                 const unitObj = drug ? ctx.appDb.units.find(u => String(u.unit_id) === String(drug.unit_id)) : null;
@@ -1181,9 +1184,10 @@ const ReturnDrugView = ({ ctx }) => {
                   drugId, name: drug ? drug.drug_name : 'N/A', unit: unitName,
                   packSize: drug ? safePackSize(drug.pack_size) : 1, price: drug ? toNonNegativeNumber(drug.price) : 0,
                   currentBal: total, actualBal: '', returnQty: 0, selected: false,
-                  selectedLotId: '', lotNo: '', expiryDate: '', virtualLots: lots
+                  selectedLotId: '', lotNo: '', expiryDate: '', virtualLots: lots,
+                  queuedFromShelf: Array.isArray(queuedIds) && queuedIds.map(String).includes(drugId)
                 };
-              }).filter(i=>i.currentBal>0).sort((a,b)=>String(a.drugId).localeCompare(String(b.drugId)));
+              }).filter(i=>i.currentBal>0).sort((a,b)=>Number(b.queuedFromShelf)-Number(a.queuedFromShelf)||String(a.drugId).localeCompare(String(b.drugId)));
               if (alive) setItems(list);
             } catch(e) {
               console.error('[RETURN] virtual stock load failed',e);
@@ -1220,6 +1224,11 @@ const ReturnDrugView = ({ ctx }) => {
           setItems(prev => prev.map(item => item.drugId === drugId ? { ...item, selected: !item.selected } : item));
       };
 
+      const handleReturnQtyChange = (drugId, val) => {
+          const qty = val === '' ? '' : Math.max(0, Number(val));
+          setItems(prev => prev.map(item => item.drugId === drugId ? { ...item, returnQty: qty, selected: Number(qty) > 0 } : item));
+      };
+
       const toReturnDateInput = (raw) => {
           const value = safeText(raw);
           if (/^\d{8}$/.test(value)) return `${value.slice(0,4)}-${value.slice(4,6)}-${value.slice(6,8)}`;
@@ -1227,17 +1236,22 @@ const ReturnDrugView = ({ ctx }) => {
           return '';
       };
 
-      const handleLotSelect = (drugId, lotId) => {
+      const handleLotInput = (drugId, value) => {
           setItems(prev => prev.map(item => {
               if (item.drugId !== drugId) return item;
-              const selectedLot = (item.virtualLots || []).find(l => String(l.id) === String(lotId));
+              const typedLot = safeText(value);
+              const selectedLot = (item.virtualLots || []).find(l => safeText(l.lot_no).toLowerCase() === typedLot.toLowerCase());
               return {
                   ...item,
-                  selectedLotId: lotId,
-                  lotNo: selectedLot ? safeText(selectedLot.lot_no) : '',
-                  expiryDate: selectedLot ? toReturnDateInput(selectedLot.expiry) : ''
+                  selectedLotId: selectedLot ? selectedLot.id : '',
+                  lotNo: typedLot,
+                  expiryDate: selectedLot ? toReturnDateInput(selectedLot.expiry) : (typedLot ? item.expiryDate : '')
               };
           }));
+      };
+
+      const handleExpiryInput = (drugId, value) => {
+          setItems(prev => prev.map(item => item.drugId === drugId ? { ...item, expiryDate: value } : item));
       };
 
       const handleSubmit = async () => {
@@ -1329,7 +1343,7 @@ const ReturnDrugView = ({ ctx }) => {
                     });
                     tx.set(db.collection('current_excess').doc(`${hospId}_${plan.item.drugId}`),{
                       hospital_id:hospId, drug_id:plan.item.drugId,
-                      excess_balance:toNonNegativeNumber(plan.item.actualBal),
+                      excess_balance:Math.max(0,plan.latestTotal-toNonNegativeNumber(plan.item.returnQty)),
                       last_updated:firebase.firestore.FieldValue.serverTimestamp()
                     },{merge:true});
                   });
@@ -1339,6 +1353,11 @@ const ReturnDrugView = ({ ctx }) => {
               });
 
               ctx.showToast('บันทึกการคืนยาแล้ว: ตัด Virtual Stock ใน Firebase และอัปเดตเครดิต VMI เรียบร้อย');
+              try {
+                const submittedIds = new Set(toReturn.map(i=>String(i.drugId)));
+                const queued = JSON.parse(localStorage.getItem(returnQueueKey)||'[]');
+                localStorage.setItem(returnQueueKey, JSON.stringify((Array.isArray(queued)?queued:[]).map(String).filter(id=>!submittedIds.has(id))));
+              } catch(e) {}
               await ctx.refreshData();
               setPrintData({...returnDoc, created_at_date: new Date()});
           } catch(e) { ctx.showToast(e.message, 'error'); } finally { setIsSubmitting(false); }
@@ -1425,7 +1444,9 @@ const ReturnDrugView = ({ ctx }) => {
              <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
                <div>
                  <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-right-left text-red-500 mr-2"></i> ระบบเช็คสต็อกและคืนยา</h2>
-                 <p className="text-slate-500 mt-1">ใส่ยอดมีจริงในคลัง ระบบจะคำนวณยอดคืนและตัดสต็อกให้ทันที</p>
+                 <p className="text-slate-500 mt-1">กรุณากรอกจำนวนยาที่คงเหลือจริง ระบบจะคำนวณจำนวนที่ต้องคืนให้อัตโนมัติ จากนั้นเลือก Lot ที่จะคืนยาได้</p>
+                 <p className="text-xs text-slate-400 mt-1"><i className="fa-solid fa-circle-info mr-1 text-blue-500"></i>สามารถแก้ไขจำนวนที่จะคืน และพิมพ์ Lot ที่ไม่มีในรายการได้เอง</p>
+                 <p className="text-xs font-bold text-red-600 mt-1"><i className="fa-solid fa-print mr-1"></i>เมื่อกด “ยืนยันและพิมพ์ใบคืนยา” ระบบจะตัดยอดสต็อกและเครดิตตามจำนวนคืนที่ระบุ</p>
                </div>
                <button onClick={() => ctx.setCurrentView('my_stock')} className="text-slate-400 hover:text-slate-600 bg-slate-100 px-4 py-2 rounded-xl font-medium">กลับหน้าคลังยา</button>
              </div>
@@ -1443,7 +1464,7 @@ const ReturnDrugView = ({ ctx }) => {
                         <input type="text" placeholder="ค้นหาชื่อยา / รหัส / Lot / EXP จากฐานข้อมูล..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
                       </div>
                       <button onClick={handleSubmit} disabled={isSubmitting} className="bg-red-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-red-200 hover:scale-105 transition shrink-0 disabled:opacity-50">
-                        {isSubmitting ? 'กำลังบันทึก...' : <><i className="fa-solid fa-check mr-2"></i> บันทึกการคืนยาและออกใบเสร็จ</>}
+                        {isSubmitting ? 'กำลังบันทึก...' : <><i className="fa-solid fa-print mr-2"></i> ยืนยันและพิมพ์ใบคืนยา</>}
                       </button>
                    </div>
 
@@ -1457,36 +1478,37 @@ const ReturnDrugView = ({ ctx }) => {
                            <th className="p-3 text-center font-bold border-b">หน่วย</th>
                            <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">เครดิตที่มี</th>
                            <th className="p-3 text-center font-bold border-b bg-amber-50 text-amber-700">ยอดมีจริง (Input)</th>
-                           <th className="p-3 text-center font-bold border-b text-red-700 bg-red-50">ผลการคำนวณ (ยอดคืน)</th>
-                           <th className="p-3 text-center font-bold border-b">Lot ที่ต้องการคืน <span className="text-[10px] font-normal text-emerald-600">(จากฐานข้อมูล)</span></th>
+                           <th className="p-3 text-center font-bold border-b text-red-700 bg-red-50">จำนวนคืน <span className="text-[10px] font-normal">(แก้ไขได้)</span></th>
+                           <th className="p-3 text-center font-bold border-b">Lot ที่ต้องการคืน <span className="text-[10px] font-normal text-emerald-600">(เลือกหรือพิมพ์เอง)</span></th>
                            <th className="p-3 text-center font-bold border-b">วันหมดอายุ</th>
                          </tr>
                        </thead>
                        <tbody>
                          {filteredItems.map((item) => (
-                           <tr key={item.drugId} className={`border-b border-slate-200 transition ${item.selected ? 'bg-red-50' : 'hover:bg-slate-50'}`}>
+                           <tr key={item.drugId} className={`border-b border-slate-200 transition ${item.selected ? 'bg-red-50' : item.queuedFromShelf ? 'bg-emerald-50/70' : 'hover:bg-slate-50'}`}>
                              <td className="p-3 text-center border-r border-slate-100">
                                 <input type="checkbox" className="w-5 h-5 accent-red-600 cursor-pointer" checked={item.selected} onChange={() => handleToggle(item.drugId)} disabled={item.returnQty <= 0} />
                              </td>
                              <td className="p-3 font-mono text-slate-500">{item.drugId}</td>
-                             <td className="p-3 font-bold text-slate-800">{item.name}</td>
+                             <td className="p-3 font-bold text-slate-800">{item.name}{item.queuedFromShelf&&<div className="mt-1 text-[10px] font-bold text-emerald-600"><i className="fa-solid fa-boxes-stacked mr-1"></i>เพิ่มจากชั้นยาแล้ว</div>}</td>
                              <td className="p-3 text-center text-slate-600">{item.packSize} {item.unit}</td>
                              <td className="p-3 text-center font-bold text-blue-600 bg-blue-50/30">{item.currentBal}</td>
                              <td className="p-3 bg-amber-50/50 text-center relative w-32">
                                {/* ⭐️ เอา max ออก สามารถกรอกยอดเกินได้ */}
                                <input type="number" min="0" className="w-full bg-transparent border-b-2 border-amber-300 p-1 text-center font-bold text-amber-900 outline-none focus:bg-white focus:border-amber-600" value={item.actualBal} onChange={e => handleActualChange(item.drugId, e.target.value)} placeholder="ระบุยอดมีจริง" />
                              </td>
-                             <td className="p-3 text-center font-extrabold text-red-600 bg-red-50/30 text-[15px]">
-                               {item.returnQty > 0 ? item.returnQty : '-'}
+                             <td className="p-3 text-center font-extrabold text-red-600 bg-red-50/30 text-[15px] w-28">
+                               <input type="number" min="0" className="w-full rounded-lg border border-red-200 bg-white px-2 py-1.5 text-center font-black text-red-700 outline-none focus:border-red-500" value={item.returnQty} onChange={e=>handleReturnQtyChange(item.drugId,e.target.value)} placeholder="0" />
                              </td>
                              <td className="p-3 text-center">
-                               <select value={item.selectedLotId || ''} onChange={e=>handleLotSelect(item.drugId,e.target.value)} disabled={item.returnQty <= 0} className="w-56 max-w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-red-400 disabled:bg-slate-50 disabled:text-slate-300">
-                                 <option value="">อัตโนมัติ: ตัดตาม FEFO</option>
-                                 {(item.virtualLots || []).filter(l=>toNonNegativeNumber(l.remaining_qty)>0).slice().sort((a,b)=>safeText(a.expiry||'99999999').localeCompare(safeText(b.expiry||'99999999'))).map(l=><option key={l.id} value={l.id}>{safeText(l.lot_no)||'(ไม่ระบุ Lot)'} • EXP {formatExpiryDateThai(toReturnDateInput(l.expiry))} • เหลือ {toNonNegativeNumber(l.remaining_qty).toLocaleString('th-TH')}</option>)}
-                               </select>
+                               <input list={`return-lots-${String(item.drugId).replace(/[^a-zA-Z0-9_-]/g,'-')}`} value={item.lotNo || ''} onChange={e=>handleLotInput(item.drugId,e.target.value)} disabled={item.returnQty <= 0} placeholder="เลือกหรือพิมพ์ Lot" className="w-48 max-w-full border border-slate-200 rounded-lg px-2 py-1.5 text-center text-xs outline-none focus:border-red-400 disabled:bg-slate-50 disabled:text-slate-300" />
+                               <datalist id={`return-lots-${String(item.drugId).replace(/[^a-zA-Z0-9_-]/g,'-')}`}>
+                                 {(item.virtualLots || []).filter(l=>toNonNegativeNumber(l.remaining_qty)>0).slice().sort((a,b)=>safeText(a.expiry||'99999999').localeCompare(safeText(b.expiry||'99999999'))).map(l=><option key={l.id} value={safeText(l.lot_no)}>{`EXP ${formatExpiryDateThai(toReturnDateInput(l.expiry))} • เหลือ ${toNonNegativeNumber(l.remaining_qty).toLocaleString('th-TH')}`}</option>)}
+                               </datalist>
+                               <div className="mt-1 text-[9px] text-slate-400">เว้นว่าง = ระบบตัดตาม FEFO</div>
                              </td>
                              <td className="p-3 text-center">
-                               <div className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${item.expiryDate?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-slate-200 bg-slate-50 text-slate-400'}`}>{item.expiryDate ? formatExpiryDateThai(item.expiryDate) : 'ตาม Lot ที่ระบบตัด'}</div>
+                               <input type="date" value={item.expiryDate || ''} onChange={e=>handleExpiryInput(item.drugId,e.target.value)} disabled={item.returnQty <= 0} className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-red-400 disabled:bg-slate-50 disabled:text-slate-300" />
                              </td>
                            </tr>
                          ))}
@@ -1783,6 +1805,8 @@ const ReturnDrugView = ({ ctx }) => {
       const [dragState, setDragState] = useState(null);
       const typesSource = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
       const shelfStorageKey = `sawee_rxfill_shelf_layout_vstock_${String(hospId || 'unknown')}`;
+      const returnQueueKey = `sawee_rxfill_return_queue_${String(hospId || 'unknown')}`;
+      const SHELF_COLUMNS = 10;
 
       const formatExpiry = (raw) => {
         const s=safeText(raw);
@@ -1887,8 +1911,13 @@ const ReturnDrugView = ({ ctx }) => {
           typeKeys.forEach(typeKey=>{
             const valid=drugList.filter(d=>String(d.type||'1')===typeKey).map(d=>String(d.drugId));
             const validSet=new Set(valid);
-            const old=Array.isArray(next[typeKey])?next[typeKey].map(String).filter(x=>validSet.has(x)):[];
-            const oldSet=new Set(old); next[typeKey]=[...old,...valid.filter(x=>!oldSet.has(x))];
+            const seen=new Set();
+            const old=(Array.isArray(next[typeKey])?next[typeKey]:[]).map(x=>x===null||x===''?null:String(x)).filter(x=>{
+              if(x===null) return true;
+              if(!validSet.has(x)||seen.has(x)) return false;
+              seen.add(x); return true;
+            });
+            next[typeKey]=[...old,...valid.filter(x=>!seen.has(x))];
           });
           Object.keys(next).forEach(k=>{if(!typeKeys.includes(String(k))) delete next[k];});
           return next;
@@ -1906,25 +1935,57 @@ const ReturnDrugView = ({ ctx }) => {
         const byId=new Map(drugList.map(d=>[String(d.drugId),d]));
         const typeKeys=[...new Set(drugList.map(d=>String(d.type||'1')))];
         typeKeys.sort((a,b)=>String(typesSource[a]||a).localeCompare(String(typesSource[b]||b),'th'));
-        const groups={};
+        const groups={}; const itemCounts={};
         typeKeys.forEach(typeKey=>{
           const fallback=drugList.filter(d=>String(d.type||'1')===typeKey).map(d=>String(d.drugId));
           const ids=Array.isArray(shelfOrder[typeKey])&&shelfOrder[typeKey].length?shelfOrder[typeKey]:fallback;
-          groups[typeKey]=ids.map(id=>byId.get(String(id))).filter(Boolean).filter(x=>visible.has(String(x.drugId)));
+          const baseLength=Math.max(SHELF_COLUMNS,Math.ceil(Math.max(ids.length,1)/SHELF_COLUMNS)*SHELF_COLUMNS);
+          const displayLength=baseLength+SHELF_COLUMNS;
+          groups[typeKey]=Array.from({length:displayLength},(_,slotIndex)=>{
+            const id=ids[slotIndex];
+            const item=id?byId.get(String(id)):null;
+            return {slotIndex,item:item&&visible.has(String(item.drugId))?item:null,blocked:!!item&&!visible.has(String(item.drugId))};
+          });
+          itemCounts[typeKey]=groups[typeKey].filter(s=>s.item).length;
         });
-        return {groups,typeKeys:typeKeys.filter(k=>(groups[k]||[]).length)};
-      },[drugList,filteredList,shelfOrder,typesSource]);
+        return {groups,itemCounts,typeKeys:typeKeys.filter(k=>(itemCounts[k]||0)>0)};
+      },[drugList,filteredList,shelfOrder,typesSource,SHELF_COLUMNS]);
 
       const dropCard=(typeKey,targetId)=>{
         if(!dragState||String(dragState.typeKey)!==String(typeKey)||String(dragState.drugId)===String(targetId)) return;
         setShelfOrder(prev=>{
-          const arr=[...(prev[typeKey]||[])].map(String);
+          const arr=[...(prev[typeKey]||[])].map(x=>x===null?null:String(x));
           const from=arr.indexOf(String(dragState.drugId)); const to=arr.indexOf(String(targetId));
           if(from<0||to<0) return prev;
-          arr.splice(from,1); arr.splice(to,0,String(dragState.drugId));
+          const previousTarget=arr[to]; arr[to]=String(dragState.drugId); arr[from]=previousTarget;
           return {...prev,[typeKey]:arr};
         });
         setDragState(null);
+      };
+
+      const dropIntoSlot=(typeKey,targetIndex)=>{
+        if(!dragState||String(dragState.typeKey)!==String(typeKey)) return;
+        setShelfOrder(prev=>{
+          const arr=[...(prev[typeKey]||[])].map(x=>x===null?null:String(x));
+          while(arr.length<=targetIndex) arr.push(null);
+          if(arr[targetIndex]) return prev;
+          const from=arr.indexOf(String(dragState.drugId));
+          if(from<0) return prev;
+          arr[from]=null; arr[targetIndex]=String(dragState.drugId);
+          return {...prev,[typeKey]:arr};
+        });
+        setDragState(null);
+      };
+
+      const addToReturnQueue=(item)=>{
+        try {
+          const queued=JSON.parse(localStorage.getItem(returnQueueKey)||'[]');
+          const next=[...new Set([...(Array.isArray(queued)?queued:[]).map(String),String(item.drugId)])];
+          localStorage.setItem(returnQueueKey,JSON.stringify(next));
+        } catch(e) {}
+        ctx.showToast('เพิ่มในรายการคืนยาแล้ว กรุณาเลือกเมนู “คืนยา” เพื่อพิมพ์ใบคืนยา เมื่อยืนยันพิมพ์ ระบบจะตัดยอดเครดิตออกตามจำนวนคืนจริง');
+        setDetailItem(null);
+        ctx.setCurrentView('return_drug');
       };
 
       const openAdjust=(lot,item)=>{
@@ -2069,7 +2130,7 @@ const ReturnDrugView = ({ ctx }) => {
             <div className={`min-h-[34px] break-words text-[11px] font-black leading-tight [overflow-wrap:anywhere] ${zero?'text-slate-300':'text-white'}`}>{item.name}</div>
             <div className="mt-2 rounded-md border border-white/15 bg-black/20 p-1.5 text-center">
               <div className="text-[8px] font-bold text-white/60">คงเหลือ</div>
-              <div className={`break-words text-[28px] font-black leading-none [overflow-wrap:anywhere] ${zero?'text-slate-400':'text-lime-200'}`}>{item.remaining.toLocaleString('th-TH')}</div>
+              <div className={`break-words text-[15px] font-black leading-none [overflow-wrap:anywhere] ${zero?'text-slate-400':'text-lime-200'}`}>{item.remaining.toLocaleString('th-TH')}</div>
               <div className="mt-0.5 break-words text-[9px] font-bold leading-tight text-white/75 [overflow-wrap:anywhere]">{item.unit||'หน่วย'}</div>
             </div>
             <div className="mt-1.5 space-y-1 text-[8px] leading-tight text-white/75">
@@ -2087,53 +2148,61 @@ const ReturnDrugView = ({ ctx }) => {
       };
 
       return (
-        <div className="virtual-shelf bg-slate-950 text-slate-200 rounded-2xl shadow-2xl p-3 lg:p-5 animate-fade-in relative min-h-[80vh]">
-          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-800">
+        <div className="virtual-shelf bg-white text-slate-700 rounded-2xl shadow-sm border border-slate-100 p-3 lg:p-5 animate-fade-in relative min-h-[80vh]">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
             <div>
-              <h2 className="text-xl font-black text-white"><i className="fa-solid fa-boxes-stacked text-emerald-400 mr-2"></i> คลังยาของฉัน — Virtual Shelf</h2>
-              <p className="text-[11px] text-slate-400 mt-1">กล่องยาเสมือนบนชั้น • คลิกเพื่อดู Lot • ลากปุ่มมุมขวาบนเพื่อจัดตำแหน่ง</p>
+              <h2 className="text-xl font-black text-slate-900"><i className="fa-solid fa-boxes-stacked text-emerald-500 mr-2"></i> คลังยาของฉัน — Virtual Shelf</h2>
+              <p className="text-[11px] font-bold text-slate-600 mt-1">ระบบจัดการชั้นยา ลากยาวางให้เหมือนชั้นจริง และเช็คสต็อกให้ตรงกับความเป็นจริง</p>
+              <p className="text-[10px] text-slate-400 mt-1">ลากปุ่มมุมขวาบนไปวางในช่องว่างเพื่อขึ้นชั้นใหม่ หรือวางทับกล่องยาเพื่อสลับตำแหน่ง • คลิกกล่องเพื่อดูรายละเอียด</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button onClick={exportStockExcel} className="bg-emerald-600 text-white border border-emerald-500 px-3 py-1.5 rounded-lg text-[11px] font-black hover:bg-emerald-500"><i className="fa-solid fa-file-excel mr-1"></i>Excel</button>
-              <button onClick={loadVirtualStock} disabled={loadingStock} className="bg-cyan-950 text-cyan-200 border border-cyan-700 px-3 py-1.5 rounded-lg text-[11px] font-bold disabled:opacity-50"><i className={`fa-solid ${loadingStock?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>อัปเดต</button>
-              <button onClick={()=>ctx.setCurrentView('invs_lots')} className="bg-slate-800 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg text-[11px] font-bold"><i className="fa-solid fa-database mr-1"></i>Lot รพ.สวี</button>
-              <button onClick={()=>ctx.setCurrentView('return_drug')} className="bg-red-950 text-red-200 border border-red-700 px-3 py-1.5 rounded-lg text-[11px] font-bold"><i className="fa-solid fa-right-left mr-1"></i>ตรวจนับ / คืนยา</button>
-              <button onClick={()=>ctx.setCurrentView('dashboard')} className="bg-slate-800 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-[11px] font-bold">หน้าหลัก</button>
+              <button onClick={loadVirtualStock} disabled={loadingStock} className="bg-cyan-50 text-cyan-700 border border-cyan-200 px-3 py-1.5 rounded-lg text-[11px] font-bold disabled:opacity-50"><i className={`fa-solid ${loadingStock?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>อัปเดต</button>
+              <button onClick={()=>ctx.setCurrentView('invs_lots')} className="bg-slate-100 text-slate-600 border border-slate-200 px-3 py-1.5 rounded-lg text-[11px] font-bold"><i className="fa-solid fa-database mr-1"></i>Lot รพ.สวี</button>
+              <button onClick={()=>ctx.setCurrentView('return_drug')} className="bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-[11px] font-bold"><i className="fa-solid fa-right-left mr-1"></i>ตรวจนับ / คืนยา</button>
+              <button onClick={()=>ctx.setCurrentView('dashboard')} className="bg-slate-100 text-slate-600 border border-slate-200 px-3 py-1.5 rounded-lg text-[11px] font-bold">หน้าหลัก</button>
             </div>
           </div>
 
-          <div className="rounded-lg border border-emerald-800 bg-emerald-950/60 px-3 py-2 mb-4 flex flex-col lg:flex-row lg:items-center justify-between gap-2">
-            <div className="text-[10px] text-emerald-200 font-bold"><i className="fa-solid fa-shield-halved mr-1"></i>หักยอดตาม FEFO และเพิ่มยอดเมื่อ รพ.สวี ยืนยันจำนวนที่จ่าย</div>
-            <div className="text-[9px] font-bold text-emerald-400">อัปเดตล่าสุด: {metaSyncAt?formatAppDateTime(metaSyncAt):'ยังไม่เริ่มต้น'}</div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 mb-4 flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+            <div className="text-[10px] text-emerald-800 font-bold"><i className="fa-solid fa-shield-halved mr-1"></i>ตรวจนับยอดจริงเป็นระยะ ระบบจะช่วยให้ยอดบนชั้นและเครดิต VMI ตรงกับของที่มีอยู่</div>
+            <div className="text-[9px] font-bold text-emerald-600">อัปเดตล่าสุด: {metaSyncAt?formatAppDateTime(metaSyncAt):'ยังไม่เริ่มต้น'}</div>
           </div>
 
           {!stockMeta?.initialized && <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-900"><div className="font-black text-lg"><i className="fa-solid fa-triangle-exclamation mr-2"></i>ยังไม่มีข้อมูลตั้งต้นของคลังยา</div><div className="text-sm mt-1">กรุณาให้ผู้ดูแลระบบอัปเดตข้อมูลจาก รพ.สวี 1 ครั้งก่อนเริ่มใช้งานคลังยา</div></div>}
 
           <div className="grid grid-cols-2 lg:grid-cols-6 gap-2 mb-4">
-            <div className="rounded-lg bg-emerald-950 border border-emerald-800 p-2"><div className="text-[9px] font-black text-emerald-400">รายการที่มีของ</div><div className="text-2xl font-black text-emerald-200">{drugList.filter(d=>d.remaining>0).length}</div></div>
-            <div className="rounded-lg bg-cyan-950 border border-cyan-800 p-2"><div className="text-[9px] font-black text-cyan-400">จำนวน Lot</div><div className="text-2xl font-black text-cyan-200">{activeLotCount}</div></div>
-            <div className="rounded-lg bg-blue-950 border border-blue-800 p-2"><div className="text-[9px] font-black text-blue-400">คงเหลือรวม</div><div className="break-words text-2xl font-black text-blue-200 [overflow-wrap:anywhere]">{totalQty.toLocaleString('th-TH')}</div></div>
-            <div className="rounded-lg bg-orange-950 border border-orange-800 p-2"><div className="text-[9px] font-black text-orange-400">ใกล้หมดอายุ ≤ 90 วัน</div><div className="text-2xl font-black text-orange-200">{exp90}</div></div>
-            <div className="rounded-lg bg-red-950 border border-red-800 p-2"><div className="text-[9px] font-black text-red-400">หมดอายุแต่มีของ</div><div className="text-2xl font-black text-red-200">{expired}</div></div>
-            <div className={`rounded-lg border p-2 ${discrepancyCount>0?'bg-fuchsia-950 border-fuchsia-700':'bg-slate-900 border-slate-700'}`}><div className={`text-[9px] font-black ${discrepancyCount>0?'text-fuchsia-300':'text-slate-500'}`}>รอตรวจนับ</div><div className={`text-2xl font-black ${discrepancyCount>0?'text-fuchsia-200':'text-slate-400'}`}>{discrepancyCount}</div></div>
+            <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2"><div className="text-[9px] font-black text-emerald-600">รายการที่มีของ</div><div className="text-xl font-black text-emerald-700">{drugList.filter(d=>d.remaining>0).length}</div></div>
+            <div className="rounded-lg bg-cyan-50 border border-cyan-100 p-2"><div className="text-[9px] font-black text-cyan-600">จำนวน Lot</div><div className="text-xl font-black text-cyan-700">{activeLotCount}</div></div>
+            <div className="rounded-lg bg-blue-50 border border-blue-100 p-2"><div className="text-[9px] font-black text-blue-600">คงเหลือรวม</div><div className="break-words text-xl font-black text-blue-700 [overflow-wrap:anywhere]">{totalQty.toLocaleString('th-TH')}</div></div>
+            <div className="rounded-lg bg-orange-50 border border-orange-100 p-2"><div className="text-[9px] font-black text-orange-600">ใกล้หมดอายุ ≤ 90 วัน</div><div className="text-xl font-black text-orange-700">{exp90}</div></div>
+            <div className="rounded-lg bg-red-50 border border-red-100 p-2"><div className="text-[9px] font-black text-red-600">หมดอายุแต่มีของ</div><div className="text-xl font-black text-red-700">{expired}</div></div>
+            <div className={`rounded-lg border p-2 ${discrepancyCount>0?'bg-fuchsia-50 border-fuchsia-200':'bg-slate-50 border-slate-100'}`}><div className={`text-[9px] font-black ${discrepancyCount>0?'text-fuchsia-700':'text-slate-500'}`}>รอตรวจนับ</div><div className={`text-xl font-black ${discrepancyCount>0?'text-fuchsia-800':'text-slate-500'}`}>{discrepancyCount}</div></div>
           </div>
 
           <div className="flex flex-col lg:flex-row gap-2 lg:items-center mb-4">
             <div className="flex gap-2">
-              <button onClick={()=>setStockTab('current')} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${stockTab==='current'?'bg-emerald-600 text-white shadow':'bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-layer-group mr-1"></i>ยาคงเหลือ</button>
-              <button onClick={()=>setStockTab('history')} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${stockTab==='history'?'bg-emerald-600 text-white shadow':'bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-clock-rotate-left mr-1"></i>ประวัติ</button>
+              <button onClick={()=>setStockTab('current')} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${stockTab==='current'?'bg-emerald-600 text-white shadow':'bg-slate-100 text-slate-600'}`}><i className="fa-solid fa-layer-group mr-1"></i>ยาคงเหลือ</button>
+              <button onClick={()=>setStockTab('history')} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${stockTab==='history'?'bg-emerald-600 text-white shadow':'bg-slate-100 text-slate-600'}`}><i className="fa-solid fa-clock-rotate-left mr-1"></i>ประวัติ</button>
             </div>
-            <div className="relative flex-1"><i className="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-500"></i><input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="ค้นหาชื่อยา / รหัส / Lot / EXP" className="w-full bg-slate-900 text-slate-100 pl-9 pr-3 py-2 border border-slate-700 rounded-lg text-[11px] outline-none focus:border-emerald-500" /></div>
+            <div className="relative flex-1"><i className="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400"></i><input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="ค้นหาชื่อยา / รหัส / Lot / EXP" className="w-full bg-white text-slate-700 pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-[11px] outline-none focus:border-emerald-500" /></div>
             <div className="text-[10px] text-slate-500 font-bold">≈ ฿{totalValue.toLocaleString('th-TH',{maximumFractionDigits:0})}</div>
           </div>
 
           {stockTab==='current' ? (
             loadingStock?<div className="p-12 text-center text-cyan-600 font-bold"><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังโหลดข้อมูลคลังยา...</div>:
             <div className="space-y-4">
-              {shelfGroups.typeKeys.map(typeKey=><section key={typeKey} className="rounded-xl border border-slate-800 bg-slate-900/70 p-2.5 shadow-inner">
-                <div className="mb-2 flex items-center gap-2"><div className="h-4 w-1 rounded-full bg-emerald-400"></div><h3 className="text-xs font-black text-slate-200">{typesSource[typeKey]||`หมวด ${typeKey}`}</h3><span className="text-[9px] text-slate-500">{shelfGroups.groups[typeKey].length} กล่อง</span></div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-10 gap-2">{shelfGroups.groups[typeKey].map(item=>renderCard(item,typeKey))}</div>
-                <div className="mt-2 h-2 rounded-sm border-t border-slate-600 bg-gradient-to-b from-slate-700 to-slate-950 shadow-lg"></div>
+              {shelfGroups.typeKeys.map(typeKey=><section key={typeKey} className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5">
+                <div className="mb-2 flex items-center gap-2"><div className="h-4 w-1 rounded-full bg-emerald-500"></div><h3 className="text-xs font-black text-slate-700">{typesSource[typeKey]||`หมวด ${typeKey}`}</h3><span className="text-[9px] text-slate-400">{shelfGroups.itemCounts[typeKey]} กล่อง</span></div>
+                <div className="space-y-3">
+                  {Array.from({length:Math.ceil(shelfGroups.groups[typeKey].length/SHELF_COLUMNS)},(_,rowIndex)=>{
+                    const rowSlots=shelfGroups.groups[typeKey].slice(rowIndex*SHELF_COLUMNS,(rowIndex+1)*SHELF_COLUMNS);
+                    return <div key={`${typeKey}-shelf-${rowIndex}`}>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-10 gap-2">{rowSlots.map(slot=>slot.item?renderCard(slot.item,typeKey):<div key={`${typeKey}-slot-${slot.slotIndex}`} onDragOver={e=>{if(!slot.blocked)e.preventDefault()}} onDrop={()=>{if(!slot.blocked)dropIntoSlot(typeKey,slot.slotIndex)}} className={`flex min-h-[118px] items-center justify-center rounded-lg border border-dashed text-center text-[9px] transition ${slot.blocked?'border-slate-100 bg-slate-100/50 text-slate-300':'border-slate-300 bg-white text-slate-300 '+(dragState?'ring-2 ring-emerald-200 hover:border-emerald-400 hover:bg-emerald-50':'')}`}>{slot.blocked?'รายการถูกซ่อนด้วยตัวกรอง':dragState?<span><i className="fa-solid fa-arrow-down mr-1"></i>วางยาที่นี่</span>:rowIndex===Math.ceil(shelfGroups.groups[typeKey].length/SHELF_COLUMNS)-1?'ช่องว่างสำหรับชั้นใหม่':'ช่องว่าง'}</div>)}</div>
+                      <div className="relative mt-1.5 h-3"><div className="absolute inset-x-0 top-0 h-2 rounded-b-md border-t border-slate-400 bg-gradient-to-b from-slate-300 via-slate-400 to-slate-500 shadow-xl"></div><div className="absolute inset-x-3 top-2 h-2 rounded-full bg-slate-400/35 blur-sm"></div></div>
+                    </div>;
+                  })}
+                </div>
               </section>)}
               {!shelfGroups.typeKeys.length&&<div className="p-12 text-center text-slate-400">ไม่พบรายการตามคำค้น</div>}
             </div>
@@ -2162,7 +2231,8 @@ const ReturnDrugView = ({ ctx }) => {
               <div className="flex items-center justify-between"><div className="font-black text-slate-800">Lot / วันหมดอายุ</div><button onClick={()=>setShowDepletedLots(v=>!v)} className="text-xs font-bold text-slate-500 underline">{showDepletedLots?'ซ่อน Lot ที่หมดแล้ว':'แสดง Lot ที่หมดแล้ว'}</button></div>
               <div className="overflow-x-auto border rounded-xl"><table className="w-full text-sm whitespace-nowrap"><thead className="bg-slate-50"><tr><th className="p-3 text-center">ใช้ก่อน</th><th className="p-3 text-left">Lot</th><th className="p-3 text-left">EXP</th><th className="p-3 text-right">คงเหลือ</th><th className="p-3 text-left">ที่มา</th><th className="p-3 text-left">อ้างอิง</th><th className="p-3"></th></tr></thead><tbody>{detailItem.allLots.filter(l=>showDepletedLots||toNonNegativeNumber(l.remaining_qty)>0).sort(lotSort).map((l,idx)=>{const q=toNonNegativeNumber(l.remaining_qty);const info=expiryInfo(l.expiry,q);return <tr key={l.id} className={`border-t ${q<=0?'bg-slate-50 text-slate-400':''}`}><td className="p-3 text-center">{q>0?<span className="inline-flex w-7 h-7 items-center justify-center rounded-full bg-cyan-100 text-cyan-700 font-black">{detailItem.activeLots.findIndex(x=>x.id===l.id)+1}</span>:'-'}</td><td className="p-3 font-mono font-black text-lg">{l.lot_no||'-'}</td><td className="p-3"><div className="font-black text-lg">{formatExpiry(l.expiry)}</div>{q>0&&<span className={`inline-flex mt-1 rounded-full border px-2 py-1 text-[10px] font-black ${info.cls}`}>{info.text}</span>}</td><td className={`p-3 text-right text-3xl font-black ${q>0?'text-emerald-700':'text-slate-300'}`}>{q.toLocaleString('th-TH')}</td><td className="p-3"><span className="font-bold">{l.source_type==='INVS_BASELINE'?'ยอดตั้งต้นจาก รพ.สวี':l.source_type==='INVS_RECEIPT'?'รับจาก รพ.สวี':l.source_type||'-'}</span>{l.source_requisition_id&&<div className="text-[9px] text-slate-400">{l.source_requisition_id}</div>}</td><td className="p-3 font-mono text-xs text-slate-500">{l.invs_record_number?`เลขอ้างอิง #${l.invs_record_number}`:l.invs_sub_po_no||'-'}</td><td className="p-3"><button onClick={()=>openAdjust(l,detailItem)} className="bg-amber-50 border border-amber-200 text-amber-700 px-3 py-2 rounded-lg font-bold"><i className="fa-solid fa-sliders mr-1"></i>แก้ยอด</button></td></tr>})}</tbody></table></div>
               <div className="rounded-xl bg-cyan-50 border border-cyan-100 p-3 text-xs text-cyan-800"><i className="fa-solid fa-circle-info mr-2"></i>ระบบจะหักจาก Lot ที่หมดอายุก่อน และจะแจ้งเตือนวันหมดอายุเฉพาะ Lot ที่ยังมียาเหลือ</div>
-              <div className="flex justify-end"><button onClick={()=>setDetailItem(null)} className="bg-slate-100 text-slate-600 px-5 py-2 rounded-xl font-bold">ปิด</button></div>
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800"><i className="fa-solid fa-right-left mr-2"></i>ต้องการคืนรายการนี้ ให้เพิ่มเข้ารายการคืนยาแล้วระบุยอดจริง จำนวนคืน และ Lot ก่อนพิมพ์ใบคืนยา</div>
+              <div className="flex flex-wrap justify-end gap-2"><button onClick={()=>setDetailItem(null)} className="bg-slate-100 text-slate-600 px-5 py-2 rounded-xl font-bold">ปิด</button><button onClick={()=>addToReturnQueue(detailItem)} className="bg-red-600 text-white px-5 py-2 rounded-xl font-bold hover:bg-red-700"><i className="fa-solid fa-plus mr-2"></i>เพิ่มและไปหน้าคืนยา</button></div>
             </div>
           </Modal>}
 

@@ -1181,7 +1181,7 @@ const ReturnDrugView = ({ ctx }) => {
                   drugId, name: drug ? drug.drug_name : 'N/A', unit: unitName,
                   packSize: drug ? safePackSize(drug.pack_size) : 1, price: drug ? toNonNegativeNumber(drug.price) : 0,
                   currentBal: total, actualBal: '', returnQty: 0, selected: false,
-                  lotNo: '', expiryDate: '', virtualLots: lots
+                  selectedLotId: '', lotNo: '', expiryDate: '', virtualLots: lots
                 };
               }).filter(i=>i.currentBal>0).sort((a,b)=>String(a.drugId).localeCompare(String(b.drugId)));
               if (alive) setItems(list);
@@ -1220,8 +1220,24 @@ const ReturnDrugView = ({ ctx }) => {
           setItems(prev => prev.map(item => item.drugId === drugId ? { ...item, selected: !item.selected } : item));
       };
 
-      const handleReturnMetaChange = (drugId, field, value) => {
-          setItems(prev => prev.map(item => item.drugId === drugId ? { ...item, [field]: value } : item));
+      const toReturnDateInput = (raw) => {
+          const value = safeText(raw);
+          if (/^\d{8}$/.test(value)) return `${value.slice(0,4)}-${value.slice(4,6)}-${value.slice(6,8)}`;
+          if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0,10);
+          return '';
+      };
+
+      const handleLotSelect = (drugId, lotId) => {
+          setItems(prev => prev.map(item => {
+              if (item.drugId !== drugId) return item;
+              const selectedLot = (item.virtualLots || []).find(l => String(l.id) === String(lotId));
+              return {
+                  ...item,
+                  selectedLotId: lotId,
+                  lotNo: selectedLot ? safeText(selectedLot.lot_no) : '',
+                  expiryDate: selectedLot ? toReturnDateInput(selectedLot.expiry) : ''
+              };
+          }));
       };
 
       const handleSubmit = async () => {
@@ -1245,17 +1261,18 @@ const ReturnDrugView = ({ ctx }) => {
               const auditRef = db.collection('audit_logs').doc();
 
               const plans = toReturn.map(item => {
-                const rows = latestLots.filter(l=>String(l.drug_id)===String(item.drugId) && toNonNegativeNumber(l.remaining_qty)>0);
+                const allRows = latestLots.filter(l=>String(l.drug_id)===String(item.drugId) && toNonNegativeNumber(l.remaining_qty)>0);
+                const selectedLotId = safeText(item.selectedLotId);
+                const rows = selectedLotId ? allRows.filter(l=>String(l.id)===selectedLotId) : [...allRows];
+                if(selectedLotId && rows.length===0) throw new Error(`ไม่พบ Lot ที่เลือกของ ${item.name} ในฐานข้อมูลล่าสุด กรุณารีเฟรช`);
                 rows.sort((a,b)=>{
-                  const wanted=safeText(item.lotNo);
-                  if(wanted){const am=safeText(a.lot_no)===wanted?0:1;const bm=safeText(b.lot_no)===wanted?0:1;if(am!==bm)return am-bm;}
                   return lotSort(a,b);
                 });
-                const latestTotal=rows.reduce((sum,l)=>sum+toNonNegativeNumber(l.remaining_qty),0);
+                const latestTotal=allRows.reduce((sum,l)=>sum+toNonNegativeNumber(l.remaining_qty),0);
                 if (Math.abs(latestTotal-toNonNegativeNumber(item.currentBal))>0.000001) throw new Error(`ยอด ${item.name} ถูกเปลี่ยนแล้ว (ล่าสุด ${latestTotal}) กรุณารีเฟรช`);
                 let left=toNonNegativeNumber(item.returnQty); const updates=[]; const allocations=[];
                 for(const row of rows){if(left<=0.000001)break;const oldQty=toNonNegativeNumber(row.remaining_qty);const used=Math.min(oldQty,left);if(used<=0)continue;updates.push({row,oldQty,newQty:oldQty-used});allocations.push({lot_doc_id:row.id,lot_no:safeText(row.lot_no),expiry:safeText(row.expiry),qty:used});left-=used;}
-                if(left>0.000001) throw new Error(`จำนวนคืน ${item.name} มากกว่า Virtual Stock ที่มีอยู่`);
+                if(left>0.000001) throw new Error(selectedLotId ? `จำนวนคืน ${item.name} มากกว่ายอดคงเหลือของ Lot ${item.lotNo || '-'}` : `จำนวนคืน ${item.name} มากกว่า Virtual Stock ที่มีอยู่`);
                 return {item,latestTotal,updates,allocations};
               });
 
@@ -1398,7 +1415,10 @@ const ReturnDrugView = ({ ctx }) => {
           );
       }
 
-      const filteredItems = items.filter(d => d.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(d.drugId).includes(searchTerm.toLowerCase()));
+      const filteredItems = items.filter(d => {
+          const lotText = (d.virtualLots || []).map(l => `${l.lot_no || ''} ${l.expiry || ''} ${toReturnDateInput(l.expiry)} ${formatExpiryDateThai(toReturnDateInput(l.expiry))} ${l.location || ''}`).join(' ');
+          return `${d.name} ${d.drugId} ${lotText}`.toLowerCase().includes(searchTerm.trim().toLowerCase());
+      });
 
       return (
           <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in relative min-h-[80vh]">
@@ -1420,7 +1440,7 @@ const ReturnDrugView = ({ ctx }) => {
                    <div className="flex justify-between items-center mb-4 gap-4">
                       <div className="relative w-full max-w-md">
                         <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
-                        <input type="text" placeholder="ค้นหาชื่อยาเพื่อคืน..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
+                        <input type="text" placeholder="ค้นหาชื่อยา / รหัส / Lot / EXP จากฐานข้อมูล..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} />
                       </div>
                       <button onClick={handleSubmit} disabled={isSubmitting} className="bg-red-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-red-200 hover:scale-105 transition shrink-0 disabled:opacity-50">
                         {isSubmitting ? 'กำลังบันทึก...' : <><i className="fa-solid fa-check mr-2"></i> บันทึกการคืนยาและออกใบเสร็จ</>}
@@ -1438,8 +1458,8 @@ const ReturnDrugView = ({ ctx }) => {
                            <th className="p-3 text-center font-bold border-b text-blue-700 bg-blue-50">เครดิตที่มี</th>
                            <th className="p-3 text-center font-bold border-b bg-amber-50 text-amber-700">ยอดมีจริง (Input)</th>
                            <th className="p-3 text-center font-bold border-b text-red-700 bg-red-50">ผลการคำนวณ (ยอดคืน)</th>
-                           <th className="p-3 text-center font-bold border-b">Lot <span className="text-[10px] font-normal text-slate-400">(ถ้ามี)</span></th>
-                           <th className="p-3 text-center font-bold border-b">วันหมดอายุ <span className="text-[10px] font-normal text-slate-400">(ถ้ามี)</span></th>
+                           <th className="p-3 text-center font-bold border-b">Lot ที่ต้องการคืน <span className="text-[10px] font-normal text-emerald-600">(จากฐานข้อมูล)</span></th>
+                           <th className="p-3 text-center font-bold border-b">วันหมดอายุ</th>
                          </tr>
                        </thead>
                        <tbody>
@@ -1460,10 +1480,13 @@ const ReturnDrugView = ({ ctx }) => {
                                {item.returnQty > 0 ? item.returnQty : '-'}
                              </td>
                              <td className="p-3 text-center">
-                               <input type="text" value={item.lotNo || ''} onChange={e=>handleReturnMetaChange(item.drugId,'lotNo',e.target.value)} disabled={item.returnQty <= 0} placeholder="เช่น A123" className="w-28 border border-slate-200 rounded-lg px-2 py-1.5 text-center outline-none focus:border-red-400 disabled:bg-slate-50 disabled:text-slate-300" />
+                               <select value={item.selectedLotId || ''} onChange={e=>handleLotSelect(item.drugId,e.target.value)} disabled={item.returnQty <= 0} className="w-56 max-w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:border-red-400 disabled:bg-slate-50 disabled:text-slate-300">
+                                 <option value="">อัตโนมัติ: ตัดตาม FEFO</option>
+                                 {(item.virtualLots || []).filter(l=>toNonNegativeNumber(l.remaining_qty)>0).slice().sort((a,b)=>safeText(a.expiry||'99999999').localeCompare(safeText(b.expiry||'99999999'))).map(l=><option key={l.id} value={l.id}>{safeText(l.lot_no)||'(ไม่ระบุ Lot)'} • EXP {formatExpiryDateThai(toReturnDateInput(l.expiry))} • เหลือ {toNonNegativeNumber(l.remaining_qty).toLocaleString('th-TH')}</option>)}
+                               </select>
                              </td>
                              <td className="p-3 text-center">
-                               <input type="date" value={item.expiryDate || ''} onChange={e=>handleReturnMetaChange(item.drugId,'expiryDate',e.target.value)} disabled={item.returnQty <= 0} className="border border-slate-200 rounded-lg px-2 py-1.5 outline-none focus:border-red-400 disabled:bg-slate-50 disabled:text-slate-300" />
+                               <div className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${item.expiryDate?'border-emerald-200 bg-emerald-50 text-emerald-700':'border-slate-200 bg-slate-50 text-slate-400'}`}>{item.expiryDate ? formatExpiryDateThai(item.expiryDate) : 'ตาม Lot ที่ระบบตัด'}</div>
                              </td>
                            </tr>
                          ))}
@@ -2022,12 +2045,14 @@ const ReturnDrugView = ({ ctx }) => {
       };
 
       const cardPalettes = [
-        'bg-emerald-50 border-emerald-200',
-        'bg-sky-50 border-sky-200',
-        'bg-violet-50 border-violet-200',
-        'bg-amber-50 border-amber-200',
-        'bg-rose-50 border-rose-200',
-        'bg-cyan-50 border-cyan-200'
+        'bg-gradient-to-br from-emerald-800 to-slate-950 border-emerald-500/70',
+        'bg-gradient-to-br from-sky-800 to-slate-950 border-sky-500/70',
+        'bg-gradient-to-br from-violet-800 to-slate-950 border-violet-500/70',
+        'bg-gradient-to-br from-amber-800 to-slate-950 border-amber-500/70',
+        'bg-gradient-to-br from-rose-800 to-slate-950 border-rose-500/70',
+        'bg-gradient-to-br from-cyan-800 to-slate-950 border-cyan-500/70',
+        'bg-gradient-to-br from-indigo-800 to-slate-950 border-indigo-500/70',
+        'bg-gradient-to-br from-fuchsia-800 to-slate-950 border-fuchsia-500/70'
       ];
       const cardPaletteFor = (drugId) => {
         const n=String(drugId||'').split('').reduce((sum,ch)=>sum+ch.charCodeAt(0),0);
@@ -2038,88 +2063,77 @@ const ReturnDrugView = ({ ctx }) => {
         const exp=item.earliest?expiryInfo(item.earliest.expiry,item.earliest.remaining_qty):null;
         const zero=item.remaining<=0;
         return (
-          <div key={item.drugId} draggable onDragStart={()=>setDragState({typeKey,drugId:item.drugId})} onDragEnd={()=>setDragState(null)} onDragOver={e=>e.preventDefault()} onDrop={()=>dropCard(typeKey,item.drugId)} onClick={()=>setDetailItem(item)} className={`rounded-2xl border-2 p-4 cursor-grab active:cursor-grabbing transition hover:-translate-y-0.5 hover:shadow-lg min-w-0 overflow-hidden ${dragState&&String(dragState.drugId)===String(item.drugId)?'opacity-40 border-emerald-400':zero?'bg-slate-50 border-slate-200':cardPaletteFor(item.drugId)}`}>
-            <div className="mb-3 flex items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300/80 bg-white/70 px-3 py-1.5 text-[11px] font-bold text-slate-500"><i className="fa-solid fa-grip-vertical text-base"></i><i className="fa-solid fa-arrows-up-down-left-right"></i><span>จับตรงนี้แล้วลากเพื่อย้ายกล่องยา</span></div>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className={`font-black leading-snug text-xl lg:text-2xl break-words ${zero?'text-slate-500':'text-slate-900'}`}>{item.name}</div>
-                <div className="mt-1 text-[10px] font-mono text-slate-400">{item.drugId} • {typesSource[item.type]||`หมวด ${item.type}`}</div>
-              </div>
-              <div className="shrink-0 flex flex-col items-end gap-1">
-                <span className={`rounded-full border px-2 py-1 text-[10px] font-black ${zero?'bg-slate-100 text-slate-500 border-slate-200':'bg-cyan-50 text-cyan-700 border-cyan-200'}`}>{zero?'ไม่มีคงเหลือ':`${item.lotCount} Lot`}</span>
-                {item.unresolvedGap>0&&<span className="rounded-full border border-fuchsia-300 bg-fuchsia-100 text-fuchsia-800 px-2 py-1 text-[10px] font-black"><i className="fa-solid fa-scale-unbalanced mr-1"></i>ตรวจนับ +{item.unresolvedGap.toLocaleString('th-TH')}</span>}
-              </div>
+          <div key={item.drugId} draggable onDragStart={()=>setDragState({typeKey,drugId:item.drugId})} onDragEnd={()=>setDragState(null)} onDragOver={e=>e.preventDefault()} onDrop={()=>dropCard(typeKey,item.drugId)} onClick={()=>setDetailItem(item)} className={`relative rounded-lg border p-2 pt-7 cursor-grab active:cursor-grabbing transition hover:-translate-y-0.5 hover:shadow-xl min-w-0 ${dragState&&String(dragState.drugId)===String(item.drugId)?'opacity-40 border-emerald-300':zero?'bg-slate-800 border-slate-700':cardPaletteFor(item.drugId)}`}>
+            <div title="ลากเพื่อย้ายกล่องยา" className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded border border-white/20 bg-black/20 text-[9px] text-white/70"><i className="fa-solid fa-grip-vertical"></i></div>
+            <div className="absolute left-1.5 top-1.5 max-w-[70%] break-words rounded bg-black/25 px-1.5 py-0.5 text-[8px] font-bold leading-tight text-white/75 [overflow-wrap:anywhere]">{item.drugId}</div>
+            <div className={`min-h-[34px] break-words text-[11px] font-black leading-tight [overflow-wrap:anywhere] ${zero?'text-slate-300':'text-white'}`}>{item.name}</div>
+            <div className="mt-2 rounded-md border border-white/15 bg-black/20 p-1.5 text-center">
+              <div className="text-[8px] font-bold text-white/60">คงเหลือ</div>
+              <div className={`break-words text-[28px] font-black leading-none [overflow-wrap:anywhere] ${zero?'text-slate-400':'text-lime-200'}`}>{item.remaining.toLocaleString('th-TH')}</div>
+              <div className="mt-0.5 break-words text-[9px] font-bold leading-tight text-white/75 [overflow-wrap:anywhere]">{item.unit||'หน่วย'}</div>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-3 items-stretch min-w-0">
-              <div className={`rounded-2xl p-3 border min-w-0 overflow-hidden ${zero?'bg-slate-100 border-slate-200':'bg-emerald-50 border-emerald-200'}`}>
-                <div className={`text-[10px] font-black uppercase ${zero?'text-slate-500':'text-emerald-600'}`}>ยอดคงเหลือ</div>
-                <div title={item.remaining.toLocaleString('th-TH')} className={`text-3xl sm:text-4xl font-black leading-none mt-1 truncate max-w-full ${zero?'text-slate-400':'text-emerald-700'}`}>{item.remaining.toLocaleString('th-TH')}</div>
-                <div className={`text-sm font-bold mt-1 ${zero?'text-slate-400':'text-emerald-700'}`}>{item.unit||'หน่วย'}</div>
+            <div className="mt-1.5 space-y-1 text-[8px] leading-tight text-white/75">
+              <div className="break-words [overflow-wrap:anywhere]"><span className="font-bold text-cyan-200">Lot</span> {item.earliest?.lot_no||'-'} <span className="text-white/40">({item.lotCount})</span></div>
+              <div className={`break-words font-bold [overflow-wrap:anywhere] ${exp?.urgent?'text-red-200':'text-amber-200'}`}><span className="text-white/55">EXP</span> {item.earliest?formatExpiry(item.earliest.expiry):'-'}</div>
+              <div className="break-words text-white/50 [overflow-wrap:anywhere]">สำรอง {item.targetVMI.toLocaleString('th-TH')} • แจ้ง {toSafeNumber(item.vmiCredit).toLocaleString('th-TH')}</div>
+              {item.unresolvedGap>0&&<div className="break-words rounded border border-fuchsia-300/50 bg-fuchsia-500/20 px-1 py-0.5 font-black text-fuchsia-100 [overflow-wrap:anywhere]"><i className="fa-solid fa-scale-unbalanced mr-1"></i>ตรวจนับ +{item.unresolvedGap.toLocaleString('th-TH')}</div>}
+              <div className="flex items-end justify-between gap-1">
+                <span className="break-words text-white/40 [overflow-wrap:anywhere]">≈ ฿{item.stockValue.toLocaleString('th-TH',{maximumFractionDigits:0})}</span>
+                {item.latestRecon?.source_requisition_id&&<button type="button" onClick={e=>{e.stopPropagation();ctx.setCurrentReqId(item.latestRecon.source_requisition_id);ctx.setCurrentView('view_req')}} className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-violet-300/40 bg-violet-500/25 text-[8px] text-violet-100 hover:bg-violet-500/40" title="เปิดใบเบิกที่เกี่ยวข้อง"><i className="fa-solid fa-link"></i></button>}
               </div>
-              <div className={`rounded-2xl p-3 border flex flex-col justify-between min-w-0 overflow-hidden ${!item.earliest?'bg-slate-50 border-slate-200':exp?.urgent?'bg-red-50 border-red-200':'bg-amber-50 border-amber-200'}`}>
-                <div className="text-[10px] font-black uppercase text-slate-500">วันหมดอายุใกล้สุด</div>
-                <div title={item.earliest?formatExpiry(item.earliest.expiry):'-'} className={`text-lg sm:text-xl font-black leading-tight truncate max-w-full ${!item.earliest?'text-slate-400':exp?.urgent?'text-red-700':'text-amber-800'}`}>{item.earliest?formatExpiry(item.earliest.expiry):'-'}</div>
-                {item.earliest&&<span className={`mt-2 inline-flex w-fit rounded-full border px-2 py-1 text-[10px] font-black ${exp.cls}`}>{exp.text}</span>}
-              </div>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px]">
-              {item.earliest&&<span className="rounded-lg bg-cyan-50 border border-cyan-100 px-2 py-1 font-bold text-cyan-700">Lot {item.earliest.lot_no||'-'}</span>}
-              <span className="rounded-lg bg-indigo-50 border border-indigo-100 px-2 py-1 font-bold text-indigo-700">ยอดสำรอง {item.targetVMI.toLocaleString('th-TH')}</span>
-              <span className="rounded-lg bg-slate-50 border border-slate-100 px-2 py-1 text-slate-500">ยอดคงเหลือที่แจ้งล่าสุด {toSafeNumber(item.vmiCredit).toLocaleString('th-TH')}</span>
-              {item.latestRecon?.source_requisition_id&&<button type="button" onClick={e=>{e.stopPropagation();ctx.setCurrentReqId(item.latestRecon.source_requisition_id);ctx.setCurrentView('view_req')}} className="rounded-lg bg-violet-50 border border-violet-100 px-2 py-1 text-violet-700 font-bold hover:bg-violet-100" title="เปิดใบเบิกที่เกี่ยวข้อง"><i className="fa-solid fa-link mr-1"></i>{item.latestRecon.requisition_no||item.latestRecon.source_requisition_id}</button>}
-              <span className="ml-auto text-slate-400">≈ ฿{item.stockValue.toLocaleString('th-TH',{maximumFractionDigits:0})}</span>
             </div>
           </div>
         );
       };
 
       return (
-        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in relative min-h-[80vh]">
-          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 mb-5 pb-4 border-b border-slate-100">
+        <div className="virtual-shelf bg-slate-950 text-slate-200 rounded-2xl shadow-2xl p-3 lg:p-5 animate-fade-in relative min-h-[80vh]">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-800">
             <div>
-              <h2 className="text-3xl font-black text-slate-900"><i className="fa-solid fa-boxes-stacked text-emerald-500 mr-2"></i> คลังยาของฉัน</h2>
-              <p className="text-slate-500 mt-1">ดูยอดคงเหลือ Lot และวันหมดอายุของยา/เวชภัณฑ์ในคลัง รพ.สต.</p>
+              <h2 className="text-xl font-black text-white"><i className="fa-solid fa-boxes-stacked text-emerald-400 mr-2"></i> คลังยาของฉัน — Virtual Shelf</h2>
+              <p className="text-[11px] text-slate-400 mt-1">กล่องยาเสมือนบนชั้น • คลิกเพื่อดู Lot • ลากปุ่มมุมขวาบนเพื่อจัดตำแหน่ง</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button onClick={exportStockExcel} className="bg-emerald-600 text-white border border-emerald-700 px-5 py-2.5 rounded-xl font-black shadow-lg hover:bg-emerald-700"><i className="fa-solid fa-file-excel mr-2"></i>ส่งออก Excel</button>
-              <button onClick={loadVirtualStock} disabled={loadingStock} className="bg-cyan-50 text-cyan-700 border border-cyan-200 px-4 py-2 rounded-xl font-bold disabled:opacity-50"><i className={`fa-solid ${loadingStock?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-2`}></i>อัปเดตข้อมูล</button>
-              <button onClick={()=>ctx.setCurrentView('invs_lots')} className="bg-slate-100 text-slate-600 border border-slate-200 px-4 py-2 rounded-xl font-bold"><i className="fa-solid fa-database mr-2"></i>ดู Lot จาก รพ.สวี</button>
-              <button onClick={()=>ctx.setCurrentView('return_drug')} className="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-xl font-bold"><i className="fa-solid fa-right-left mr-2"></i>ตรวจนับ / คืนยา</button>
-              <button onClick={()=>ctx.setCurrentView('dashboard')} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold">หน้าหลัก</button>
+              <button onClick={exportStockExcel} className="bg-emerald-600 text-white border border-emerald-500 px-3 py-1.5 rounded-lg text-[11px] font-black hover:bg-emerald-500"><i className="fa-solid fa-file-excel mr-1"></i>Excel</button>
+              <button onClick={loadVirtualStock} disabled={loadingStock} className="bg-cyan-950 text-cyan-200 border border-cyan-700 px-3 py-1.5 rounded-lg text-[11px] font-bold disabled:opacity-50"><i className={`fa-solid ${loadingStock?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>อัปเดต</button>
+              <button onClick={()=>ctx.setCurrentView('invs_lots')} className="bg-slate-800 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg text-[11px] font-bold"><i className="fa-solid fa-database mr-1"></i>Lot รพ.สวี</button>
+              <button onClick={()=>ctx.setCurrentView('return_drug')} className="bg-red-950 text-red-200 border border-red-700 px-3 py-1.5 rounded-lg text-[11px] font-bold"><i className="fa-solid fa-right-left mr-1"></i>ตรวจนับ / คืนยา</button>
+              <button onClick={()=>ctx.setCurrentView('dashboard')} className="bg-slate-800 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-[11px] font-bold">หน้าหลัก</button>
             </div>
           </div>
 
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-5 flex flex-col lg:flex-row lg:items-center justify-between gap-2">
-            <div className="text-sm text-emerald-900 font-bold"><i className="fa-solid fa-shield-halved mr-2"></i>ระบบหักยอดยาอัตโนมัติตาม “ยอดคงเหลือก่อนเติม” ที่แจ้งในใบเบิก โดยใช้ Lot ที่หมดอายุก่อนออกก่อน และเพิ่มยอดเมื่อ รพ.สวี ยืนยันจำนวนที่จ่าย</div>
-            <div className="text-[10px] font-bold text-emerald-700">อัปเดตล่าสุด: {metaSyncAt?formatAppDateTime(metaSyncAt):'ยังไม่เริ่มต้น'}</div>
+          <div className="rounded-lg border border-emerald-800 bg-emerald-950/60 px-3 py-2 mb-4 flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+            <div className="text-[10px] text-emerald-200 font-bold"><i className="fa-solid fa-shield-halved mr-1"></i>หักยอดตาม FEFO และเพิ่มยอดเมื่อ รพ.สวี ยืนยันจำนวนที่จ่าย</div>
+            <div className="text-[9px] font-bold text-emerald-400">อัปเดตล่าสุด: {metaSyncAt?formatAppDateTime(metaSyncAt):'ยังไม่เริ่มต้น'}</div>
           </div>
 
           {!stockMeta?.initialized && <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-900"><div className="font-black text-lg"><i className="fa-solid fa-triangle-exclamation mr-2"></i>ยังไม่มีข้อมูลตั้งต้นของคลังยา</div><div className="text-sm mt-1">กรุณาให้ผู้ดูแลระบบอัปเดตข้อมูลจาก รพ.สวี 1 ครั้งก่อนเริ่มใช้งานคลังยา</div></div>}
 
-          <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
-            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4"><div className="text-[10px] font-black text-emerald-600">รายการที่มีของ</div><div className="text-3xl font-black text-emerald-700">{drugList.filter(d=>d.remaining>0).length}</div></div>
-            <div className="rounded-xl bg-cyan-50 border border-cyan-100 p-4"><div className="text-[10px] font-black text-cyan-600">จำนวน Lot</div><div className="text-3xl font-black text-cyan-700">{activeLotCount}</div></div>
-            <div className="rounded-xl bg-blue-50 border border-blue-100 p-4"><div className="text-[10px] font-black text-blue-600">จำนวนคงเหลือรวม</div><div className="text-3xl font-black text-blue-700">{totalQty.toLocaleString('th-TH')}</div></div>
-            <div className="rounded-xl bg-orange-50 border border-orange-100 p-4"><div className="text-[10px] font-black text-orange-600">ใกล้หมดอายุ ≤ 90 วัน</div><div className="text-3xl font-black text-orange-700">{exp90}</div></div>
-            <div className="rounded-xl bg-red-50 border border-red-100 p-4"><div className="text-[10px] font-black text-red-600">หมดอายุแต่ยังมีของ</div><div className="text-3xl font-black text-red-700">{expired}</div></div>
-            <div className={`rounded-xl border p-4 ${discrepancyCount>0?'bg-fuchsia-50 border-fuchsia-200':'bg-slate-50 border-slate-100'}`}><div className={`text-[10px] font-black ${discrepancyCount>0?'text-fuchsia-700':'text-slate-500'}`}>รอตรวจนับ</div><div className={`text-3xl font-black ${discrepancyCount>0?'text-fuchsia-800':'text-slate-500'}`}>{discrepancyCount}</div></div>
+          <div className="grid grid-cols-2 lg:grid-cols-6 gap-2 mb-4">
+            <div className="rounded-lg bg-emerald-950 border border-emerald-800 p-2"><div className="text-[9px] font-black text-emerald-400">รายการที่มีของ</div><div className="text-2xl font-black text-emerald-200">{drugList.filter(d=>d.remaining>0).length}</div></div>
+            <div className="rounded-lg bg-cyan-950 border border-cyan-800 p-2"><div className="text-[9px] font-black text-cyan-400">จำนวน Lot</div><div className="text-2xl font-black text-cyan-200">{activeLotCount}</div></div>
+            <div className="rounded-lg bg-blue-950 border border-blue-800 p-2"><div className="text-[9px] font-black text-blue-400">คงเหลือรวม</div><div className="break-words text-2xl font-black text-blue-200 [overflow-wrap:anywhere]">{totalQty.toLocaleString('th-TH')}</div></div>
+            <div className="rounded-lg bg-orange-950 border border-orange-800 p-2"><div className="text-[9px] font-black text-orange-400">ใกล้หมดอายุ ≤ 90 วัน</div><div className="text-2xl font-black text-orange-200">{exp90}</div></div>
+            <div className="rounded-lg bg-red-950 border border-red-800 p-2"><div className="text-[9px] font-black text-red-400">หมดอายุแต่มีของ</div><div className="text-2xl font-black text-red-200">{expired}</div></div>
+            <div className={`rounded-lg border p-2 ${discrepancyCount>0?'bg-fuchsia-950 border-fuchsia-700':'bg-slate-900 border-slate-700'}`}><div className={`text-[9px] font-black ${discrepancyCount>0?'text-fuchsia-300':'text-slate-500'}`}>รอตรวจนับ</div><div className={`text-2xl font-black ${discrepancyCount>0?'text-fuchsia-200':'text-slate-400'}`}>{discrepancyCount}</div></div>
           </div>
 
-          <div className="flex flex-col lg:flex-row gap-3 lg:items-center mb-5">
+          <div className="flex flex-col lg:flex-row gap-2 lg:items-center mb-4">
             <div className="flex gap-2">
-              <button onClick={()=>setStockTab('current')} className={`px-5 py-2.5 rounded-xl font-bold ${stockTab==='current'?'bg-emerald-600 text-white shadow':'bg-slate-100 text-slate-600'}`}><i className="fa-solid fa-layer-group mr-2"></i>รายการยาคงเหลือ</button>
-              <button onClick={()=>setStockTab('history')} className={`px-5 py-2.5 rounded-xl font-bold ${stockTab==='history'?'bg-emerald-600 text-white shadow':'bg-slate-100 text-slate-600'}`}><i className="fa-solid fa-clock-rotate-left mr-2"></i>ประวัติการเปลี่ยนยอด</button>
+              <button onClick={()=>setStockTab('current')} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${stockTab==='current'?'bg-emerald-600 text-white shadow':'bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-layer-group mr-1"></i>ยาคงเหลือ</button>
+              <button onClick={()=>setStockTab('history')} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${stockTab==='history'?'bg-emerald-600 text-white shadow':'bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-clock-rotate-left mr-1"></i>ประวัติ</button>
             </div>
-            <div className="relative flex-1"><i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i><input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="ค้นหาชื่อยา / รหัส / Lot / EXP" className="w-full pl-10 pr-3 py-3 border rounded-xl outline-none focus:border-emerald-500" /></div>
-            <div className="text-xs text-slate-400 font-bold">มูลค่าคงเหลือประมาณ ฿{totalValue.toLocaleString('th-TH',{maximumFractionDigits:0})}</div>
+            <div className="relative flex-1"><i className="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-500"></i><input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="ค้นหาชื่อยา / รหัส / Lot / EXP" className="w-full bg-slate-900 text-slate-100 pl-9 pr-3 py-2 border border-slate-700 rounded-lg text-[11px] outline-none focus:border-emerald-500" /></div>
+            <div className="text-[10px] text-slate-500 font-bold">≈ ฿{totalValue.toLocaleString('th-TH',{maximumFractionDigits:0})}</div>
           </div>
 
           {stockTab==='current' ? (
             loadingStock?<div className="p-12 text-center text-cyan-600 font-bold"><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังโหลดข้อมูลคลังยา...</div>:
-            <div className="space-y-7">
-              {shelfGroups.typeKeys.map(typeKey=><section key={typeKey}>
-                <div className="mb-3 flex items-center gap-2"><div className="h-7 w-1.5 rounded-full bg-emerald-500"></div><h3 className="text-lg font-black text-slate-800">{typesSource[typeKey]||`หมวด ${typeKey}`}</h3><span className="text-xs text-slate-400">ลากกล่องยาเพื่อจัดตำแหน่ง</span></div>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">{shelfGroups.groups[typeKey].map(item=>renderCard(item,typeKey))}</div>
+            <div className="space-y-4">
+              {shelfGroups.typeKeys.map(typeKey=><section key={typeKey} className="rounded-xl border border-slate-800 bg-slate-900/70 p-2.5 shadow-inner">
+                <div className="mb-2 flex items-center gap-2"><div className="h-4 w-1 rounded-full bg-emerald-400"></div><h3 className="text-xs font-black text-slate-200">{typesSource[typeKey]||`หมวด ${typeKey}`}</h3><span className="text-[9px] text-slate-500">{shelfGroups.groups[typeKey].length} กล่อง</span></div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-10 gap-2">{shelfGroups.groups[typeKey].map(item=>renderCard(item,typeKey))}</div>
+                <div className="mt-2 h-2 rounded-sm border-t border-slate-600 bg-gradient-to-b from-slate-700 to-slate-950 shadow-lg"></div>
               </section>)}
               {!shelfGroups.typeKeys.length&&<div className="p-12 text-center text-slate-400">ไม่พบรายการตามคำค้น</div>}
             </div>
@@ -7213,7 +7227,7 @@ useEffect(() => {
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>
               {currentUser?.role === 'hospital' && <button onClick={() => { if (currentView !== 'create_req') setEditReqId(null); requestView('create_req'); }} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='create_req'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-packing w-6 text-center mr-2"></i> เบิกยา / เติมยา</button>}
               <button onClick={() => requestView('drug_history')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='drug_history'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-chart-line w-6 text-center mr-2"></i> ประวัติการใช้ยา</button>
-              <button onClick={() => requestView('invs_lots')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='invs_lots'?'bg-cyan-600 text-white shadow-lg shadow-cyan-900/40':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> INVS Reference: Lot / EXP</button>
+              {currentUser?.role === 'hospital' && <button onClick={() => requestView('my_stock')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='my_stock'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> ชั้นยาของฉัน</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('map_dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='map_dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-map-location-dot w-6 text-center mr-2"></i> VMI Map Dashboard</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
               
@@ -7232,7 +7246,7 @@ useEffect(() => {
             </div>
           </div>
           <div className="flex-1 p-4 lg:p-10 overflow-auto w-full relative print-safe-wrapper print:p-0 print:bg-white">
-            <div className={`${currentView==='config'?'w-max min-w-full':'max-w-7xl'} mx-auto pb-20 print-safe-wrapper print:pb-0 print:max-w-full`}>
+            <div className={`${currentView==='config'?'w-max min-w-full':currentView==='my_stock'?'max-w-[1800px]':'max-w-7xl'} mx-auto pb-20 print-safe-wrapper print:pb-0 print:max-w-full`}>
               {currentView === 'dashboard' && <DashboardView ctx={ctx} />}
               {currentView === 'create_req' && <CreateReqView ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}

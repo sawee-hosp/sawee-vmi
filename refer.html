@@ -107,8 +107,11 @@ $('logout-btn').addEventListener('click', () => signOut(auth));
 // ========== Load list ==========
 async function loadList() {
   $('list-body').innerHTML = '<tr><td colspan="6" class="loading">กำลังโหลด...</td></tr>';
-  const hcode = userProfile?.hcode;
   const isHospital = userProfile?.role === 'hospital';
+  const hcode = (userProfile?.hcode || '').trim();
+
+  console.log('userProfile:', JSON.stringify(userProfile));
+  console.log('isHospital:', isHospital, 'hcode:', hcode);
 
   let q;
   if (isHospital) {
@@ -117,19 +120,21 @@ async function loadList() {
     q = query(collection(db,'referrals'),
               where('hcode','==',hcode), orderBy('refer_date','desc'), limit(500));
   } else {
-    $('list-body').innerHTML = '<tr><td colspan="6" class="empty">ไม่พบข้อมูลหน่วยบริการของคุณ</td></tr>';
+    $('list-body').innerHTML = '<tr><td colspan="6" class="empty">ไม่พบข้อมูลหน่วยบริการของคุณ กรุณาติดต่อผู้ดูแลระบบ</td></tr>';
+    console.log('no hcode and not hospital - userProfile was:', userProfile);
     return;
   }
 
   try {
     const snap = await getDocs(q);
     currentList = snap.docs.map(d => ({id: d.id, ...d.data()}));
+    console.log('loaded', currentList.length, 'records');
     renderList();
   } catch(e) {
+    console.error('loadList error:', e);
     $('list-body').innerHTML = `<tr><td colspan="6" class="empty">โหลดไม่สำเร็จ: ${esc(e.message)}</td></tr>`;
   }
 }
-
 function renderList() {
   const search = $('search').value.trim().toLowerCase();
   const filtered = currentList.filter(r => {

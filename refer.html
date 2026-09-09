@@ -350,11 +350,11 @@ $('modal-overlay').addEventListener('click', e => {
 // ========== Show/hide screens ==========
 function showLogin() {
   $('screen-login').style.display = '';
-  $('screen-app').style.display   = 'none';
+  $('screen-app').style.removeProperty('display');
 }
 function showApp() {
   $('screen-login').style.display = 'none';
-  $('screen-app').style.display   = '';
+  $('screen-app').style.setProperty('display', 'block', 'important');
   const name = userProfile?.full_name || currentUser.email;
   const hname = userProfile?.hcode ? ` · ${userProfile.hcode}` : '';
   $('user-info').textContent = name + hname;
@@ -392,8 +392,8 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font);
 #login-err{color:var(--warn);font-size:13px;margin-top:8px}
 
 /* App shell */
-#screen-app{display:none}
-header{background:var(--surface);border-bottom:1px solid var(--border);
+#screen-app{display:none !important}
+  header{background:var(--surface);border-bottom:1px solid var(--border);
   padding:0 20px;height:56px;display:flex;align-items:center;gap:16px}
 header h1{font-size:16px;font-weight:600;flex:1}
 #user-info{font-size:13px;color:var(--muted)}

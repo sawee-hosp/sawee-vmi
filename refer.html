@@ -7,6 +7,8 @@
 <title>ระบบส่งต่อผู้ป่วย รพ.สวี</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <style>
 :root{
@@ -22,15 +24,13 @@ body{background:var(--bg);color:var(--ink);
 button,input,select,textarea{font-family:inherit;font-size:inherit}
 a{color:var(--accent)}
 
-/* ---------- login ---------- */
 #screen-login{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
 .login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
   padding:36px;width:100%;max-width:370px}
 .login-card h1{font-size:19px;font-weight:600;margin-bottom:2px}
 .login-card p.sub{color:var(--muted);font-size:13px;margin-bottom:24px}
 .login-card label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
-.login-card input{width:100%;border:1px solid var(--border);border-radius:6px;
-  padding:9px 12px;margin-bottom:14px}
+.login-card input{width:100%;border:1px solid var(--border);border-radius:6px;padding:9px 12px;margin-bottom:14px}
 .btn-primary{background:var(--accent);color:#fff;border:none;border-radius:6px;
   padding:10px 18px;font-weight:500;cursor:pointer}
 .btn-primary:hover{background:#155839}
@@ -38,7 +38,6 @@ a{color:var(--accent)}
 .login-card .btn-primary{width:100%}
 #login-err{color:var(--warn);font-size:13px;margin-top:10px}
 
-/* ---------- shell ---------- */
 header{background:var(--surface);border-bottom:1px solid var(--border);
   padding:0 18px;min-height:54px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 header h1{font-size:16px;font-weight:600;white-space:nowrap}
@@ -62,17 +61,15 @@ main{padding:18px;max-width:1400px;margin:0 auto}
 .panel h2{font-size:15px;font-weight:600;margin-bottom:12px}
 .panel h2 .note{font-weight:400;color:var(--muted);font-size:13px}
 
-/* ---------- toolbar ---------- */
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
 .chip{background:var(--surface);border:1px solid var(--border);border-radius:6px;
   padding:6px 12px;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
 .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .chip .n{font-weight:600;margin-left:4px}
-input[type=text],input[type=date],input[type=number],select{
+input[type=text],input[type=email],input[type=password],input[type=date],input[type=number],select{
   border:1px solid var(--border);border-radius:6px;padding:7px 10px;background:var(--surface)}
 input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
-/* ---------- table ---------- */
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
 th{text-align:left;padding:9px 10px;font-size:12px;font-weight:600;color:var(--muted);
@@ -85,43 +82,41 @@ tbody tr:hover{background:#FAFCFA}
 .clin{font-size:12px;color:var(--accent)}
 .empty,.loading{text-align:center;padding:36px;color:var(--muted)}
 
-.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;
-  font-weight:500;white-space:nowrap}
+.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:500;white-space:nowrap}
 .pill{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;margin-left:4px}
 .pill-rem{background:var(--amber-dim);color:var(--amber)}
 .pill-warn{background:var(--warn-dim);color:var(--warn)}
+.pill-ok{background:var(--accent-dim);color:var(--accent)}
 
 .btn-sm{border:1px solid var(--accent);background:var(--accent-dim);color:var(--accent);
   border-radius:6px;padding:4px 10px;font-size:12.5px;cursor:pointer;white-space:nowrap}
 .btn-sm:hover{background:var(--accent);color:#fff}
 .btn-sm.grey{border-color:var(--border);background:var(--surface);color:var(--muted)}
 .btn-sm.grey:hover{background:var(--bg);color:var(--ink)}
+.btn-sm.red{border-color:var(--warn);background:var(--warn-dim);color:var(--warn)}
+.btn-sm.red:hover{background:var(--warn);color:#fff}
 
-/* ---------- cards / stats ---------- */
 .grid{display:grid;gap:12px}
 .g4{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
-.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
 .stat{background:var(--bg);border-radius:6px;padding:14px}
 .stat .v{font-size:26px;font-weight:700;line-height:1.1}
 .stat .k{font-size:12.5px;color:var(--muted);margin-top:3px}
 
 .barrow{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:13px}
 .barrow .lbl{width:170px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.barrow .track{flex:1;background:var(--bg);border-radius:4px;height:18px;position:relative}
+.barrow .track{flex:1;background:var(--bg);border-radius:4px;height:18px}
 .barrow .fill{background:var(--accent);height:100%;border-radius:4px;min-width:2px}
 .barrow .val{width:44px;text-align:right;font-weight:600;flex-shrink:0}
 
-/* tambon density */
-.mapgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
-.zone{border-radius:6px;padding:12px;border:1px solid var(--border);text-align:center}
-.zone .z-n{font-size:22px;font-weight:700}
-.zone .z-t{font-size:12.5px;margin-top:2px}
-.zone .z-s{font-size:11px;opacity:.75;margin-top:2px}
+#map{height:480px;border-radius:var(--r);border:1px solid var(--border)}
+.leaflet-container{font-family:'Noto Sans Thai',system-ui,sans-serif}
+.legend{background:#fff;padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.7;
+  box-shadow:0 1px 5px rgba(0,0,0,.3)}
+.legend i{width:14px;height:14px;display:inline-block;margin-right:6px;border-radius:3px;opacity:.85}
 
-/* outreach */
 .oc{border:1px solid var(--border);border-radius:var(--r);padding:14px;background:var(--surface)}
 .oc.soon{border-color:var(--accent);background:var(--accent-dim)}
-.oc.past{opacity:.5}
 .oc .d{font-size:13px;color:var(--muted)}
 .oc .h{font-size:15px;font-weight:600;margin:2px 0 6px}
 .oc .cd{font-size:22px;font-weight:700;color:var(--accent)}
@@ -132,10 +127,9 @@ tbody tr:hover{background:#FAFCFA}
 .msg.err{background:var(--warn-dim);color:var(--warn)}
 .msg.info{background:var(--amber-dim);color:var(--amber)}
 
-/* modal */
-.ov{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:2000;
   display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto}
-.modal{background:var(--surface);border-radius:var(--r);width:100%;max-width:900px;
+.modal{background:var(--surface);border-radius:var(--r);width:100%;max-width:960px;
   padding:24px;position:relative}
 .modal .x{position:absolute;top:12px;right:14px;background:none;border:none;
   font-size:24px;cursor:pointer;color:var(--muted);line-height:1}
@@ -152,12 +146,12 @@ tbody tr:hover{background:#FAFCFA}
 .old{color:var(--amber)}
 .right{text-align:right}
 .mono{font-variant-numeric:tabular-nums}
-@media(max-width:700px){.barrow .lbl{width:110px}}
+.scroll{max-height:300px;overflow-y:auto}
+@media(max-width:700px){.barrow .lbl{width:110px}#map{height:360px}}
 </style>
 </head>
 <body>
 
-<!-- ===================== LOGIN ===================== -->
 <div id="screen-login">
   <div class="login-card">
     <h1>ระบบส่งต่อผู้ป่วย รพ.สวี</h1>
@@ -171,7 +165,6 @@ tbody tr:hover{background:#FAFCFA}
   </div>
 </div>
 
-<!-- ===================== APP ===================== -->
 <div id="screen-app" class="hidden">
   <header>
     <h1>ระบบส่งต่อผู้ป่วย รพ.สวี</h1>
@@ -179,11 +172,10 @@ tbody tr:hover{background:#FAFCFA}
     <div class="who"><b id="who-name"></b><span id="who-role"></span></div>
     <button class="btn-ghost" id="btn-logout">ออกจากระบบ</button>
   </header>
-
   <nav id="nav"></nav>
 
   <main>
-    <!-- ---------- รายชื่อผู้ป่วย ---------- -->
+    <!-- รายชื่อผู้ป่วย -->
     <section id="tab-list">
       <div class="bar">
         <select id="sel-hcode" class="hidden"></select>
@@ -193,99 +185,93 @@ tbody tr:hover{background:#FAFCFA}
         <button class="chip" data-f="scheduled">นัดแล้ว</button>
         <button class="chip" data-f="visited">มารับยาแล้ว</button>
         <button class="chip" data-f="missed">ไม่มาตามนัด</button>
-        <div class="spacer" style="flex:1"></div>
+        <div style="flex:1"></div>
         <input type="text" id="q" placeholder="ค้นหาชื่อ หรือ HN" style="width:190px">
         <button class="btn-ghost" id="btn-reload">โหลดใหม่</button>
       </div>
-
       <div id="batch-bar" class="msg ok hidden"></div>
-
-      <div class="panel" style="padding:0">
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr>
-              <th style="width:34px"><input type="checkbox" id="chk-all"></th>
-              <th>ผู้ป่วย</th>
-              <th id="th-unit">หน่วยบริการ</th>
-              <th>ส่งต่อ</th>
-              <th>วันนัด</th>
-              <th>สถานะ</th>
-              <th style="width:150px"></th>
-            </tr></thead>
-            <tbody id="tb-list"><tr><td colspan="7" class="loading">กำลังโหลด...</td></tr></tbody>
-          </table>
-        </div>
-      </div>
+      <div class="panel" style="padding:0"><div class="tbl-wrap"><table>
+        <thead><tr>
+          <th style="width:34px"><input type="checkbox" id="chk-all"></th>
+          <th>ผู้ป่วย</th><th id="th-unit">หน่วยบริการ</th><th>ส่งต่อ</th>
+          <th>วันนัด</th><th>สถานะ</th><th style="width:150px"></th>
+        </tr></thead>
+        <tbody id="tb-list"><tr><td colspan="7" class="loading">กำลังโหลด...</td></tr></tbody>
+      </table></div></div>
     </section>
 
-    <!-- ---------- ปฏิทินออกหน่วย ---------- -->
+    <!-- รอบนัด -->
     <section id="tab-cal" class="hidden">
       <div class="panel">
-        <h2>วันออกหน่วยที่กำลังจะถึง <span class="note">นับถอยหลังและจำนวนผู้ป่วยที่นัดตรงวันนั้น</span></h2>
+        <h2>รอบนัดที่กำลังจะถึง <span class="note">กดที่การ์ดเพื่อเปิดรอบและดูยาที่ต้องเตรียม</span></h2>
         <div class="grid g4" id="cal-upcoming"></div>
       </div>
-      <div class="panel" id="cal-admin-panel">
-        <h2>จัดการวันออกหน่วย</h2>
+      <div class="panel">
+        <h2>จัดการวันนัด</h2>
+        <div class="msg info">ระบบคำนวณยาจากช่วงห่างระหว่างรอบนี้กับรอบถัดไป จึงต้องกำหนดวันนัดถัดไปไว้ล่วงหน้าอย่างน้อยหนึ่งวันก่อน จึงจะสรุปยาได้</div>
         <div class="frm" id="cal-form">
           <div class="fld"><label>รพ.สต.</label><select id="oc-hcode"></select></div>
-          <div class="fld"><label>วันที่ออกหน่วย</label><input type="date" id="oc-date"></div>
+          <div class="fld"><label>วันนัด</label><input type="date" id="oc-date"></div>
           <div class="fld grow"><label>หมายเหตุ</label><input type="text" id="oc-note" placeholder="เว้นว่างได้"></div>
-          <button class="btn-primary" id="btn-oc-add">เพิ่มวัน</button>
+          <button class="btn-primary" id="btn-oc-add">เพิ่มวันนัด</button>
         </div>
-        <div id="oc-msg"></div>
-        <div class="tbl-wrap" style="margin-top:14px">
-          <table>
-            <thead><tr><th>วันที่</th><th>รพ.สต.</th><th>หมายเหตุ</th><th>ผู้ป่วยที่นัด</th><th></th></tr></thead>
-            <tbody id="tb-oc"></tbody>
-          </table>
+        <div id="seed-wrap" class="hidden" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+          <button class="btn-ghost" id="btn-seed">นำเข้าแผนออกหน่วยปี 2569 (32 วัน)</button>
+          <span class="sub" style="margin-left:8px">ตามเอกสารแผนการออกให้บริการประชาชนโดยแพทย์และทีมสหวิชาชีพ วันที่ซ้ำจะถูกข้ามให้อัตโนมัติ</span>
         </div>
+        <div id="oc-msg" style="margin-top:10px"></div>
+        <div class="tbl-wrap" style="margin-top:12px"><table>
+          <thead><tr><th>วันนัด</th><th>รพ.สต.</th><th>หมายเหตุ</th>
+            <th class="right">ผู้ป่วย</th><th>ช่วงถึงรอบหน้า</th><th style="width:150px"></th></tr></thead>
+          <tbody id="tb-oc"></tbody>
+        </table></div>
       </div>
     </section>
 
-    <!-- ---------- จัดรอบนัด + สรุปยา ---------- -->
+    <!-- จัดชุดเอง -->
     <section id="tab-batch" class="hidden">
       <div class="panel">
-        <h2>จัดรอบนัดรับยา <span class="note">เลือกผู้ป่วยจากหน้ารายชื่อ แล้วกำหนดวันนัดพร้อมกันทั้งชุด</span></h2>
-        <div id="batch-empty" class="empty">ยังไม่ได้เลือกผู้ป่วย กลับไปที่หน้ารายชื่อผู้ป่วยแล้วติ๊กเลือกก่อน</div>
+        <h2>จัดชุดเฉพาะกิจ <span class="note">เลือกผู้ป่วยจากหน้ารายชื่อ แล้วกำหนดวันนัดพร้อมกัน</span></h2>
+        <div id="batch-empty" class="empty">ยังไม่ได้เลือกผู้ป่วย กลับไปหน้ารายชื่อแล้วติ๊กเลือกก่อน</div>
         <div id="batch-body" class="hidden">
           <div class="frm" style="margin-bottom:14px">
-            <div class="fld"><label>วันนัดรับยา</label><input type="date" id="b-date"></div>
+            <div class="fld"><label>วันนัด</label><input type="date" id="b-date"></div>
             <div class="fld"><label>จ่ายยากี่วัน</label><input type="number" id="b-days" value="90" min="1" max="365" style="width:100px"></div>
             <div class="fld"><label>เผื่อสำรอง %</label><input type="number" id="b-buffer" value="10" min="0" max="50" style="width:90px"></div>
             <div class="fld"><label style="visibility:hidden">.</label>
               <label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--ink);padding-bottom:8px">
                 <input type="checkbox" id="b-skipold" checked> ตัดยาที่ไม่ได้จ่ายเกิน 180 วัน</label></div>
             <button class="btn-primary" id="btn-b-save">บันทึกวันนัดให้ทุกคน</button>
-            <button class="btn-ghost" id="btn-b-clear">ล้างรายการที่เลือก</button>
+            <button class="btn-ghost" id="btn-b-clear">ล้างที่เลือก</button>
           </div>
           <div id="b-msg"></div>
           <div class="grid g2">
-            <div>
-              <div class="sec"><div class="st">ผู้ป่วยในรอบนี้ (<span id="b-count">0</span> คน)</div>
-                <div id="b-people" style="font-size:13.5px"></div></div>
-            </div>
-            <div>
-              <div class="sec"><div class="st">ยาที่ต้องเตรียมรวม</div>
-                <div class="tbl-wrap"><table>
-                  <thead><tr><th>ชื่อยา</th><th class="right">คน</th><th class="right">ต้องเตรียม</th><th>หมายเหตุ</th></tr></thead>
-                  <tbody id="tb-drugsum"></tbody>
-                </table></div>
-              </div>
-            </div>
+            <div class="sec"><div class="st">ผู้ป่วยในชุดนี้ (<span id="b-count">0</span> คน)</div>
+              <div id="b-people" class="scroll" style="font-size:13.5px"></div></div>
+            <div class="sec"><div class="st">ยาที่ต้องเตรียมรวม</div>
+              <div class="tbl-wrap scroll"><table>
+                <thead><tr><th>ชื่อยา</th><th class="right">คน</th><th class="right">ต้องเตรียม</th><th>หมายเหตุ</th></tr></thead>
+                <tbody id="tb-drugsum"></tbody></table></div></div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ---------- Dashboard ---------- -->
+    <!-- Dashboard -->
     <section id="tab-dash" class="hidden">
+      <div class="panel"><h2>ภาพรวม</h2><div class="grid g4" id="dash-stats"></div></div>
       <div class="panel">
-        <h2>ภาพรวม</h2>
-        <div class="grid g4" id="dash-stats"></div>
-      </div>
-      <div class="panel">
-        <h2>จำนวนผู้ป่วยรายตำบล <span class="note">ตามที่อยู่ในทะเบียน</span></h2>
-        <div class="mapgrid" id="dash-map"></div>
+        <h2>แผนที่ผู้ป่วย
+          <span class="note">วงกลมใหญ่และสีเข้ม = คนไข้มาก</span></h2>
+        <div class="bar">
+          <button class="chip on" data-map="tambon">รายตำบล</button>
+          <button class="chip" data-map="hcode">ราย รพ.สต.</button>
+          <div style="flex:1"></div>
+          <span id="map-status" class="sub"></span>
+          <button class="btn-ghost hidden" id="btn-geo">ค้นพิกัด รพ.สต. อัตโนมัติ</button>
+        </div>
+        <div id="map"></div>
+        <div id="geo-msg" style="margin-top:10px"></div>
       </div>
       <div class="grid g2">
         <div class="panel"><h2>แยกตาม รพ.สต.</h2><div id="dash-hcode"></div></div>
@@ -297,23 +283,46 @@ tbody tr:hover{background:#FAFCFA}
       </div>
     </section>
 
-    <!-- ---------- วิธีใช้ยา ---------- -->
-    <section id="tab-drug" class="hidden">
+    <!-- ผู้ใช้ -->
+    <section id="tab-user" class="hidden">
       <div class="panel">
-        <h2>ตารางวิธีใช้ยา <span class="note">ใส่จำนวนเม็ดต่อวัน เพื่อให้ระบบคำนวณยาที่ต้องเตรียมได้</span></h2>
-        <div class="msg info">รหัสวิธีใช้มาจากตาราง drugusage ของ HOSxP ระบบดึงรหัสที่พบจริงในข้อมูลผู้ป่วยมาให้ ยา prn ให้ติ๊กช่อง prn แล้วเว้นจำนวนต่อวันว่างไว้ ระบบจะไม่คำนวณให้แต่จะแจ้งเตือนตอนสรุปยา</div>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th style="width:90px">รหัส</th><th>วิธีใช้ที่พบในข้อมูล</th>
-              <th style="width:120px">เม็ด/วัน</th><th style="width:80px">prn</th>
-              <th style="width:90px">พบใน</th><th style="width:100px"></th></tr></thead>
-            <tbody id="tb-drug"></tbody>
-          </table>
+        <h2>เพิ่มผู้ใช้ใหม่</h2>
+        <div class="msg info">ระบบจะสร้างบัญชีล็อกอินและกำหนดสิทธิ์ให้ในขั้นตอนเดียว ผู้ใช้ใหม่ควรเปลี่ยนรหัสผ่านเองภายหลัง บัญชีรายบุคคลเท่านั้น ห้ามใช้บัญชีกลางร่วมกันทั้งสถานี</div>
+        <div class="frm">
+          <div class="fld"><label>ชื่อ-นามสกุล</label><input type="text" id="u-name" style="width:180px"></div>
+          <div class="fld"><label>อีเมล</label><input type="email" id="u-email" style="width:220px"></div>
+          <div class="fld"><label>รหัสผ่านชั่วคราว</label><input type="text" id="u-pass" style="width:170px"></div>
+          <div class="fld"><label>บทบาท</label><select id="u-role">
+            <option value="rpst">เจ้าหน้าที่ รพ.สต.</option>
+            <option value="hospital">เจ้าหน้าที่ รพ.สวี (ดูอย่างเดียว)</option>
+            <option value="admin">ผู้ดูแลระบบ</option></select></div>
+          <div class="fld"><label>รพ.สต.</label><select id="u-hcode"></select></div>
+          <button class="btn-primary" id="btn-u-add">สร้างบัญชี</button>
         </div>
+        <div id="u-msg" style="margin-top:10px"></div>
+      </div>
+      <div class="panel">
+        <h2>ผู้ใช้ในระบบ</h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>ชื่อ</th><th>บทบาท</th><th>รพ.สต.</th><th>UID</th><th style="width:200px"></th></tr></thead>
+          <tbody id="tb-user"></tbody></table></div>
       </div>
     </section>
 
-    <!-- ---------- Audit log ---------- -->
+    <!-- วิธีใช้ยา -->
+    <section id="tab-drug" class="hidden">
+      <div class="panel">
+        <h2>ตารางวิธีใช้ยา <span class="note">ใส่จำนวนเม็ดต่อวัน เพื่อให้ระบบคำนวณยาที่ต้องเตรียมได้</span></h2>
+        <div class="msg info">รหัสวิธีใช้มาจากตาราง drugusage ของ HOSxP ระบบดึงเฉพาะรหัสที่พบจริงในข้อมูลผู้ป่วยมาให้ เรียงตามความถี่ ยา prn ให้ติ๊กช่อง prn แล้วเว้นจำนวนต่อวันไว้ ระบบจะไม่คำนวณให้แต่จะแจ้งเตือนตอนสรุปยา</div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th style="width:90px">รหัส</th><th>วิธีใช้ที่พบในข้อมูล</th>
+            <th style="width:110px">เม็ด/วัน</th><th style="width:70px">prn</th>
+            <th class="right" style="width:80px">พบใน</th><th style="width:100px"></th></tr></thead>
+          <tbody id="tb-drug"></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- Log -->
     <section id="tab-log" class="hidden">
       <div class="panel">
         <h2>บันทึกการเข้าถึงข้อมูล</h2>
@@ -322,29 +331,27 @@ tbody tr:hover{background:#FAFCFA}
           <input type="text" id="log-q" placeholder="ค้นหาชื่อผู้ใช้ หรือ HN" style="width:220px">
           <button class="btn-ghost" id="btn-log-reload">โหลดใหม่</button>
         </div>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th style="width:150px">เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>เป้าหมาย</th><th>รายละเอียด</th></tr></thead>
-            <tbody id="tb-log"><tr><td colspan="5" class="loading">กำลังโหลด...</td></tr></tbody>
-          </table>
-        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th style="width:150px">เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th>
+            <th>เป้าหมาย</th><th>รายละเอียด</th></tr></thead>
+          <tbody id="tb-log"><tr><td colspan="5" class="loading">กำลังโหลด...</td></tr></tbody>
+        </table></div>
       </div>
     </section>
   </main>
 </div>
 
-<!-- ===================== MODAL ===================== -->
 <div id="ov" class="ov hidden"><div class="modal"><button class="x" id="ov-x">&times;</button><div id="ov-body"></div></div></div>
 
 <script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc,
   updateDoc, query, where, orderBy, limit, serverTimestamp, writeBatch }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-/* ========== CONFIG ========== */
+/* ================= CONFIG ================= */
 const FIREBASE_CONFIG = {
   apiKey:            "AIzaSyCSi-vbZ1pLuv7UUOrxmHVtpfl_qz6KdVk",
   authDomain:        "sawee-refer.firebaseapp.com",
@@ -353,37 +360,51 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "755502284752",
   appId:             "1:755502284752:web:3a4e2f81e50affa04a03d5"
 };
+const SAWEE_CENTER = [10.36, 99.10];   // จุดกลางแผนที่ตอนเปิดครั้งแรก
 
-const STATUS = {
-  new:'ส่งต่อใหม่', acknowledged:'รับตัวแล้ว', scheduled:'นัดแล้ว',
-  visited:'มารับยาแล้ว', missed:'ไม่มาตามนัด', returned:'ส่งกลับ รพ.', cancelled:'ยกเลิก'
-};
-const SC = {
-  new:'#B8860B', acknowledged:'#3E6E8E', scheduled:'#3E6E8E',
-  visited:'#1B6B47', missed:'#8B2020', returned:'#5F6F63', cancelled:'#8A8A8A'
-};
+/* แผนการออกให้บริการประชาชนโดยแพทย์และทีมสหวิชาชีพ ประจำปี พ.ศ. 2569
+   ถอดจากเอกสารของ สสอ. ใช้เป็นค่าตั้งต้น admin แก้ไขหรือเพิ่มเองได้ภายหลัง */
+const SEED_ROUNDS = [
+  ['2026-08-06','09424'], ['2026-08-13','09427'], ['2026-08-18','09420'],
+  ['2026-08-20','09428'], ['2026-08-27','09421'],
+  ['2026-09-01','09415'], ['2026-09-03','09426'], ['2026-09-10','09427'],
+  ['2026-09-15','09416'], ['2026-09-17','09428'], ['2026-09-24','09421'],
+  ['2026-10-01','09417'], ['2026-10-06','14094'], ['2026-10-07','09419'],
+  ['2026-10-08','09427'], ['2026-10-14','09425'], ['2026-10-15','09428'],
+  ['2026-10-20','09422'], ['2026-10-21','09423'], ['2026-10-27','09418'],
+  ['2026-10-28','14093'], ['2026-10-29','09421'],
+  ['2026-11-05','09424'], ['2026-11-12','09427'], ['2026-11-17','09420'],
+  ['2026-11-19','09428'], ['2026-11-26','09421'],
+  ['2026-12-01','09415'], ['2026-12-03','09426'], ['2026-12-15','09416'],
+  ['2026-12-17','09428'], ['2026-12-24','09421'],
+];
+
+const STATUS = { new:'ส่งต่อใหม่', acknowledged:'รับตัวแล้ว', scheduled:'นัดแล้ว',
+  visited:'มารับยาแล้ว', missed:'ไม่มาตามนัด', returned:'ส่งกลับ รพ.', cancelled:'ยกเลิก' };
+const SC = { new:'#B8860B', acknowledged:'#3E6E8E', scheduled:'#3E6E8E',
+  visited:'#1B6B47', missed:'#8B2020', returned:'#5F6F63', cancelled:'#8A8A8A' };
 const TODO = ['new','acknowledged','scheduled'];
 const LAB = { bp:'ความดัน', fbs:'FBS', dtx:'DTX', hba1c:'HbA1c', chol:'Chol',
   ldl:'LDL', hdl:'HDL', tg:'TG', egfr:'eGFR', cr:'Creatinine', k:'Potassium' };
-const ACTION_LABEL = {
-  'login':'เข้าสู่ระบบ', 'logout':'ออกจากระบบ', 'view_list':'เปิดรายชื่อผู้ป่วย',
-  'view_patient':'เปิดเวชระเบียนผู้ป่วย', 'change_status':'เปลี่ยนสถานะ',
-  'batch_appoint':'กำหนดวันนัดเป็นชุด', 'view_dashboard':'เปิดแดชบอร์ด',
-  'view_log':'เปิดบันทึกการเข้าถึง', 'edit_outreach':'แก้ไขวันออกหน่วย',
-  'edit_drugusage':'แก้ไขวิธีใช้ยา'
-};
+const ROLE_LABEL = { admin:'ผู้ดูแลระบบ', hospital:'เจ้าหน้าที่ รพ.สวี', rpst:'เจ้าหน้าที่ รพ.สต.' };
+const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออกจากระบบ', view_list:'เปิดรายชื่อผู้ป่วย',
+  view_patient:'เปิดเวชระเบียนผู้ป่วย', change_status:'เปลี่ยนสถานะ', batch_appoint:'กำหนดวันนัดเป็นชุด',
+  open_round:'เปิดรอบนัด', view_dashboard:'เปิดแดชบอร์ด', view_log:'เปิดบันทึกการเข้าถึง',
+  edit_outreach:'แก้ไขวันนัด', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
+  edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.' };
 
-/* ========== INIT ========== */
+/* ================= INIT ================= */
 const app  = initializeApp(FIREBASE_CONFIG);
 const auth = getAuth(app);
 const db   = getFirestore(app);
 
-let ME = null, PROFILE = null;
-let LIST = [], RPST = [], OUTREACH = [], DRUGMAP = {};
-let FILTER = 'todo', VIEW_HCODE = '';
+let ME=null, PROFILE=null;
+let LIST=[], RPST=[], OUTREACH=[], DRUGMAP={}, USERS=[], LOGS=[];
+let FILTER='todo', VIEW_HCODE='', MAPMODE='tambon';
+let MAP=null, LAYER=null;
 const SELECTED = new Set();
 
-/* ========== UTIL ========== */
+/* ================= UTIL ================= */
 const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -391,125 +412,113 @@ const TMON = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','�
 function thDate(iso){
   if(!iso) return '-';
   const p = String(iso).slice(0,10).split('-');
-  if(p.length<3) return iso;
-  return `${+p[2]} ${TMON[+p[1]]} ${+p[0]+543}`;
+  return p.length<3 ? iso : `${+p[2]} ${TMON[+p[1]]} ${+p[0]+543}`;
 }
 const todayISO = () => new Date().toISOString().slice(0,10);
-function daysFrom(iso){
-  if(!iso) return null;
-  return Math.round((new Date(iso+'T00:00:00') - new Date(todayISO()+'T00:00:00'))/86400000);
-}
-function daysAgo(iso){ const d = daysFrom(iso); return d===null?null:-d; }
-const isAdmin    = () => PROFILE?.role === 'admin';
-const isHospital = () => PROFILE?.role === 'hospital';
-const isRpst     = () => PROFILE?.role === 'rpst';
-const seesAll    = () => isAdmin() || isHospital();
-const canEdit    = () => isAdmin() || isRpst();
-const myHcode    = () => (PROFILE?.hcode || '').trim();
-const show = (id,on) => $(id).classList.toggle('hidden', !on);
+const dayDiff = (a,b) => Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000);
+const daysFrom = iso => iso ? dayDiff(todayISO(), iso) : null;
+const isAdmin=()=>PROFILE?.role==='admin', isHospital=()=>PROFILE?.role==='hospital',
+      isRpst=()=>PROFILE?.role==='rpst';
+const seesAll=()=>isAdmin()||isHospital();
+const canEdit=()=>isAdmin()||isRpst();
+const myHcode=()=>(PROFILE?.hcode||'').trim();
+const show=(id,on)=>$(id).classList.toggle('hidden', !on);
+const rpstName=h=>(RPST.find(r=>r.hcode===h)?.name)||h||'-';
 
-/* ========== AUDIT ========== */
 async function audit(action, target, detail){
   try{
     await addDoc(collection(db,'audit_logs'), {
-      ts: serverTimestamp(),
-      client_time: new Date().toISOString().slice(0,19).replace('T',' '),
-      uid: ME?.uid || null, email: ME?.email || null,
-      name: PROFILE?.full_name || null, role: PROFILE?.role || null,
-      hcode: myHcode() || null,
-      action, target: target||null, detail: detail||null
-    });
+      ts: serverTimestamp(), client_time: new Date().toISOString().slice(0,19).replace('T',' '),
+      uid: ME?.uid||null, email: ME?.email||null, name: PROFILE?.full_name||null,
+      role: PROFILE?.role||null, hcode: myHcode()||null,
+      action, target: target||null, detail: detail||null });
   }catch(e){ console.warn('audit failed', e); }
 }
 
-/* ========== AUTH ========== */
+/* ================= AUTH ================= */
 onAuthStateChanged(auth, async user => {
   if(!user){ ME=null; PROFILE=null; show('screen-login',true); show('screen-app',false); return; }
   ME = user;
-  try{
-    const s = await getDoc(doc(db,'users',user.uid));
-    PROFILE = s.exists() ? s.data() : null;
-  }catch(e){ PROFILE = null; }
+  try{ const s = await getDoc(doc(db,'users',user.uid)); PROFILE = s.exists()?s.data():null; }
+  catch(e){ PROFILE=null; }
   if(!PROFILE){
-    $('login-err').textContent = 'บัญชีนี้ยังไม่ได้กำหนดสิทธิ์ กรุณาติดต่อผู้ดูแลระบบ (UID: '+user.uid+')';
+    $('login-err').textContent = 'บัญชีนี้ยังไม่ได้กำหนดสิทธิ์ ติดต่อผู้ดูแลระบบ (UID: '+user.uid+')';
     await signOut(auth); return;
   }
   show('screen-login',false); show('screen-app',true);
   await startApp();
 });
-
 $('btn-login').addEventListener('click', async ()=>{
-  $('login-err').textContent = '';
-  $('btn-login').disabled = true;
+  $('login-err').textContent=''; $('btn-login').disabled=true;
   try{ await signInWithEmailAndPassword(auth, $('email').value.trim(), $('password').value); }
-  catch(e){ $('login-err').textContent = 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'; }
-  $('btn-login').disabled = false;
+  catch(e){ $('login-err').textContent='อีเมลหรือรหัสผ่านไม่ถูกต้อง'; }
+  $('btn-login').disabled=false;
 });
 $('password').addEventListener('keydown', e=>{ if(e.key==='Enter') $('btn-login').click(); });
 $('btn-logout').addEventListener('click', async ()=>{ await audit('logout'); signOut(auth); });
 
-/* ========== NAV ========== */
+/* ================= NAV ================= */
 const TABS = [
-  {id:'list',  label:'รายชื่อผู้ป่วย',  all:true},
-  {id:'cal',   label:'ปฏิทินออกหน่วย',  all:true},
-  {id:'batch', label:'จัดรอบนัด + สรุปยา', all:true},
-  {id:'dash',  label:'แดชบอร์ด',        admin:true},
-  {id:'drug',  label:'วิธีใช้ยา',        adminOnly:true},
-  {id:'log',   label:'บันทึกการเข้าถึง', adminOnly:true},
+  {id:'list', label:'รายชื่อผู้ป่วย', all:1},
+  {id:'cal',  label:'รอบนัด',        all:1},
+  {id:'batch',label:'จัดชุดเฉพาะกิจ', all:1},
+  {id:'dash', label:'แดชบอร์ด',      seesAll:1},
+  {id:'user', label:'จัดการผู้ใช้',   adminOnly:1},
+  {id:'drug', label:'วิธีใช้ยา',      adminOnly:1},
+  {id:'log',  label:'บันทึกการเข้าถึง', adminOnly:1},
 ];
 function buildNav(){
-  $('nav').innerHTML = TABS.filter(t =>
-    t.all || (t.admin && seesAll()) || (t.adminOnly && isAdmin())
-  ).map((t,i)=>`<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}</button>`).join('');
-  $('nav').querySelectorAll('button').forEach(b =>
+  const vis = TABS.filter(t => t.all || (t.seesAll&&seesAll()) || (t.adminOnly&&isAdmin()));
+  $('nav').innerHTML = vis.map((t,i)=>
+    `<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}</button>`).join('');
+  $('nav').querySelectorAll('button').forEach(b=>
     b.addEventListener('click', ()=>openTab(b.dataset.tab)));
 }
 function openTab(id){
-  $('nav').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.tab===id));
-  TABS.forEach(t => show('tab-'+t.id, t.id===id));
+  $('nav').querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.tab===id));
+  TABS.forEach(t=>show('tab-'+t.id, t.id===id));
   if(id==='cal')   renderCal();
   if(id==='batch') renderBatch();
   if(id==='dash')  { renderDash(); audit('view_dashboard'); }
+  if(id==='user')  loadUsers();
   if(id==='drug')  renderDrugMap();
   if(id==='log')   loadLog();
 }
 
-/* ========== START ========== */
+/* ================= START ================= */
 async function startApp(){
   $('who-name').textContent = PROFILE.full_name || ME.email;
-  const rl = {admin:'ผู้ดูแลระบบ', hospital:'เจ้าหน้าที่ รพ.สวี', rpst:'เจ้าหน้าที่ รพ.สต.'}[PROFILE.role] || PROFILE.role;
-  $('who-role').textContent = rl + (myHcode() ? ' · ' + myHcode() : '');
+  $('who-role').textContent = (ROLE_LABEL[PROFILE.role]||PROFILE.role) +
+    (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   buildNav();
   await audit('login');
   await Promise.all([loadRpst(), loadOutreach(), loadDrugMap()]);
+  $('who-role').textContent = (ROLE_LABEL[PROFILE.role]||PROFILE.role) +
+    (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   if(seesAll()){
     $('sel-hcode').classList.remove('hidden');
     $('sel-hcode').innerHTML = '<option value="">ทุก รพ.สต.</option>' +
       RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
-    $('sel-hcode').addEventListener('change', e=>{ VIEW_HCODE = e.target.value; loadList(); });
-  }else{
-    $('th-unit').classList.add('hidden');
-  }
+    $('sel-hcode').addEventListener('change', e=>{ VIEW_HCODE=e.target.value; loadList(); });
+  }else $('th-unit').classList.add('hidden');
   await loadList();
 }
-
 async function loadRpst(){
   try{
     const s = await getDocs(collection(db,'rpst'));
-    RPST = s.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>(a.hcode||'').localeCompare(b.hcode||''));
+    RPST = s.docs.map(d=>({id:d.id, ...d.data()}))
+                 .sort((a,b)=>(a.hcode||'').localeCompare(b.hcode||''));
   }catch(e){ RPST=[]; }
 }
-const rpstName = h => (RPST.find(r=>r.hcode===h)?.name) || h || '-';
 
-/* ========== LIST ========== */
+/* ================= LIST ================= */
 async function loadList(){
   $('tb-list').innerHTML = '<tr><td colspan="7" class="loading">กำลังโหลด...</td></tr>';
   const scope = isRpst() ? myHcode() : VIEW_HCODE;
-  let q1;
   try{
-    if(scope) q1 = query(collection(db,'referrals'), where('hcode','==',scope),
-                         orderBy('refer_date','desc'), limit(1000));
-    else      q1 = query(collection(db,'referrals'), orderBy('refer_date','desc'), limit(1000));
+    const q1 = scope
+      ? query(collection(db,'referrals'), where('hcode','==',scope), orderBy('refer_date','desc'), limit(1000))
+      : query(collection(db,'referrals'), orderBy('refer_date','desc'), limit(1000));
     const s = await getDocs(q1);
     LIST = s.docs.map(d=>({id:d.id, ...d.data()}));
     renderList();
@@ -519,7 +528,6 @@ async function loadList(){
   }
 }
 const stOf = r => r.workflow?.status || 'new';
-
 function filtered(){
   const q = $('q').value.trim().toLowerCase();
   return LIST.filter(r=>{
@@ -527,67 +535,52 @@ function filtered(){
     if(FILTER==='todo' && !TODO.includes(st)) return false;
     if(FILTER!=='todo' && FILTER!=='all' && st!==FILTER) return false;
     if(q){
-      const n = (r.patient?.full_name||'').toLowerCase();
+      const n=(r.patient?.full_name||'').toLowerCase();
       if(!n.includes(q) && !(r.hn||'').toLowerCase().includes(q)) return false;
     }
     return true;
   });
 }
 function renderList(){
-  const cnt = {}; LIST.forEach(r=>{ const s=stOf(r); cnt[s]=(cnt[s]||0)+1; });
-  const todo = TODO.reduce((a,s)=>a+(cnt[s]||0),0);
-  $('c-todo').innerHTML = `ที่ต้องดำเนินการ <span class="n">${todo}</span>`;
+  const cnt={}; LIST.forEach(r=>{ const s=stOf(r); cnt[s]=(cnt[s]||0)+1; });
+  $('c-todo').innerHTML = `ที่ต้องดำเนินการ <span class="n">${TODO.reduce((a,s)=>a+(cnt[s]||0),0)}</span>`;
   $('c-all').innerHTML  = `ทั้งหมด <span class="n">${LIST.length}</span>`;
   document.querySelectorAll('.chip[data-f]').forEach(c=>{
     const f=c.dataset.f;
     if(f!=='todo'&&f!=='all') c.innerHTML = `${STATUS[f]} <span class="n">${cnt[f]||0}</span>`;
     c.classList.toggle('on', f===FILTER);
   });
-
   const rows = filtered();
-  if(!rows.length){ $('tb-list').innerHTML='<tr><td colspan="7" class="empty">ไม่พบรายการ</td></tr>'; return; }
-
+  if(!rows.length){ $('tb-list').innerHTML='<tr><td colspan="7" class="empty">ไม่พบรายการ</td></tr>';
+    updateBatchBar(); return; }
   $('tb-list').innerHTML = rows.map(r=>{
-    const st = stOf(r), col = SC[st]||'#888';
-    const ago = daysAgo(r.refer_date);
-    const ap  = r.workflow?.appoint_date;
-    const apd = ap ? daysFrom(ap) : null;
-    const p = r.patient||{};
-    const next = st==='new' ? 'acknowledged' : st==='acknowledged' ? 'scheduled'
-               : st==='scheduled' ? 'visited' : null;
-    const nextLbl = {acknowledged:'รับตัว', scheduled:'นัดแล้ว', visited:'มารับยาแล้ว'}[next];
+    const st=stOf(r), col=SC[st]||'#888', p=r.patient||{};
+    const ago = r.refer_date ? -dayDiff(todayISO(), r.refer_date) : null;
+    const ap = r.workflow?.appoint_date, apd = ap?daysFrom(ap):null;
+    const next = st==='new'?'acknowledged' : st==='acknowledged'?'scheduled'
+               : st==='scheduled'?'visited' : null;
+    const nl = {acknowledged:'รับตัว', scheduled:'นัด', visited:'มารับยาแล้ว'}[next];
     return `<tr>
       <td><input type="checkbox" class="rowchk" data-id="${esc(r.id)}"${SELECTED.has(r.id)?' checked':''}></td>
-      <td>
-        <div class="nm">${esc(p.full_name||r.hn)}</div>
+      <td><div class="nm">${esc(p.full_name||r.hn)}</div>
         <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี
           ${p.moo?` · หมู่ ${esc(p.moo)} ${esc(p.tambon||'')}`:''}
           ${r.case_type==='data_only'?'<span class="pill pill-rem">Remission</span>':''}
           ${r.hcode_conflict?'<span class="pill pill-warn">ปลายทางขัดแย้ง</span>':''}</div>
-        ${r.clinics?`<div class="clin">${esc(String(r.clinics).replace(/\d+:/g,''))}</div>`:''}
-      </td>
+        ${r.clinics?`<div class="clin">${esc(String(r.clinics).replace(/\d+:/g,''))}</div>`:''}</td>
       ${seesAll()?`<td class="sub">${esc(r.hcode_name||r.hcode||'-')}</td>`:''}
       <td><div>${thDate(r.refer_date)}</div><div class="sub">${ago===null?'':ago+' วันก่อน'}</div></td>
-      <td>${ap?`<div>${thDate(ap)}</div><div class="sub ${apd!==null&&apd<0?'old':''}">${
-            apd===null?'':apd===0?'วันนี้':apd>0?'อีก '+apd+' วัน':'เลยมา '+(-apd)+' วัน'}</div>`
-          :'<span class="sub">-</span>'}</td>
+      <td>${ap?`<div>${thDate(ap)}</div><div class="sub ${apd<0?'old':''}">${
+          apd===0?'วันนี้':apd>0?'อีก '+apd+' วัน':'เลยมา '+(-apd)+' วัน'}</div>`:'<span class="sub">-</span>'}</td>
       <td><span class="tag" style="background:${col}1a;color:${col}">${STATUS[st]||st}</span></td>
       <td class="right">
-        ${next&&canEdit()?`<button class="btn-sm" data-quick="${esc(r.id)}" data-to="${next}">${nextLbl}</button> `:''}
-        <button class="btn-sm grey" data-open="${esc(r.id)}">ดู</button>
-      </td>
-    </tr>`;
+        ${next&&canEdit()?`<button class="btn-sm" data-quick="${esc(r.id)}" data-to="${next}">${nl}</button> `:''}
+        <button class="btn-sm grey" data-open="${esc(r.id)}">ดู</button></td></tr>`;
   }).join('');
-
-  $('tb-list').querySelectorAll('[data-open]').forEach(b=>
-    b.addEventListener('click',()=>openDetail(b.dataset.open)));
-  $('tb-list').querySelectorAll('[data-quick]').forEach(b=>
-    b.addEventListener('click',()=>quickStatus(b.dataset.quick, b.dataset.to)));
-  $('tb-list').querySelectorAll('.rowchk').forEach(c=>
-    c.addEventListener('change',()=>{
-      c.checked ? SELECTED.add(c.dataset.id) : SELECTED.delete(c.dataset.id);
-      updateBatchBar();
-    }));
+  $('tb-list').querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openDetail(b.dataset.open)));
+  $('tb-list').querySelectorAll('[data-quick]').forEach(b=>b.addEventListener('click',()=>quickStatus(b.dataset.quick,b.dataset.to)));
+  $('tb-list').querySelectorAll('.rowchk').forEach(c=>c.addEventListener('change',()=>{
+    c.checked?SELECTED.add(c.dataset.id):SELECTED.delete(c.dataset.id); updateBatchBar(); }));
   updateBatchBar();
 }
 document.querySelectorAll('.chip[data-f]').forEach(c=>
@@ -595,372 +588,630 @@ document.querySelectorAll('.chip[data-f]').forEach(c=>
 $('q').addEventListener('input', renderList);
 $('btn-reload').addEventListener('click', loadList);
 $('chk-all').addEventListener('change', e=>{
-  filtered().forEach(r=> e.target.checked ? SELECTED.add(r.id) : SELECTED.delete(r.id));
-  renderList();
-});
+  filtered().forEach(r=> e.target.checked?SELECTED.add(r.id):SELECTED.delete(r.id));
+  renderList(); });
 function updateBatchBar(){
-  const n = SELECTED.size;
-  show('batch-bar', n>0);
-  if(n) $('batch-bar').innerHTML = `เลือกไว้ ${n} คน — ไปที่แท็บ <b>จัดรอบนัด + สรุปยา</b> เพื่อกำหนดวันนัดและดูยาที่ต้องเตรียม`;
+  const n=SELECTED.size; show('batch-bar', n>0);
+  if(n) $('batch-bar').innerHTML = `เลือกไว้ ${n} คน — ไปแท็บ <b>จัดชุดเฉพาะกิจ</b> เพื่อกำหนดวันนัดและดูยาที่ต้องเตรียม`;
 }
 
-/* ========== STATUS ========== */
-async function setStatus(id, to, extra){
-  const patch = { 'workflow.status': to, 'workflow.updated_at': serverTimestamp(),
-                  'workflow.updated_by': PROFILE.full_name || ME.email };
-  if(extra?.appoint_date !== undefined) patch['workflow.appoint_date'] = extra.appoint_date;
-  if(extra?.note !== undefined)         patch['workflow.note'] = extra.note;
+/* ================= STATUS ================= */
+async function setStatus(id,to,extra){
+  const patch = { 'workflow.status':to, 'workflow.updated_at':serverTimestamp(),
+                  'workflow.updated_by': PROFILE.full_name||ME.email };
+  if(extra?.appoint_date!==undefined) patch['workflow.appoint_date']=extra.appoint_date;
+  if(extra?.note!==undefined)         patch['workflow.note']=extra.note;
   await updateDoc(doc(db,'referrals',id), patch);
   const r = LIST.find(x=>x.id===id);
-  if(r){ r.workflow = {...(r.workflow||{}), status:to,
-          ...(extra?.appoint_date!==undefined?{appoint_date:extra.appoint_date}:{}),
-          ...(extra?.note!==undefined?{note:extra.note}:{}),
-          updated_by: PROFILE.full_name||ME.email }; }
+  if(r) r.workflow = {...(r.workflow||{}), status:to,
+    ...(extra?.appoint_date!==undefined?{appoint_date:extra.appoint_date}:{}),
+    ...(extra?.note!==undefined?{note:extra.note}:{}),
+    updated_by: PROFILE.full_name||ME.email};
   await audit('change_status', id, {to, hn:r?.hn, ...extra});
 }
-async function quickStatus(id, to){
-  try{
-    if(to==='scheduled'){ openDetail(id); return; }
-    await setStatus(id, to);
-    renderList();
-  }catch(e){ alert('บันทึกไม่สำเร็จ: '+e.message); }
+async function quickStatus(id,to){
+  if(to==='scheduled'){ openDetail(id); return; }
+  try{ await setStatus(id,to); renderList(); }
+  catch(e){ alert('บันทึกไม่สำเร็จ: '+e.message); }
 }
 
-/* ========== DETAIL ========== */
+/* ================= DETAIL ================= */
 function openDetail(id){
-  const r = LIST.find(x=>x.id===id); if(!r) return;
-  const p = r.patient||{}, st = stOf(r);
+  const r=LIST.find(x=>x.id===id); if(!r) return;
+  const p=r.patient||{}, st=stOf(r);
   audit('view_patient', id, {hn:r.hn, name:p.full_name});
-
-  const labs = (r.labs||[]).map(l=>{
-    const old = (l.days_before??0) > 180;
+  const labs=(r.labs||[]).map(l=>{
+    const old=(l.days_before??0)>180;
     return `<tr><td>${esc(LAB[l.group]||l.group)}</td><td><b>${esc(l.result)}</b></td>
       <td class="${old?'old':''}">${thDate(l.date)}${old?' <span class="pill pill-rem">เกิน 6 เดือน</span>':''}</td></tr>`;
   }).join('');
-
-  const meds = (r.medications||[]).map(m=>{
-    const old = (m.days_before??0) > 180;
-    const du = DRUGMAP[m.drugusage_code];
+  const meds=(r.medications||[]).map(m=>{
+    const old=(m.days_before??0)>180, du=DRUGMAP[m.drugusage_code];
     return `<tr><td>${esc(m.name)}${du?.is_prn?' <span class="pill pill-rem">prn</span>':''}</td>
       <td class="right mono">${esc(m.qty??'-')}</td><td class="sub">${esc(m.usage||'-')}</td>
       <td class="${old?'old':''}">${thDate(m.last_dispensed)}<div class="sub">จ่าย ${esc(m.times_dispensed??'-')} ครั้ง</div></td></tr>`;
   }).join('');
-
-  $('ov-body').innerHTML = `
+  $('ov-body').innerHTML=`
     <h2 style="font-size:20px;font-weight:600">${esc(p.full_name||r.hn)}</h2>
     <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี · ${esc(p.pttype_name||'')}
       <span class="tag" style="background:${SC[st]}1a;color:${SC[st]};margin-left:6px">${STATUS[st]||st}</span></div>
-
     <div class="grid g2">
-      <div class="sec"><div class="st">ข้อมูลทั่วไป</div>
-        <table class="kv">
-          <tr><td>ที่อยู่</td><td>${esc(p.address_full||'-')}</td></tr>
-          <tr><td>โทรศัพท์</td><td>${esc(p.phone||'-')}</td></tr>
-          <tr><td>คลินิก</td><td>${esc(String(r.clinics||'').replace(/\d+:/g,'')||'-')}</td></tr>
-          <tr><td>วันที่ส่งต่อ</td><td>${thDate(r.refer_date)}</td></tr>
-          <tr><td>ปลายทาง</td><td>${esc(r.hcode_name||r.hcode||'-')}
-            <span class="pill pill-rem">${esc(r.hcode_source||'')}</span>
-            ${r.hcode_conflict?'<span class="pill pill-warn">ขัดแย้ง</span>':''}</td></tr>
-          <tr><td>วันนัด</td><td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'ยังไม่นัด'}</td></tr>
-          ${r.workflow?.note?`<tr><td>บันทึก</td><td>${esc(r.workflow.note)}</td></tr>`:''}
-          ${r.refer_note?`<tr><td>หมายเหตุส่งต่อ</td><td>${esc(r.refer_note)}</td></tr>`:''}
-        </table></div>
+      <div class="sec"><div class="st">ข้อมูลทั่วไป</div><table class="kv">
+        <tr><td>ที่อยู่</td><td>${esc(p.address_full||'-')}</td></tr>
+        <tr><td>โทรศัพท์</td><td>${esc(p.phone||'-')}</td></tr>
+        <tr><td>คลินิก</td><td>${esc(String(r.clinics||'').replace(/\d+:/g,'')||'-')}</td></tr>
+        <tr><td>วันที่ส่งต่อ</td><td>${thDate(r.refer_date)}</td></tr>
+        <tr><td>ปลายทาง</td><td>${esc(r.hcode_name||r.hcode||'-')}
+          <span class="pill pill-rem">${esc(r.hcode_source||'')}</span>
+          ${r.hcode_conflict?'<span class="pill pill-warn">ขัดแย้ง</span>':''}</td></tr>
+        <tr><td>วันนัด</td><td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'ยังไม่นัด'}</td></tr>
+        ${r.workflow?.note?`<tr><td>บันทึก</td><td>${esc(r.workflow.note)}</td></tr>`:''}
+        ${r.refer_note?`<tr><td>หมายเหตุส่งต่อ</td><td>${esc(r.refer_note)}</td></tr>`:''}
+      </table></div>
       <div class="sec"><div class="st">ค่าทางคลินิกล่าสุด</div>
         ${labs?`<table><tr><th>รายการ</th><th>ผล</th><th>วันที่</th></tr>${labs}</table>`:'<div class="sub">ไม่มีข้อมูล</div>'}</div>
     </div>
-
     <div class="sec"><div class="st">รายการยา</div>
-      ${meds?`<div class="tbl-wrap"><table><tr><th>ชื่อยา</th><th class="right">จำนวน</th><th>วิธีใช้</th><th>จ่ายล่าสุด</th></tr>${meds}</table></div>`
-             :'<div class="sub">ไม่มีข้อมูล</div>'}</div>
-
-    ${canEdit()?`
-    <div class="sec"><div class="st">บันทึกสถานะ</div>
-      <div class="frm">
-        <div class="fld"><label>สถานะ</label><select id="d-st">
-          ${Object.entries(STATUS).map(([k,v])=>`<option value="${k}"${k===st?' selected':''}>${v}</option>`).join('')}
-        </select></div>
-        <div class="fld"><label>วันนัด</label><input type="date" id="d-ap" value="${esc(r.workflow?.appoint_date||'')}"></div>
-        <div class="fld grow"><label>บันทึกเพิ่มเติม</label><input type="text" id="d-note" value="${esc(r.workflow?.note||'')}"></div>
-        <button class="btn-primary" id="d-save">บันทึก</button>
-      </div><div id="d-msg" style="margin-top:8px"></div></div>`
-    :`<div class="sub" style="margin-top:12px">บัญชีของคุณดูข้อมูลได้อย่างเดียว</div>`}
-  `;
+      ${meds?`<div class="tbl-wrap"><table><tr><th>ชื่อยา</th><th class="right">จำนวน</th><th>วิธีใช้</th><th>จ่ายล่าสุด</th></tr>${meds}</table></div>`:'<div class="sub">ไม่มีข้อมูล</div>'}</div>
+    ${canEdit()?`<div class="sec"><div class="st">บันทึกสถานะ</div><div class="frm">
+      <div class="fld"><label>สถานะ</label><select id="d-st">
+        ${Object.entries(STATUS).map(([k,v])=>`<option value="${k}"${k===st?' selected':''}>${v}</option>`).join('')}</select></div>
+      <div class="fld"><label>วันนัด</label><input type="date" id="d-ap" value="${esc(r.workflow?.appoint_date||'')}"></div>
+      <div class="fld grow"><label>บันทึกเพิ่มเติม</label><input type="text" id="d-note" value="${esc(r.workflow?.note||'')}"></div>
+      <button class="btn-primary" id="d-save">บันทึก</button></div>
+      <div id="d-msg" style="margin-top:8px"></div></div>`
+    :'<div class="sub" style="margin-top:12px">บัญชีของคุณดูข้อมูลได้อย่างเดียว</div>'}`;
   $('ov').classList.remove('hidden');
   if(canEdit()) $('d-save').addEventListener('click', async ()=>{
     try{
       await setStatus(id, $('d-st').value,
-        {appoint_date: $('d-ap').value || null, note: $('d-note').value.trim() || null});
-      $('d-msg').innerHTML = '<span class="msg ok" style="display:inline-block">บันทึกแล้ว</span>';
-      renderList();
-    }catch(e){ $('d-msg').innerHTML = `<span class="msg err" style="display:inline-block">${esc(e.message)}</span>`; }
+        {appoint_date:$('d-ap').value||null, note:$('d-note').value.trim()||null});
+      $('d-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>'; renderList();
+    }catch(e){ $('d-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
   });
 }
-$('ov-x').addEventListener('click', ()=> $('ov').classList.add('hidden'));
-$('ov').addEventListener('click', e=>{ if(e.target===$('ov')) $('ov').classList.add('hidden'); });
+$('ov-x').addEventListener('click',()=>$('ov').classList.add('hidden'));
+$('ov').addEventListener('click',e=>{ if(e.target===$('ov')) $('ov').classList.add('hidden'); });
 
-/* ========== OUTREACH ========== */
+/* ================= รอบนัด ================= */
 async function loadOutreach(){
   try{
     const s = await getDocs(query(collection(db,'outreach'), orderBy('date','asc')));
     OUTREACH = s.docs.map(d=>({id:d.id, ...d.data()}));
   }catch(e){ OUTREACH=[]; }
 }
-function patientsOn(hcode, date){
-  return LIST.filter(r => r.hcode===hcode && r.workflow?.appoint_date===date).length;
+const roundScope = () => isRpst() ? myHcode() : (VIEW_HCODE||null);
+const patientsOf = (hcode,date) =>
+  LIST.filter(r=>r.hcode===hcode && r.workflow?.appoint_date===date);
+function nextRound(hcode,date){
+  return OUTREACH.filter(o=>o.hcode===hcode && o.date>date)
+                 .sort((a,b)=>a.date.localeCompare(b.date))[0] || null;
 }
 function renderCal(){
-  const scope = isRpst() ? myHcode() : (VIEW_HCODE || null);
-  const up = OUTREACH.filter(o=>{
-    if(scope && o.hcode!==scope) return false;
-    return daysFrom(o.date) >= 0;
-  }).slice(0,12);
-
+  const scope = roundScope();
+  const up = OUTREACH.filter(o=>(!scope||o.hcode===scope) && daysFrom(o.date)>=0).slice(0,12);
   $('cal-upcoming').innerHTML = up.length ? up.map(o=>{
-    const d = daysFrom(o.date), n = patientsOn(o.hcode, o.date);
-    return `<div class="oc${d<=7?' soon':''}">
+    const d=daysFrom(o.date), n=patientsOf(o.hcode,o.date).length, nx=nextRound(o.hcode,o.date);
+    return `<div class="oc${d<=7?' soon':''}" style="cursor:pointer" data-round="${esc(o.id)}">
       <div class="d">${thDate(o.date)}</div>
       <div class="h">${esc(rpstName(o.hcode))}</div>
       <div class="cd">${d===0?'วันนี้':d+' <small>วัน</small>'}</div>
-      <div class="sub" style="margin-top:6px">ผู้ป่วยที่นัดไว้ <b>${n}</b> คน</div>
-      ${o.note?`<div class="sub">${esc(o.note)}</div>`:''}
+      <div class="sub" style="margin-top:6px">ผู้ป่วยในรอบ <b>${n}</b> คน</div>
+      <div class="sub">${nx?'จ่ายยา '+dayDiff(o.date,nx.date)+' วัน':'<span class="pill pill-warn">ยังไม่มีรอบถัดไป</span>'}</div>
     </div>`;
-  }).join('') : '<div class="empty">ยังไม่มีวันออกหน่วยที่กำลังจะถึง</div>';
+  }).join('') : '<div class="empty">ยังไม่มีรอบนัดที่กำลังจะถึง</div>';
+  $('cal-upcoming').querySelectorAll('[data-round]').forEach(c=>
+    c.addEventListener('click',()=>openRound(c.dataset.round)));
 
-  show('cal-admin-panel', isAdmin());
-  if(!isAdmin()) return;
-  $('oc-hcode').innerHTML = RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
-  $('tb-oc').innerHTML = OUTREACH.length ? OUTREACH.map(o=>{
-    const d = daysFrom(o.date);
-    return `<tr class="${d<0?'':''}">
-      <td>${thDate(o.date)}<div class="sub">${d<0?'ผ่านมาแล้ว':d===0?'วันนี้':'อีก '+d+' วัน'}</div></td>
-      <td>${esc(rpstName(o.hcode))}</td>
-      <td class="sub">${esc(o.note||'-')}</td>
-      <td class="right mono">${patientsOn(o.hcode,o.date)}</td>
-      <td class="right"><button class="btn-sm grey" data-del="${esc(o.id)}">ลบ</button></td>
-    </tr>`;
-  }).join('') : '<tr><td colspan="5" class="empty">ยังไม่มีข้อมูล</td></tr>';
+  const canMng = isAdmin() || isRpst();
+  show('cal-form', canMng);
+  show('seed-wrap', isAdmin());
+  $('oc-hcode').innerHTML = (isRpst()
+      ? RPST.filter(r=>r.hcode===myHcode())
+      : RPST).map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
+  $('oc-hcode').disabled = isRpst();
+
+  const rows = OUTREACH.filter(o=>!scope||o.hcode===scope);
+  $('tb-oc').innerHTML = rows.length ? rows.map(o=>{
+    const d=daysFrom(o.date), nx=nextRound(o.hcode,o.date), n=patientsOf(o.hcode,o.date).length;
+    const mine = isAdmin() || (isRpst() && o.hcode===myHcode());
+    return `<tr><td>${thDate(o.date)}<div class="sub">${d<0?'ผ่านมาแล้ว':d===0?'วันนี้':'อีก '+d+' วัน'}</div></td>
+      <td>${esc(rpstName(o.hcode))}</td><td class="sub">${esc(o.note||'-')}</td>
+      <td class="right mono">${n}</td>
+      <td>${nx?`<span class="pill pill-ok">${dayDiff(o.date,nx.date)} วัน</span>
+            <div class="sub">ถึง ${thDate(nx.date)}</div>`
+          :'<span class="pill pill-warn">ยังไม่มีรอบถัดไป</span>'}</td>
+      <td class="right"><button class="btn-sm" data-round="${esc(o.id)}">เปิดรอบ</button>
+        ${mine?` <button class="btn-sm red" data-del="${esc(o.id)}">ลบ</button>`:''}</td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="empty">ยังไม่มีวันนัด</td></tr>';
+  $('tb-oc').querySelectorAll('[data-round]').forEach(b=>
+    b.addEventListener('click',()=>openRound(b.dataset.round)));
   $('tb-oc').querySelectorAll('[data-del]').forEach(b=>
     b.addEventListener('click', async ()=>{
-      if(!confirm('ลบวันออกหน่วยนี้?')) return;
+      if(!confirm('ลบวันนัดนี้? ผู้ป่วยที่นัดไว้จะยังคงวันนัดเดิมอยู่')) return;
       await deleteDoc(doc(db,'outreach',b.dataset.del));
       await audit('edit_outreach','delete:'+b.dataset.del);
       await loadOutreach(); renderCal();
     }));
 }
 $('btn-oc-add').addEventListener('click', async ()=>{
-  const hcode = $('oc-hcode').value, date = $('oc-date').value;
+  const hcode = isRpst()?myHcode():$('oc-hcode').value, date=$('oc-date').value;
   if(!date){ $('oc-msg').innerHTML='<div class="msg err">เลือกวันที่ก่อน</div>'; return; }
+  if(OUTREACH.some(o=>o.hcode===hcode&&o.date===date)){
+    $('oc-msg').innerHTML='<div class="msg err">มีวันนัดนี้อยู่แล้ว</div>'; return; }
   try{
     await addDoc(collection(db,'outreach'),
       {hcode, date, note:$('oc-note').value.trim()||null, created_by:ME.email});
-    await audit('edit_outreach','add', {hcode, date});
-    $('oc-msg').innerHTML='<div class="msg ok">เพิ่มแล้ว</div>';
+    await audit('edit_outreach','add',{hcode,date});
+    $('oc-msg').innerHTML='<div class="msg ok">เพิ่มวันนัดแล้ว</div>';
     $('oc-note').value='';
     await loadOutreach(); renderCal();
   }catch(e){ $('oc-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
 });
 
-/* ========== BATCH ========== */
-function renderBatch(){
-  const sel = LIST.filter(r=>SELECTED.has(r.id));
-  show('batch-empty', sel.length===0);
-  show('batch-body',  sel.length>0);
-  if(!sel.length) return;
-  $('b-count').textContent = sel.length;
-  $('b-people').innerHTML = sel.map(r=>
-    `<div style="padding:3px 0;border-bottom:1px solid var(--line)">
-      ${esc(r.patient?.full_name||r.hn)} <span class="sub">HN ${esc(r.hn)} · ${esc(r.hcode_name||r.hcode)}</span></div>`).join('');
-  computeDrugs();
-}
-function computeDrugs(){
-  const sel = LIST.filter(r=>SELECTED.has(r.id));
-  const days = Math.max(1, parseInt($('b-days').value)||90);
-  const buf  = 1 + (Math.max(0, parseInt($('b-buffer').value)||0)/100);
-  const skipOld = $('b-skipold').checked;
-  const agg = {};
-  sel.forEach(r => (r.medications||[]).forEach(m=>{
-    if(skipOld && (m.days_before??0) > 180) return;
-    const key = m.icode || m.name;
-    if(!agg[key]) agg[key] = {name:m.name, people:0, qty:0, need:0, unknown:0, prn:0};
-    const a = agg[key];
-    a.people++;
-    a.qty += parseFloat(m.qty)||0;
+$('btn-seed').addEventListener('click', async ()=>{
+  if(!isAdmin()) return;
+  const known = new Set(RPST.map(r=>r.hcode));
+  const todo = SEED_ROUNDS.filter(([d,h]) =>
+    known.has(h) && !OUTREACH.some(o=>o.hcode===h && o.date===d));
+  const unknown = SEED_ROUNDS.filter(([,h])=>!known.has(h)).map(([,h])=>h);
+  if(!todo.length){
+    $('oc-msg').innerHTML='<div class="msg ok">มีวันนัดตั้งต้นครบแล้ว ไม่มีอะไรต้องเพิ่ม</div>'; return; }
+  if(!confirm(`จะเพิ่มวันนัด ${todo.length} รายการ ตามแผนปี 2569\nวันที่มีอยู่แล้วจะถูกข้าม`)) return;
+  $('btn-seed').disabled = true;
+  let ok=0, err=0;
+  for(const [date,hcode] of todo){
+    try{
+      await addDoc(collection(db,'outreach'),
+        {hcode, date, note:'แผนออกหน่วยปี 2569', created_by:ME.email});
+      ok++;
+    }catch(e){ err++; }
+  }
+  await audit('edit_outreach','seed_2569',{added:ok, failed:err});
+  $('oc-msg').innerHTML = `<div class="msg ${err?'info':'ok'}">เพิ่มแล้ว ${ok} รายการ${
+    err?' · ไม่สำเร็จ '+err+' รายการ':''}${
+    unknown.length?' · ข้ามรหัสที่ไม่มีในระบบ '+[...new Set(unknown)].join(', '):''}</div>`;
+  $('btn-seed').disabled = false;
+  await loadOutreach(); renderCal();
+});
+
+function computeDrugs(patients, days, bufPct, skipOld){
+  const buf = 1 + (bufPct||0)/100, agg={};
+  patients.forEach(r=>(r.medications||[]).forEach(m=>{
+    if(skipOld && (m.days_before??0)>180) return;
+    const k = m.icode || m.name;
+    if(!agg[k]) agg[k]={name:m.name, people:0, qty:0, need:0, unknown:0, prn:0};
+    const a=agg[k]; a.people++; a.qty += parseFloat(m.qty)||0;
     const du = DRUGMAP[m.drugusage_code];
     if(du?.is_prn) a.prn++;
-    else if(du?.doses_per_day > 0) a.need += du.doses_per_day * days;
+    else if(du?.doses_per_day>0) a.need += du.doses_per_day*days;
     else a.unknown++;
   }));
-  const rows = Object.values(agg).sort((a,b)=>b.people-a.people);
-  $('tb-drugsum').innerHTML = rows.length ? rows.map(a=>{
-    const need = a.need>0 ? Math.ceil(a.need*buf) : null;
+  return Object.values(agg).sort((a,b)=>b.people-a.people)
+    .map(a=>({...a, final: (days&&a.need>0) ? Math.ceil(a.need*buf) : null}));
+}
+function drugRows(rows){
+  return rows.length ? rows.map(a=>{
     let note='';
-    if(a.prn)     note += `<span class="pill pill-rem">prn ${a.prn} คน</span>`;
-    if(a.unknown) note += `<span class="pill pill-warn">ยังไม่ระบุเม็ด/วัน ${a.unknown} คน</span>`;
+    if(a.prn)     note+=`<span class="pill pill-rem">prn ${a.prn} คน</span>`;
+    if(a.unknown) note+=`<span class="pill pill-warn">ยังไม่ระบุเม็ด/วัน ${a.unknown} คน</span>`;
     return `<tr><td>${esc(a.name)}</td><td class="right mono">${a.people}</td>
-      <td class="right mono"><b>${need!==null?need.toLocaleString():'-'}</b>
-        ${a.unknown||a.prn?`<div class="sub">เคยจ่ายรวม ${Math.round(a.qty).toLocaleString()}</div>`:''}</td>
+      <td class="right mono"><b>${a.final!==null?a.final.toLocaleString():'-'}</b>
+        ${(a.unknown||a.prn)?`<div class="sub">เคยจ่ายรวม ${Math.round(a.qty).toLocaleString()}</div>`:''}</td>
       <td>${note||'<span class="sub">คำนวณครบ</span>'}</td></tr>`;
   }).join('') : '<tr><td colspan="4" class="empty">ไม่มีรายการยา</td></tr>';
 }
-['b-days','b-buffer','b-skipold'].forEach(id=>
-  $(id).addEventListener('input', computeDrugs));
-$('btn-b-clear').addEventListener('click', ()=>{ SELECTED.clear(); renderList(); renderBatch(); });
+
+function openRound(id){
+  const o = OUTREACH.find(x=>x.id===id); if(!o) return;
+  const nx = nextRound(o.hcode,o.date);
+  const days = nx ? dayDiff(o.date,nx.date) : null;
+  const inRound = patientsOf(o.hcode,o.date);
+  const pool = LIST.filter(r=>r.hcode===o.hcode && !r.workflow?.appoint_date
+                 && TODO.includes(stOf(r)));
+  audit('open_round', o.id, {hcode:o.hcode, date:o.date, patients:inRound.length});
+  const canMng = isAdmin() || (isRpst() && o.hcode===myHcode());
+
+  $('ov-body').innerHTML = `
+    <h2 style="font-size:20px;font-weight:600">รอบนัด ${thDate(o.date)}</h2>
+    <div class="sub">${esc(rpstName(o.hcode))}${o.note?' · '+esc(o.note):''}</div>
+    ${days===null
+      ? `<div class="msg err" style="margin-top:12px">ยังไม่ได้กำหนดรอบถัดไปของ ${esc(rpstName(o.hcode))}
+          จึงยังคำนวณจำนวนยาไม่ได้ ให้เพิ่มวันนัดรอบถัดไปก่อน แล้วกลับมาเปิดรอบนี้อีกครั้ง</div>`
+      : `<div class="msg ok" style="margin-top:12px">รอบถัดไป ${thDate(nx.date)} ห่างกัน <b>${days} วัน</b>
+          ระบบคำนวณยาให้พอถึงรอบถัดไปพอดี</div>`}
+    <div class="frm">
+      <div class="fld"><label>จำนวนวันที่จ่าย</label>
+        <input type="number" id="r-days" value="${days??''}" min="1" max="365" style="width:110px"${days===null?' disabled':''}></div>
+      <div class="fld"><label>เผื่อสำรอง %</label><input type="number" id="r-buf" value="10" min="0" max="50" style="width:90px"></div>
+      <div class="fld"><label style="visibility:hidden">.</label>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px;padding-bottom:8px">
+          <input type="checkbox" id="r-skipold" checked> ตัดยาที่ไม่ได้จ่ายเกิน 180 วัน</label></div>
+    </div>
+    <div class="grid g2">
+      <div class="sec"><div class="st">ผู้ป่วยในรอบนี้ (<span id="r-n">${inRound.length}</span> คน)</div>
+        <div id="r-people" class="scroll" style="font-size:13.5px"></div></div>
+      <div class="sec"><div class="st">ยาที่ต้องเตรียมทั้งรอบ</div>
+        <div class="tbl-wrap scroll"><table>
+          <thead><tr><th>ชื่อยา</th><th class="right">คน</th><th class="right">ต้องเตรียม</th><th>หมายเหตุ</th></tr></thead>
+          <tbody id="r-drug"></tbody></table></div></div>
+    </div>
+    ${canMng?`<div class="sec"><div class="st">เพิ่มผู้ป่วยเข้ารอบนี้ (ยังไม่มีวันนัด ${pool.length} คน)</div>
+      ${pool.length?`<div class="scroll">${pool.map(r=>
+        `<label style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:13.5px">
+          <input type="checkbox" class="poolchk" value="${esc(r.id)}">
+          <span>${esc(r.patient?.full_name||r.hn)} <span class="sub">HN ${esc(r.hn)} · ${esc(String(r.clinics||'').replace(/\d+:/g,''))}</span></span>
+        </label>`).join('')}</div>
+        <div style="margin-top:10px"><button class="btn-primary" id="r-add">นัดผู้ที่เลือกเข้ารอบนี้</button>
+        <button class="btn-ghost" id="r-all">เลือกทั้งหมด</button></div>`
+      :'<div class="sub">ไม่มีผู้ป่วยที่ยังไม่ได้นัด</div>'}
+      <div id="r-msg" style="margin-top:10px"></div></div>`:''}`;
+  $('ov').classList.remove('hidden');
+
+  function refresh(){
+    const list = patientsOf(o.hcode,o.date);
+    $('r-n').textContent = list.length;
+    $('r-people').innerHTML = list.length ? list.map(r=>
+      `<div style="padding:3px 0;border-bottom:1px solid var(--line)">
+        ${esc(r.patient?.full_name||r.hn)} <span class="sub">HN ${esc(r.hn)}</span></div>`).join('')
+      : '<div class="sub">ยังไม่มีผู้ป่วยในรอบนี้</div>';
+    const d = parseInt($('r-days').value)||0;
+    $('r-drug').innerHTML = drugRows(computeDrugs(list, d,
+      parseInt($('r-buf').value)||0, $('r-skipold').checked));
+  }
+  refresh();
+  ['r-days','r-buf','r-skipold'].forEach(i=>$(i)?.addEventListener('input',refresh));
+  if(canMng && pool.length){
+    $('r-all').addEventListener('click',()=>
+      $('ov-body').querySelectorAll('.poolchk').forEach(c=>c.checked=true));
+    $('r-add').addEventListener('click', async ()=>{
+      const ids=[...$('ov-body').querySelectorAll('.poolchk:checked')].map(c=>c.value);
+      if(!ids.length){ $('r-msg').innerHTML='<div class="msg err">ยังไม่ได้เลือกใคร</div>'; return; }
+      $('r-add').disabled=true;
+      try{
+        await assignAppoint(ids, o.date);
+        $('r-msg').innerHTML=`<div class="msg ok">นัด ${ids.length} คนเข้ารอบนี้แล้ว</div>`;
+        renderList(); refresh();
+        $('ov-body').querySelectorAll('.poolchk:checked').forEach(c=>c.closest('label').remove());
+      }catch(e){ $('r-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+      $('r-add').disabled=false;
+    });
+  }
+}
+async function assignAppoint(ids, date){
+  for(let i=0;i<ids.length;i+=400){
+    const b=writeBatch(db);
+    ids.slice(i,i+400).forEach(id=>b.update(doc(db,'referrals',id),{
+      'workflow.status':'scheduled', 'workflow.appoint_date':date,
+      'workflow.updated_at':serverTimestamp(),
+      'workflow.updated_by':PROFILE.full_name||ME.email }));
+    await b.commit();
+  }
+  ids.forEach(id=>{ const r=LIST.find(x=>x.id===id);
+    if(r) r.workflow={...(r.workflow||{}),status:'scheduled',appoint_date:date}; });
+  await audit('batch_appoint', date, {count:ids.length});
+}
+
+/* ================= จัดชุดเฉพาะกิจ ================= */
+function renderBatch(){
+  const sel = LIST.filter(r=>SELECTED.has(r.id));
+  show('batch-empty', sel.length===0); show('batch-body', sel.length>0);
+  if(!sel.length) return;
+  $('b-count').textContent = sel.length;
+  $('b-people').innerHTML = sel.map(r=>
+    `<div style="padding:3px 0;border-bottom:1px solid var(--line)">${esc(r.patient?.full_name||r.hn)}
+      <span class="sub">HN ${esc(r.hn)} · ${esc(r.hcode_name||r.hcode)}</span></div>`).join('');
+  recalcBatch();
+}
+function recalcBatch(){
+  const sel = LIST.filter(r=>SELECTED.has(r.id));
+  $('tb-drugsum').innerHTML = drugRows(computeDrugs(sel,
+    Math.max(1,parseInt($('b-days').value)||90),
+    parseInt($('b-buffer').value)||0, $('b-skipold').checked));
+}
+['b-days','b-buffer','b-skipold'].forEach(id=>$(id).addEventListener('input',recalcBatch));
+$('btn-b-clear').addEventListener('click',()=>{ SELECTED.clear(); renderList(); renderBatch(); });
 $('btn-b-save').addEventListener('click', async ()=>{
-  const date = $('b-date').value;
+  const date=$('b-date').value;
   if(!date){ $('b-msg').innerHTML='<div class="msg err">เลือกวันนัดก่อน</div>'; return; }
   if(!canEdit()){ $('b-msg').innerHTML='<div class="msg err">บัญชีนี้แก้ไขไม่ได้</div>'; return; }
-  const ids = [...SELECTED];
-  $('btn-b-save').disabled = true;
+  $('btn-b-save').disabled=true;
   try{
-    for(let i=0;i<ids.length;i+=400){
-      const b = writeBatch(db);
-      ids.slice(i,i+400).forEach(id => b.update(doc(db,'referrals',id), {
-        'workflow.status':'scheduled', 'workflow.appoint_date':date,
-        'workflow.updated_at':serverTimestamp(),
-        'workflow.updated_by':PROFILE.full_name||ME.email }));
-      await b.commit();
-    }
-    ids.forEach(id=>{ const r=LIST.find(x=>x.id===id);
-      if(r) r.workflow={...(r.workflow||{}),status:'scheduled',appoint_date:date}; });
-    await audit('batch_appoint', date, {count:ids.length});
+    const ids=[...SELECTED];
+    await assignAppoint(ids,date);
     $('b-msg').innerHTML=`<div class="msg ok">บันทึกวันนัด ${thDate(date)} ให้ ${ids.length} คนแล้ว</div>`;
     renderList();
   }catch(e){ $('b-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
-  $('btn-b-save').disabled = false;
+  $('btn-b-save').disabled=false;
 });
 
-/* ========== DASHBOARD ========== */
-function bars(obj, total){
-  const arr = Object.entries(obj).sort((a,b)=>b[1]-a[1]);
-  const max = Math.max(1, ...arr.map(x=>x[1]));
-  return arr.map(([k,v])=>`<div class="barrow">
-    <span class="lbl" title="${esc(k)}">${esc(k)}</span>
+/* ================= DASHBOARD ================= */
+function bars(obj){
+  const arr=Object.entries(obj).sort((a,b)=>b[1]-a[1]);
+  const max=Math.max(1,...arr.map(x=>x[1]));
+  return arr.map(([k,v])=>`<div class="barrow"><span class="lbl" title="${esc(k)}">${esc(k)}</span>
     <span class="track"><span class="fill" style="width:${v/max*100}%"></span></span>
     <span class="val mono">${v}</span></div>`).join('') || '<div class="sub">ไม่มีข้อมูล</div>';
 }
 function renderDash(){
-  const n = LIST.length;
-  const todo = LIST.filter(r=>TODO.includes(stOf(r))).length;
-  const sched = LIST.filter(r=>r.workflow?.appoint_date).length;
-  const rem = LIST.filter(r=>r.case_type==='data_only').length;
-  const conf = LIST.filter(r=>r.hcode_conflict).length;
+  const n=LIST.length;
   $('dash-stats').innerHTML = [
-    ['เคสทั้งหมด', n], ['ที่ต้องดำเนินการ', todo], ['นัดแล้ว', sched],
-    ['สาย Remission', rem], ['ปลายทางขัดแย้ง', conf]
+    ['เคสทั้งหมด', n],
+    ['ที่ต้องดำเนินการ', LIST.filter(r=>TODO.includes(stOf(r))).length],
+    ['นัดแล้ว', LIST.filter(r=>r.workflow?.appoint_date).length],
+    ['สาย Remission', LIST.filter(r=>r.case_type==='data_only').length],
+    ['ปลายทางขัดแย้ง', LIST.filter(r=>r.hcode_conflict).length]
   ].map(([k,v])=>`<div class="stat"><div class="v mono">${v.toLocaleString()}</div><div class="k">${k}</div></div>`).join('');
 
-  const byT={}, byH={}, byC={}, byA={}, byS={}, bySex={};
+  const byH={}, byC={}, byA={}, byS={}, bySex={};
   LIST.forEach(r=>{
-    const t = r.patient?.tambon || 'ไม่ระบุตำบล'; byT[t]=(byT[t]||0)+1;
-    const h = r.hcode_name || r.hcode || '-';    byH[h]=(byH[h]||0)+1;
+    const h=r.hcode_name||r.hcode||'-'; byH[h]=(byH[h]||0)+1;
     String(r.clinics||'').split('|').map(s=>s.replace(/\d+:/,'').trim()).filter(Boolean)
-      .forEach(c=> byC[c]=(byC[c]||0)+1);
-    const a = r.patient?.age;
-    const g = a==null?'ไม่ระบุ': a<40?'ต่ำกว่า 40': a<50?'40-49': a<60?'50-59': a<70?'60-69': a<80?'70-79':'80 ปีขึ้นไป';
+      .forEach(c=>byC[c]=(byC[c]||0)+1);
+    const a=r.patient?.age;
+    const g=a==null?'ไม่ระบุ':a<40?'ต่ำกว่า 40':a<50?'40-49':a<60?'50-59':a<70?'60-69':a<80?'70-79':'80 ปีขึ้นไป';
     byA[g]=(byA[g]||0)+1;
-    byS[STATUS[stOf(r)]||stOf(r)] = (byS[STATUS[stOf(r)]||stOf(r)]||0)+1;
-    const sx = r.patient?.sex||'ไม่ระบุ'; bySex[sx]=(bySex[sx]||0)+1;
+    const sl=STATUS[stOf(r)]||stOf(r); byS[sl]=(byS[sl]||0)+1;
+    const sx=r.patient?.sex||'ไม่ระบุ'; bySex[sx]=(bySex[sx]||0)+1;
   });
-
-  const tArr = Object.entries(byT).sort((a,b)=>b[1]-a[1]);
-  const tMax = Math.max(1,...tArr.map(x=>x[1]));
-  $('dash-map').innerHTML = tArr.map(([t,v])=>{
-    const i = v/tMax;
-    const bg = `rgba(27,107,71,${(0.10+i*0.75).toFixed(2)})`;
-    return `<div class="zone" style="background:${bg};color:${i>0.45?'#fff':'var(--ink)'}">
-      <div class="z-n mono">${v}</div><div class="z-t">${esc(t)}</div>
-      <div class="z-s">${(v/Math.max(1,LIST.length)*100).toFixed(1)}%</div></div>`;
-  }).join('') || '<div class="sub">ไม่มีข้อมูล</div>';
-
-  $('dash-hcode').innerHTML  = bars(byH);
-  $('dash-clinic').innerHTML = bars(byC);
-  $('dash-age').innerHTML    = bars(byA);
-  $('dash-status').innerHTML = bars(byS) +
-    '<div style="margin-top:14px"><div class="st sub" style="margin-bottom:6px">แยกตามเพศ</div>'+bars(bySex)+'</div>';
+  $('dash-hcode').innerHTML=bars(byH);
+  $('dash-clinic').innerHTML=bars(byC);
+  $('dash-age').innerHTML=bars(byA);
+  $('dash-status').innerHTML=bars(byS)+
+    '<div style="margin-top:14px"><div class="sub" style="margin-bottom:6px;font-weight:600">แยกตามเพศ</div>'+bars(bySex)+'</div>';
+  show('btn-geo', isAdmin());
+  drawMap();
 }
+document.querySelectorAll('[data-map]').forEach(b=>b.addEventListener('click',()=>{
+  MAPMODE=b.dataset.map;
+  document.querySelectorAll('[data-map]').forEach(x=>x.classList.toggle('on',x===b));
+  drawMap();
+}));
 
-/* ========== DRUG USAGE MAP ========== */
+/* ---- รวมข้อมูลเชิงพื้นที่ ---- */
+function geoData(){
+  const coord = {};              // hcode -> [lat,lng]
+  RPST.forEach(r=>{ if(r.lat&&r.lng) coord[r.hcode]=[r.lat,r.lng]; });
+  const byH={}, byT={}, tPos={};
+  LIST.forEach(r=>{
+    byH[r.hcode]=(byH[r.hcode]||0)+1;
+    const t=r.patient?.tambon||'ไม่ระบุตำบล';
+    byT[t]=(byT[t]||0)+1;
+    const c=coord[r.hcode];
+    if(c){ if(!tPos[t]) tPos[t]={lat:0,lng:0,n:0};
+           tPos[t].lat+=c[0]; tPos[t].lng+=c[1]; tPos[t].n++; }
+  });
+  // จุดกลางตำบล = ค่าเฉลี่ยพิกัดของ รพ.สต. ที่ดูแลคนไข้ในตำบลนั้น
+  const tambon = Object.entries(byT).map(([t,v])=>{
+    const p=tPos[t];
+    return {name:t, n:v, lat:p?p.lat/p.n:null, lng:p?p.lng/p.n:null};
+  });
+  const hcode = Object.entries(byH).map(([h,v])=>({
+    hcode:h, name:rpstName(h), n:v,
+    lat:coord[h]?coord[h][0]:null, lng:coord[h]?coord[h][1]:null }));
+  return {tambon, hcode, haveCoord:Object.keys(coord).length};
+}
+function colorFor(i){          // i = 0..1
+  const a=[0.15,0.35,0.55,0.75,0.9][Math.min(4,Math.floor(i*5))];
+  return `rgba(27,107,71,${a})`;
+}
+function drawMap(){
+  if(typeof L==='undefined'){ $('map-status').textContent='โหลดแผนที่ไม่สำเร็จ'; return; }
+  if(!MAP){
+    MAP = L.map('map').setView(SAWEE_CENTER, 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {maxZoom:18, attribution:'&copy; OpenStreetMap'}).addTo(MAP);
+  }
+  if(LAYER){ MAP.removeLayer(LAYER); LAYER=null; }
+  const g = geoData();
+  const rows = (MAPMODE==='tambon'?g.tambon:g.hcode).filter(x=>x.lat!=null);
+  const missing = (MAPMODE==='tambon'?g.tambon:g.hcode).length - rows.length;
+
+  if(!g.haveCoord){
+    $('map-status').innerHTML = isAdmin()
+      ? 'ยังไม่มีพิกัด รพ.สต. กดปุ่มค้นพิกัดอัตโนมัติ แล้วลากหมุดปรับได้'
+      : 'ยังไม่มีพิกัด รพ.สต. ให้ผู้ดูแลระบบตั้งค่าก่อน';
+    return;
+  }
+  $('map-status').textContent = missing ? `แสดง ${rows.length} จุด (ขาดพิกัด ${missing})` : `แสดง ${rows.length} จุด`;
+
+  const max = Math.max(1,...rows.map(x=>x.n));
+  LAYER = L.layerGroup().addTo(MAP);
+  rows.forEach(x=>{
+    const i = x.n/max;
+    const c = L.circleMarker([x.lat,x.lng], {
+      radius: 9 + Math.sqrt(i)*26,
+      fillColor: colorFor(i), color:'#1B6B47', weight:1.5, fillOpacity:0.75
+    }).addTo(LAYER);
+    c.bindTooltip(`<b>${esc(x.name)}</b><br>${x.n} คน`, {direction:'top'});
+    if(isAdmin() && MAPMODE==='hcode'){
+      const m = L.marker([x.lat,x.lng], {draggable:true}).addTo(LAYER);
+      m.bindTooltip('ลากเพื่อปรับพิกัด '+esc(x.name));
+      m.on('dragend', async ev=>{
+        const p=ev.target.getLatLng();
+        await setDoc(doc(db,'rpst',x.hcode), {lat:p.lat, lng:p.lng}, {merge:true});
+        const rr=RPST.find(r=>r.hcode===x.hcode); if(rr){ rr.lat=p.lat; rr.lng=p.lng; }
+        await audit('edit_geo', x.hcode, {lat:p.lat, lng:p.lng});
+        drawMap();
+      });
+    }
+  });
+  if(rows.length) MAP.fitBounds(rows.map(x=>[x.lat,x.lng]), {padding:[40,40], maxZoom:12});
+}
+$('btn-geo').addEventListener('click', async ()=>{
+  if(!isAdmin()) return;
+  const todo = RPST.filter(r=>!r.lat||!r.lng);
+  if(!todo.length){ $('geo-msg').innerHTML='<div class="msg ok">มีพิกัดครบทุกแห่งแล้ว</div>'; return; }
+  $('btn-geo').disabled=true;
+  let ok=0, fail=[];
+  for(const r of todo){
+    $('geo-msg').innerHTML=`<div class="msg info">กำลังค้นหา ${esc(r.name)} ... (${ok+fail.length+1}/${todo.length})</div>`;
+    try{
+      const url='https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=th&q='
+        + encodeURIComponent(r.name+' อำเภอสวี ชุมพร');
+      const res = await fetch(url,{headers:{'Accept':'application/json'}});
+      const j = await res.json();
+      if(j&&j[0]){
+        const lat=parseFloat(j[0].lat), lng=parseFloat(j[0].lon);
+        await setDoc(doc(db,'rpst',r.hcode), {lat,lng}, {merge:true});
+        r.lat=lat; r.lng=lng; ok++;
+      } else fail.push(r.name);
+    }catch(e){ fail.push(r.name); }
+    await new Promise(s=>setTimeout(s,1200));   // เว้นจังหวะตามมารยาทการใช้ Nominatim
+  }
+  await audit('edit_geo','auto',{ok, fail:fail.length});
+  $('geo-msg').innerHTML = `<div class="msg ${fail.length?'info':'ok'}">ค้นพบพิกัด ${ok} แห่ง${
+    fail.length?' · หาไม่เจอ '+fail.length+' แห่ง ('+fail.map(esc).join(', ')+') ให้สลับไปโหมดราย รพ.สต. แล้วลากหมุดวางเอง':''}</div>`;
+  $('btn-geo').disabled=false;
+  drawMap();
+});
+
+/* ================= จัดการผู้ใช้ ================= */
+async function loadUsers(){
+  $('u-hcode').innerHTML = '<option value="">(ไม่ผูก รพ.สต.)</option>' +
+    RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
+  try{
+    const s = await getDocs(collection(db,'users'));
+    USERS = s.docs.map(d=>({uid:d.id, ...d.data()}));
+  }catch(e){ USERS=[]; }
+  renderUsers();
+}
+function renderUsers(){
+  $('tb-user').innerHTML = USERS.length ? USERS
+    .sort((a,b)=>(a.role||'').localeCompare(b.role||''))
+    .map(u=>`<tr>
+      <td class="nm">${esc(u.full_name||'-')}<div class="sub">${esc(u.email||'')}</div></td>
+      <td><select data-role="${esc(u.uid)}">
+        ${Object.entries(ROLE_LABEL).map(([k,v])=>
+          `<option value="${k}"${u.role===k?' selected':''}>${v}</option>`).join('')}</select></td>
+      <td><select data-hc="${esc(u.uid)}"><option value="">(ไม่ผูก)</option>
+        ${RPST.map(r=>`<option value="${esc(r.hcode)}"${u.hcode===r.hcode?' selected':''}>${esc(r.name)}</option>`).join('')}</select></td>
+      <td class="sub mono" style="font-size:11px">${esc(u.uid)}</td>
+      <td class="right"><button class="btn-sm" data-usave="${esc(u.uid)}">บันทึก</button>
+        ${u.uid!==ME.uid?` <button class="btn-sm red" data-urev="${esc(u.uid)}">ระงับสิทธิ์</button>`:''}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">ยังไม่มีผู้ใช้</td></tr>';
+
+  $('tb-user').querySelectorAll('[data-usave]').forEach(b=>
+    b.addEventListener('click', async ()=>{
+      const uid=b.dataset.usave;
+      const role=$('tb-user').querySelector(`[data-role="${CSS.escape(uid)}"]`).value;
+      const hcode=$('tb-user').querySelector(`[data-hc="${CSS.escape(uid)}"]`).value;
+      if(role==='rpst' && !hcode){ alert('บทบาท รพ.สต. ต้องผูกหน่วยบริการ'); return; }
+      try{
+        await setDoc(doc(db,'users',uid), {role, hcode:hcode||null}, {merge:true});
+        const u=USERS.find(x=>x.uid===uid); if(u){ u.role=role; u.hcode=hcode||null; }
+        await audit('edit_user', uid, {role, hcode});
+        b.textContent='บันทึกแล้ว'; setTimeout(()=>b.textContent='บันทึก',1500);
+      }catch(e){ alert('บันทึกไม่สำเร็จ: '+e.message); }
+    }));
+  $('tb-user').querySelectorAll('[data-urev]').forEach(b=>
+    b.addEventListener('click', async ()=>{
+      if(!confirm('ระงับสิทธิ์ผู้ใช้นี้? เขาจะล็อกอินได้แต่จะมองไม่เห็นข้อมูลใด ๆ\n\nถ้าต้องการปิดไม่ให้ล็อกอินเลย ต้องไปปิดบัญชีที่ Firebase Console > Authentication ด้วย')) return;
+      try{
+        await deleteDoc(doc(db,'users',b.dataset.urev));
+        await audit('revoke_user', b.dataset.urev);
+        USERS = USERS.filter(x=>x.uid!==b.dataset.urev); renderUsers();
+      }catch(e){ alert('ไม่สำเร็จ: '+e.message); }
+    }));
+}
+$('u-role').addEventListener('change', ()=>{
+  $('u-hcode').disabled = $('u-role').value!=='rpst';
+});
+$('btn-u-add').addEventListener('click', async ()=>{
+  const name=$('u-name').value.trim(), email=$('u-email').value.trim(),
+        pass=$('u-pass').value, role=$('u-role').value, hcode=$('u-hcode').value;
+  if(!name||!email||pass.length<8){
+    $('u-msg').innerHTML='<div class="msg err">กรอกชื่อ อีเมล และรหัสผ่านอย่างน้อย 8 ตัวอักษร</div>'; return; }
+  if(role==='rpst' && !hcode){
+    $('u-msg').innerHTML='<div class="msg err">บทบาท รพ.สต. ต้องเลือกหน่วยบริการ</div>'; return; }
+  $('btn-u-add').disabled=true;
+  // ใช้ instance สำรองสร้างบัญชี เพื่อไม่ให้ session ของ admin หลุด
+  const tmp = initializeApp(FIREBASE_CONFIG, 'tmp-'+Date.now());
+  try{
+    const cred = await createUserWithEmailAndPassword(getAuth(tmp), email, pass);
+    await setDoc(doc(db,'users',cred.user.uid),
+      {full_name:name, email, role, hcode:hcode||null, created_by:ME.email,
+       created_at:serverTimestamp()});
+    await signOut(getAuth(tmp));
+    await audit('create_user', cred.user.uid, {email, role, hcode});
+    $('u-msg').innerHTML=`<div class="msg ok">สร้างบัญชี ${esc(email)} แล้ว แจ้งรหัสผ่านชั่วคราวให้เจ้าตัวและให้เปลี่ยนเองภายหลัง</div>`;
+    $('u-name').value=$('u-email').value=$('u-pass').value='';
+    await loadUsers();
+  }catch(e){
+    const m = e.code==='auth/email-already-in-use' ? 'อีเมลนี้มีบัญชีอยู่แล้ว'
+            : e.code==='auth/weak-password' ? 'รหัสผ่านสั้นเกินไป'
+            : e.code==='auth/invalid-email' ? 'รูปแบบอีเมลไม่ถูกต้อง' : e.message;
+    $('u-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`;
+  }finally{ try{ await deleteApp(tmp); }catch(_){} $('btn-u-add').disabled=false; }
+});
+
+/* ================= วิธีใช้ยา ================= */
 async function loadDrugMap(){
   try{
-    const s = await getDocs(collection(db,'drug_usage'));
-    DRUGMAP = {}; s.docs.forEach(d=> DRUGMAP[d.id] = d.data());
+    const s=await getDocs(collection(db,'drug_usage'));
+    DRUGMAP={}; s.docs.forEach(d=>DRUGMAP[d.id]=d.data());
   }catch(e){ DRUGMAP={}; }
 }
 function renderDrugMap(){
-  const found = {};
-  LIST.forEach(r => (r.medications||[]).forEach(m=>{
-    const c = m.drugusage_code; if(!c) return;
-    if(!found[c]) found[c] = {code:c, text:m.usage||'', n:0};
+  const found={};
+  LIST.forEach(r=>(r.medications||[]).forEach(m=>{
+    const c=m.drugusage_code; if(!c) return;
+    if(!found[c]) found[c]={code:c, text:m.usage||'', n:0};
     found[c].n++;
   }));
-  const rows = Object.values(found).sort((a,b)=>b.n-a.n);
+  const rows=Object.values(found).sort((a,b)=>b.n-a.n);
   $('tb-drug').innerHTML = rows.length ? rows.map(f=>{
-    const d = DRUGMAP[f.code] || {};
-    return `<tr>
-      <td class="mono">${esc(f.code)}</td>
-      <td class="sub">${esc(f.text)}</td>
-      <td><input type="number" step="0.5" min="0" style="width:90px" data-dpd="${esc(f.code)}"
-           value="${d.doses_per_day??''}"></td>
+    const d=DRUGMAP[f.code]||{};
+    return `<tr><td class="mono">${esc(f.code)}</td><td class="sub">${esc(f.text)}</td>
+      <td><input type="number" step="0.5" min="0" style="width:85px" data-dpd="${esc(f.code)}" value="${d.doses_per_day??''}"></td>
       <td><input type="checkbox" data-prn="${esc(f.code)}"${d.is_prn?' checked':''}></td>
       <td class="right mono">${f.n}</td>
-      <td class="right"><button class="btn-sm" data-save="${esc(f.code)}">บันทึก</button></td>
-    </tr>`;
+      <td class="right"><button class="btn-sm" data-save="${esc(f.code)}">บันทึก</button></td></tr>`;
   }).join('') : '<tr><td colspan="6" class="empty">ยังไม่พบรหัสวิธีใช้ในข้อมูล</td></tr>';
-
   $('tb-drug').querySelectorAll('[data-save]').forEach(b=>
     b.addEventListener('click', async ()=>{
-      const code = b.dataset.save;
-      const dpd = $('tb-drug').querySelector(`[data-dpd="${CSS.escape(code)}"]`).value;
-      const prn = $('tb-drug').querySelector(`[data-prn="${CSS.escape(code)}"]`).checked;
-      const text = found[code]?.text || '';
+      const code=b.dataset.save;
+      const dpd=$('tb-drug').querySelector(`[data-dpd="${CSS.escape(code)}"]`).value;
+      const prn=$('tb-drug').querySelector(`[data-prn="${CSS.escape(code)}"]`).checked;
+      const rec={code, text:found[code]?.text||'',
+                 doses_per_day: dpd===''?null:parseFloat(dpd), is_prn:prn, updated_by:ME.email};
       try{
-        await setDoc(doc(db,'drug_usage',code),
-          {code, text, doses_per_day: dpd===''?null:parseFloat(dpd), is_prn:prn,
-           updated_by:ME.email}, {merge:true});
-        DRUGMAP[code] = {code, text, doses_per_day: dpd===''?null:parseFloat(dpd), is_prn:prn};
+        await setDoc(doc(db,'drug_usage',code), rec, {merge:true});
+        DRUGMAP[code]=rec;
         await audit('edit_drugusage', code, {doses_per_day:dpd, is_prn:prn});
-        b.textContent = 'บันทึกแล้ว';
-        setTimeout(()=>{ b.textContent='บันทึก'; }, 1500);
+        b.textContent='บันทึกแล้ว'; setTimeout(()=>b.textContent='บันทึก',1500);
       }catch(e){ alert('บันทึกไม่สำเร็จ: '+e.message); }
     }));
 }
 
-/* ========== AUDIT LOG ========== */
-let LOGS = [];
+/* ================= LOG ================= */
 async function loadLog(){
-  $('tb-log').innerHTML = '<tr><td colspan="5" class="loading">กำลังโหลด...</td></tr>';
+  $('tb-log').innerHTML='<tr><td colspan="5" class="loading">กำลังโหลด...</td></tr>';
   try{
-    const s = await getDocs(query(collection(db,'audit_logs'), orderBy('ts','desc'), limit(500)));
-    LOGS = s.docs.map(d=>({id:d.id, ...d.data()}));
-    const acts = [...new Set(LOGS.map(l=>l.action))].sort();
-    $('log-action').innerHTML = '<option value="">ทุกประเภท</option>' +
-      acts.map(a=>`<option value="${esc(a)}">${esc(ACTION_LABEL[a]||a)}</option>`).join('');
-    renderLog();
-    audit('view_log');
-  }catch(e){
-    $('tb-log').innerHTML = `<tr><td colspan="5" class="empty">โหลดไม่สำเร็จ: ${esc(e.message)}</td></tr>`;
-  }
+    const s=await getDocs(query(collection(db,'audit_logs'), orderBy('ts','desc'), limit(500)));
+    LOGS=s.docs.map(d=>({id:d.id, ...d.data()}));
+    $('log-action').innerHTML='<option value="">ทุกประเภท</option>'+
+      [...new Set(LOGS.map(l=>l.action))].sort()
+        .map(a=>`<option value="${esc(a)}">${esc(ACTION_LABEL[a]||a)}</option>`).join('');
+    renderLog(); audit('view_log');
+  }catch(e){ $('tb-log').innerHTML=`<tr><td colspan="5" class="empty">โหลดไม่สำเร็จ: ${esc(e.message)}</td></tr>`; }
 }
 function renderLog(){
-  const a = $('log-action').value, q = $('log-q').value.trim().toLowerCase();
-  const rows = LOGS.filter(l=>{
+  const a=$('log-action').value, q=$('log-q').value.trim().toLowerCase();
+  const rows=LOGS.filter(l=>{
     if(a && l.action!==a) return false;
-    if(q){
-      const hay = [l.name,l.email,l.target,JSON.stringify(l.detail||{})].join(' ').toLowerCase();
-      if(!hay.includes(q)) return false;
-    }
+    if(q){ const hay=[l.name,l.email,l.target,JSON.stringify(l.detail||{})].join(' ').toLowerCase();
+      if(!hay.includes(q)) return false; }
     return true;
   });
   $('tb-log').innerHTML = rows.length ? rows.map(l=>{
-    const t = l.ts?.toDate ? l.ts.toDate() : (l.client_time?new Date(l.client_time):null);
-    const ts = t ? `${thDate(t.toISOString().slice(0,10))} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}` : '-';
-    return `<tr>
-      <td class="sub">${ts}</td>
-      <td>${esc(l.name||l.email||'-')}<div class="sub">${esc(l.role||'')}${l.hcode?' · '+esc(l.hcode):''}</div></td>
+    const t=l.ts?.toDate?l.ts.toDate():(l.client_time?new Date(l.client_time):null);
+    const ts=t?`${thDate(t.toISOString().slice(0,10))} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`:'-';
+    return `<tr><td class="sub">${ts}</td>
+      <td>${esc(l.name||l.email||'-')}<div class="sub">${esc(ROLE_LABEL[l.role]||l.role||'')}${l.hcode?' · '+esc(rpstName(l.hcode)):''}</div></td>
       <td>${esc(ACTION_LABEL[l.action]||l.action)}</td>
       <td class="sub">${esc(l.target||'-')}</td>
-      <td class="sub">${esc(l.detail?JSON.stringify(l.detail):'')}</td>
-    </tr>`;
+      <td class="sub">${esc(l.detail?JSON.stringify(l.detail):'')}</td></tr>`;
   }).join('') : '<tr><td colspan="5" class="empty">ไม่พบรายการ</td></tr>';
 }
 $('log-action').addEventListener('change', renderLog);

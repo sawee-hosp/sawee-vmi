@@ -162,7 +162,40 @@ tbody tr:hover{background:#FAFCFA}
     <input type="password" id="password" autocomplete="current-password">
     <button class="btn-primary" id="btn-login">เข้าสู่ระบบ</button>
     <div id="login-err"></div>
+    <p class="sub" style="margin-top:18px;text-align:center">
+      ยังไม่มีบัญชี? <a href="#" id="lnk-reg">ลงทะเบียนเจ้าหน้าที่ รพ.สต.</a></p>
   </div>
+</div>
+
+<!-- ลงทะเบียน -->
+<div id="screen-reg" class="hidden">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">
+  <div class="login-card" style="max-width:420px">
+    <h1>ลงทะเบียนเจ้าหน้าที่</h1>
+    <p class="sub">กรอกข้อมูลจริงให้ครบ ผู้ดูแลระบบจะตรวจสอบและอนุมัติก่อนจึงจะเข้าใช้งานได้</p>
+    <label>ชื่อ-นามสกุลจริง</label><input type="text" id="r-name" placeholder="เช่น สมหญิง ใจดี">
+    <label>ตำแหน่ง</label><input type="text" id="r-pos" placeholder="เช่น พยาบาลวิชาชีพ">
+    <label>เบอร์โทรศัพท์</label><input type="text" id="r-phone" inputmode="tel" placeholder="08xxxxxxxx">
+    <label>หน่วยบริการ</label><select id="r-hcode" style="width:100%;margin-bottom:14px"></select>
+    <label>อีเมล (ใช้ล็อกอิน)</label><input type="email" id="r-email" autocomplete="username">
+    <label>ตั้งรหัสผ่าน (อย่างน้อย 8 ตัว)</label><input type="password" id="r-pass" autocomplete="new-password">
+    <button class="btn-primary" id="btn-reg">ส่งคำขอลงทะเบียน</button>
+    <div id="reg-msg" style="margin-top:10px"></div>
+    <p class="sub" style="margin-top:14px;text-align:center">
+      <a href="#" id="lnk-back">กลับไปหน้าเข้าสู่ระบบ</a></p>
+  </div></div>
+</div>
+
+<!-- รออนุมัติ -->
+<div id="screen-wait" class="hidden">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">
+  <div class="login-card" style="max-width:420px;text-align:center">
+    <h1>รอผู้ดูแลระบบอนุมัติ</h1>
+    <p class="sub" style="margin-top:8px">คำขอของคุณถูกส่งแล้ว ผู้ดูแลระบบจะตรวจสอบและอนุมัติ
+      เมื่ออนุมัติแล้วให้เข้าสู่ระบบใหม่อีกครั้ง</p>
+    <div class="sec" style="text-align:left"><table class="kv" id="wait-info"></table></div>
+    <button class="btn-ghost" id="btn-wait-out" style="width:100%;margin-top:14px">ออกจากระบบ</button>
+  </div></div>
 </div>
 
 <div id="screen-app" class="hidden">
@@ -204,6 +237,7 @@ tbody tr:hover{background:#FAFCFA}
     <section id="tab-cal" class="hidden">
       <div class="panel">
         <h2>รอบนัดที่กำลังจะถึง <span class="note">กดที่การ์ดเพื่อเปิดรอบและดูยาที่ต้องเตรียม</span></h2>
+        <div id="cal-alert"></div>
         <div class="grid g4" id="cal-upcoming"></div>
       </div>
       <div class="panel">
@@ -283,6 +317,37 @@ tbody tr:hover{background:#FAFCFA}
       </div>
     </section>
 
+    <!-- ออกหน่วย -->
+    <section id="tab-visit" class="hidden">
+      <div class="bar">
+        <select id="v-round" style="min-width:280px"></select>
+        <button class="chip on" data-vs="record">บันทึกออกหน่วย</button>
+        <button class="chip" data-vs="pending">รอคีย์เข้า HOSxP</button>
+        <button class="chip" data-vs="review">สรุปการปรับยา</button>
+      </div>
+      <div id="v-alert"></div>
+
+      <div id="vs-record">
+        <div class="panel" style="padding:0"><div class="tbl-wrap"><table>
+          <thead><tr><th>ผู้ป่วย</th><th>ยาเดิม</th><th>สถานะวันนี้</th><th style="width:190px"></th></tr></thead>
+          <tbody id="tb-visit"></tbody></table></div></div>
+      </div>
+
+      <div id="vs-pending" class="hidden">
+        <div class="panel">
+          <h2>รอคีย์เข้า HOSxP <span class="note">คีย์เสร็จแล้วกรอกเลข VN เพื่อปิดงาน</span></h2>
+          <div id="pending-list"></div>
+        </div>
+      </div>
+
+      <div id="vs-review" class="hidden">
+        <div class="panel">
+          <h2>สรุปการปรับยาในรอบนี้</h2>
+          <div id="review-body"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ผู้ใช้ -->
     <section id="tab-user" class="hidden">
       <div class="panel">
@@ -294,12 +359,17 @@ tbody tr:hover{background:#FAFCFA}
           <div class="fld"><label>รหัสผ่านชั่วคราว</label><input type="text" id="u-pass" style="width:170px"></div>
           <div class="fld"><label>บทบาท</label><select id="u-role">
             <option value="rpst">เจ้าหน้าที่ รพ.สต.</option>
+            <option value="outreach">ทีมออกหน่วย รพ.สวี</option>
             <option value="hospital">เจ้าหน้าที่ รพ.สวี (ดูอย่างเดียว)</option>
             <option value="admin">ผู้ดูแลระบบ</option></select></div>
           <div class="fld"><label>รพ.สต.</label><select id="u-hcode"></select></div>
           <button class="btn-primary" id="btn-u-add">สร้างบัญชี</button>
         </div>
         <div id="u-msg" style="margin-top:10px"></div>
+      </div>
+      <div class="panel" id="pend-panel">
+        <h2>คำขอลงทะเบียนที่รออนุมัติ <span class="note" id="pend-count"></span></h2>
+        <div id="pend-body"></div>
       </div>
       <div class="panel">
         <h2>ผู้ใช้ในระบบ</h2>
@@ -386,12 +456,19 @@ const SC = { new:'#B8860B', acknowledged:'#3E6E8E', scheduled:'#3E6E8E',
 const TODO = ['new','acknowledged','scheduled'];
 const LAB = { bp:'ความดัน', fbs:'FBS', dtx:'DTX', hba1c:'HbA1c', chol:'Chol',
   ldl:'LDL', hdl:'HDL', tg:'TG', egfr:'eGFR', cr:'Creatinine', k:'Potassium' };
-const ROLE_LABEL = { admin:'ผู้ดูแลระบบ', hospital:'เจ้าหน้าที่ รพ.สวี', rpst:'เจ้าหน้าที่ รพ.สต.' };
+const ROLE_LABEL = { admin:'ผู้ดูแลระบบ', outreach:'ทีมออกหน่วย รพ.สวี',
+  hospital:'เจ้าหน้าที่ รพ.สวี (ดูอย่างเดียว)', rpst:'เจ้าหน้าที่ รพ.สต.' };
+const MED_ACTION = { continue:'จ่ายต่อ', adjust:'ปรับขนาด/วิธีใช้', stop:'หยุดยา', add:'ยาใหม่' };
+const STOP_REASON = ['ควบคุมโรคได้แล้ว','ผลข้างเคียง','เปลี่ยนไปใช้ยาตัวอื่น',
+  'ผู้ป่วยไม่ให้ความร่วมมือ','แพทย์สั่งหยุด','อื่น ๆ'];
+const ORDER_DAY = 20;   // เบิกยาล่วงหน้าภายในวันที่ 20 ของเดือนก่อนหน้า
 const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออกจากระบบ', view_list:'เปิดรายชื่อผู้ป่วย',
   view_patient:'เปิดเวชระเบียนผู้ป่วย', change_status:'เปลี่ยนสถานะ', batch_appoint:'กำหนดวันนัดเป็นชุด',
   open_round:'เปิดรอบนัด', view_dashboard:'เปิดแดชบอร์ด', view_log:'เปิดบันทึกการเข้าถึง',
   edit_outreach:'แก้ไขวันนัด', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
-  edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.' };
+  edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.',
+  record_visit:'บันทึกการให้บริการ', keyed_hosxp:'คีย์เข้า HOSxP แล้ว',
+  approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ' };
 
 /* ================= INIT ================= */
 const app  = initializeApp(FIREBASE_CONFIG);
@@ -419,8 +496,10 @@ const dayDiff = (a,b) => Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:0
 const daysFrom = iso => iso ? dayDiff(todayISO(), iso) : null;
 const isAdmin=()=>PROFILE?.role==='admin', isHospital=()=>PROFILE?.role==='hospital',
       isRpst=()=>PROFILE?.role==='rpst';
-const seesAll=()=>isAdmin()||isHospital();
-const canEdit=()=>isAdmin()||isRpst();
+const isOutreach=()=>PROFILE?.role==='outreach';
+const seesAll=()=>isAdmin()||isHospital()||isOutreach();
+const canEdit=()=>isAdmin()||isRpst()||isOutreach();
+const canRecord=()=>isAdmin()||isRpst()||isOutreach();
 const myHcode=()=>(PROFILE?.hcode||'').trim();
 const show=(id,on)=>$(id).classList.toggle('hidden', !on);
 const rpstName=h=>(RPST.find(r=>r.hcode===h)?.name)||h||'-';
@@ -436,17 +515,78 @@ async function audit(action, target, detail){
 }
 
 /* ================= AUTH ================= */
+function showOnly(id){
+  ['screen-login','screen-reg','screen-wait','screen-app']
+    .forEach(x=>show(x, x===id));
+}
 onAuthStateChanged(auth, async user => {
-  if(!user){ ME=null; PROFILE=null; show('screen-login',true); show('screen-app',false); return; }
+  if(!user){ ME=null; PROFILE=null; showOnly('screen-login'); return; }
   ME = user;
   try{ const s = await getDoc(doc(db,'users',user.uid)); PROFILE = s.exists()?s.data():null; }
   catch(e){ PROFILE=null; }
   if(!PROFILE){
+    // ยังไม่มีสิทธิ์ ตรวจว่ามีคำขอลงทะเบียนค้างอยู่หรือไม่
+    let pend=null;
+    try{ const p=await getDoc(doc(db,'pending_users',user.uid)); pend=p.exists()?p.data():null; }
+    catch(e){}
+    if(pend){
+      $('wait-info').innerHTML = `
+        <tr><td>ชื่อ</td><td>${esc(pend.full_name||'-')}</td></tr>
+        <tr><td>ตำแหน่ง</td><td>${esc(pend.position||'-')}</td></tr>
+        <tr><td>โทรศัพท์</td><td>${esc(pend.phone||'-')}</td></tr>
+        <tr><td>หน่วยบริการ</td><td>${esc(pend.hcode_name||pend.hcode||'-')}</td></tr>
+        <tr><td>ส่งคำขอ</td><td>${esc(String(pend.requested_at_text||'-'))}</td></tr>`;
+      showOnly('screen-wait'); return;
+    }
     $('login-err').textContent = 'บัญชีนี้ยังไม่ได้กำหนดสิทธิ์ ติดต่อผู้ดูแลระบบ (UID: '+user.uid+')';
     await signOut(auth); return;
   }
-  show('screen-login',false); show('screen-app',true);
+  showOnly('screen-app');
   await startApp();
+});
+$('btn-wait-out').addEventListener('click', ()=>signOut(auth));
+$('lnk-reg').addEventListener('click', async e=>{ e.preventDefault();
+  await fillRegUnits(); showOnly('screen-reg'); });
+$('lnk-back').addEventListener('click', e=>{ e.preventDefault(); showOnly('screen-login'); });
+
+// ดึงรายชื่อหน่วยบริการมาให้เลือกตอนลงทะเบียน (ยังไม่ล็อกอิน จึงอ่านจาก REST แบบสาธารณะไม่ได้
+// ใช้วิธีล็อกอินก่อนไม่ได้เช่นกัน จึงให้พิมพ์เองถ้าโหลดไม่ได้)
+async function fillRegUnits(){
+  const sel=$('r-hcode');
+  if(sel.options.length) return;
+  try{
+    const s=await getDocs(collection(db,'rpst'));
+    const rows=s.docs.map(d=>d.data()).sort((a,b)=>(a.hcode||'').localeCompare(b.hcode||''));
+    sel.innerHTML = rows.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
+  }catch(e){
+    sel.innerHTML='<option value="">(โหลดรายชื่อไม่ได้ ระบุในหมายเหตุแทน)</option>';
+  }
+}
+$('btn-reg').addEventListener('click', async ()=>{
+  const name=$('r-name').value.trim(), pos=$('r-pos').value.trim(),
+        phone=$('r-phone').value.replace(/\D/g,''), hcode=$('r-hcode').value,
+        email=$('r-email').value.trim(), pass=$('r-pass').value;
+  if(!name || name.split(' ').filter(Boolean).length<2){
+    $('reg-msg').innerHTML='<div class="msg err">กรอกชื่อและนามสกุลจริงให้ครบ</div>'; return; }
+  if(phone.length<9){ $('reg-msg').innerHTML='<div class="msg err">เบอร์โทรศัพท์ไม่ถูกต้อง</div>'; return; }
+  if(!email||pass.length<8){ $('reg-msg').innerHTML='<div class="msg err">อีเมลหรือรหัสผ่านไม่ถูกต้อง</div>'; return; }
+  $('btn-reg').disabled=true;
+  try{
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    await setDoc(doc(db,'pending_users',cred.user.uid), {
+      full_name:name, position:pos||null, phone, hcode:hcode||null,
+      hcode_name: $('r-hcode').selectedOptions[0]?.textContent||null,
+      email, requested_at: serverTimestamp(),
+      requested_at_text: new Date().toISOString().slice(0,16).replace('T',' ')
+    });
+    $('reg-msg').innerHTML='<div class="msg ok">ส่งคำขอแล้ว</div>';
+  }catch(e){
+    const m = e.code==='auth/email-already-in-use' ? 'อีเมลนี้มีบัญชีอยู่แล้ว ลองเข้าสู่ระบบแทน'
+            : e.code==='auth/invalid-email' ? 'รูปแบบอีเมลไม่ถูกต้อง'
+            : e.code==='auth/weak-password' ? 'รหัสผ่านสั้นเกินไป' : e.message;
+    $('reg-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`;
+  }
+  $('btn-reg').disabled=false;
 });
 $('btn-login').addEventListener('click', async ()=>{
   $('login-err').textContent=''; $('btn-login').disabled=true;
@@ -461,6 +601,7 @@ $('btn-logout').addEventListener('click', async ()=>{ await audit('logout'); sig
 const TABS = [
   {id:'list', label:'รายชื่อผู้ป่วย', all:1},
   {id:'cal',  label:'รอบนัด',        all:1},
+  {id:'visit',label:'ออกหน่วย',      record:1},
   {id:'batch',label:'จัดชุดเฉพาะกิจ', all:1},
   {id:'dash', label:'แดชบอร์ด',      seesAll:1},
   {id:'user', label:'จัดการผู้ใช้',   adminOnly:1},
@@ -468,7 +609,8 @@ const TABS = [
   {id:'log',  label:'บันทึกการเข้าถึง', adminOnly:1},
 ];
 function buildNav(){
-  const vis = TABS.filter(t => t.all || (t.seesAll&&seesAll()) || (t.adminOnly&&isAdmin()));
+  const vis = TABS.filter(t => t.all || (t.record&&canRecord())
+    || (t.seesAll&&seesAll()) || (t.adminOnly&&isAdmin()));
   $('nav').innerHTML = vis.map((t,i)=>
     `<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}</button>`).join('');
   $('nav').querySelectorAll('button').forEach(b=>
@@ -477,10 +619,11 @@ function buildNav(){
 function openTab(id){
   $('nav').querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.tab===id));
   TABS.forEach(t=>show('tab-'+t.id, t.id===id));
+  if(id==='visit') renderVisitTab();
   if(id==='cal')   renderCal();
   if(id==='batch') renderBatch();
   if(id==='dash')  { renderDash(); audit('view_dashboard'); }
-  if(id==='user')  loadUsers();
+  if(id==='user')  { loadUsers(); loadPending(); }
   if(id==='drug')  renderDrugMap();
   if(id==='log')   loadLog();
 }
@@ -493,6 +636,7 @@ async function startApp(){
   buildNav();
   await audit('login');
   await Promise.all([loadRpst(), loadOutreach(), loadDrugMap()]);
+  if(isAdmin()) loadPending();
   $('who-role').textContent = (ROLE_LABEL[PROFILE.role]||PROFILE.role) +
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   if(seesAll()){
@@ -516,11 +660,14 @@ async function loadList(){
   $('tb-list').innerHTML = '<tr><td colspan="7" class="loading">กำลังโหลด...</td></tr>';
   const scope = isRpst() ? myHcode() : VIEW_HCODE;
   try{
+    // ไม่ใช้ orderBy คู่กับ where เพื่อเลี่ยงการต้องสร้าง composite index
+    // ข้อมูลระดับพันรายการ เรียงในเบราว์เซอร์เร็วกว่ารอ index
     const q1 = scope
-      ? query(collection(db,'referrals'), where('hcode','==',scope), orderBy('refer_date','desc'), limit(1000))
-      : query(collection(db,'referrals'), orderBy('refer_date','desc'), limit(1000));
+      ? query(collection(db,'referrals'), where('hcode','==',scope), limit(3000))
+      : query(collection(db,'referrals'), limit(3000));
     const s = await getDocs(q1);
-    LIST = s.docs.map(d=>({id:d.id, ...d.data()}));
+    LIST = s.docs.map(d=>({id:d.id, ...d.data()}))
+                 .sort((a,b)=>String(b.refer_date||'').localeCompare(String(a.refer_date||'')));
     renderList();
     audit('view_list', scope||'ทุก รพ.สต.', {results:LIST.length});
   }catch(e){
@@ -702,6 +849,7 @@ function renderCal(){
   }).join('') : '<div class="empty">ยังไม่มีรอบนัดที่กำลังจะถึง</div>';
   $('cal-upcoming').querySelectorAll('[data-round]').forEach(c=>
     c.addEventListener('click',()=>openRound(c.dataset.round)));
+  renderOrderAlerts('cal-alert');
 
   const canMng = isAdmin() || isRpst();
   show('cal-form', canMng);
@@ -1066,7 +1214,432 @@ $('btn-geo').addEventListener('click', async ()=>{
   drawMap();
 });
 
+/* ================= ออกหน่วย ================= */
+let VISITS = [], VSUB = 'record', DRUGCAT = [];
+
+/* บัญชียาแบบไดนามิก: ยาทุกตัวที่เคยถูกสั่งในข้อมูล
+   active ของแต่ละ รพ.สต. = ยาที่คนไข้ของหน่วยนั้นเคยได้จริง */
+function buildDrugCatalog(){
+  const m = {};
+  LIST.forEach(r=>(r.medications||[]).forEach(d=>{
+    const k = d.icode || d.name; if(!k) return;
+    if(!m[k]) m[k] = {icode:d.icode||'', name:d.name, usages:{}, hcodes:new Set(), n:0};
+    m[k].n++; m[k].hcodes.add(r.hcode);
+    if(d.usage) m[k].usages[d.usage] = (m[k].usages[d.usage]||0)+1;
+  }));
+  DRUGCAT = Object.values(m).map(d=>({
+    icode:d.icode, name:d.name, n:d.n, hcodes:[...d.hcodes],
+    top_usage: Object.entries(d.usages).sort((a,b)=>b[1]-a[1])[0]?.[0] || ''
+  })).sort((a,b)=>b.n-a.n);
+}
+function catalogFor(hcode){
+  const local = DRUGCAT.filter(d=>d.hcodes.includes(hcode));
+  return local.length ? local : DRUGCAT;
+}
+
+/* เตือนรอบเบิกยา: ต้องเบิกภายในวันที่ 20 ของเดือนก่อนหน้ารอบนัด */
+function orderDeadline(dateISO){
+  const d = new Date(dateISO+'T00:00:00');
+  const m = new Date(d.getFullYear(), d.getMonth()-1, ORDER_DAY);
+  return m.toISOString().slice(0,10);
+}
+function orderAlerts(){
+  const scope = roundScope();
+  const out = [];
+  OUTREACH.filter(o=>(!scope||o.hcode===scope) && daysFrom(o.date)>=0).forEach(o=>{
+    const dl = orderDeadline(o.date), left = daysFrom(dl);
+    if(left <= 14) out.push({...o, deadline:dl, left, n:patientsOf(o.hcode,o.date).length});
+  });
+  return out.sort((a,b)=>a.deadline.localeCompare(b.deadline));
+}
+function renderOrderAlerts(target){
+  const a = orderAlerts();
+  $(target).innerHTML = a.length ? a.map(x=>
+    `<div class="msg ${x.left<0?'err':x.left<=3?'err':'info'}">
+      รอบ ${thDate(x.date)} ${esc(rpstName(x.hcode))} (${x.n} คน) —
+      ${x.left<0 ? `<b>เลยกำหนดเบิกยามาแล้ว ${-x.left} วัน</b> (กำหนด ${thDate(x.deadline)})`
+                 : `ต้องส่งใบเบิกภายใน <b>${thDate(x.deadline)}</b> เหลืออีก ${x.left} วัน`}
+    </div>`).join('') : '';
+}
+
+async function loadVisits(){
+  try{
+    const scope = isRpst() ? myHcode() : null;
+    const q1 = scope ? query(collection(db,'visits'), where('hcode','==',scope), limit(2000))
+                     : query(collection(db,'visits'), limit(2000));
+    const s = await getDocs(q1);
+    VISITS = s.docs.map(d=>({id:d.id, ...d.data()}));
+  }catch(e){ VISITS=[]; }
+}
+const visitOf = (refId,date) => VISITS.find(v=>v.referral_id===refId && v.date===date);
+
+function renderVisitTab(){
+  buildDrugCatalog();
+  const scope = roundScope();
+  const rounds = OUTREACH.filter(o=>!scope||o.hcode===scope)
+    .sort((a,b)=>Math.abs(daysFrom(a.date))-Math.abs(daysFrom(b.date)));
+  if(!rounds.length){
+    $('v-round').innerHTML='<option value="">ยังไม่มีรอบนัด</option>';
+    $('tb-visit').innerHTML='<tr><td colspan="4" class="empty">ยังไม่มีรอบนัด ไปกำหนดที่แท็บรอบนัดก่อน</td></tr>';
+    return;
+  }
+  const cur = $('v-round').value;
+  $('v-round').innerHTML = rounds.map(o=>{
+    const d=daysFrom(o.date);
+    return `<option value="${esc(o.id)}"${o.id===cur?' selected':''}>${thDate(o.date)} · ${esc(rpstName(o.hcode))} · ${
+      d===0?'วันนี้':d>0?'อีก '+d+' วัน':'ผ่านมา '+(-d)+' วัน'}</option>`;
+  }).join('');
+  renderOrderAlerts('v-alert');
+  loadVisits().then(renderVisitSub);
+}
+$('v-round').addEventListener('change', renderVisitSub);
+document.querySelectorAll('[data-vs]').forEach(b=>b.addEventListener('click',()=>{
+  VSUB=b.dataset.vs;
+  document.querySelectorAll('[data-vs]').forEach(x=>x.classList.toggle('on',x===b));
+  ['record','pending','review'].forEach(k=>show('vs-'+k, k===VSUB));
+  renderVisitSub();
+}));
+
+function curRound(){ return OUTREACH.find(o=>o.id===$('v-round').value) || null; }
+
+function renderVisitSub(){
+  const o = curRound(); if(!o) return;
+  if(VSUB==='record')  renderRecord(o);
+  if(VSUB==='pending') renderPending(o);
+  if(VSUB==='review')  renderReview(o);
+}
+
+function renderRecord(o){
+  const ps = patientsOf(o.hcode, o.date);
+  if(!ps.length){ $('tb-visit').innerHTML =
+    '<tr><td colspan="4" class="empty">ยังไม่มีผู้ป่วยในรอบนี้ ไปนัดเข้ารอบที่แท็บรอบนัดก่อน</td></tr>'; return; }
+  $('tb-visit').innerHTML = ps.map(r=>{
+    const v = visitOf(r.id, o.date);
+    const nMed = (r.medications||[]).length;
+    let st = '<span class="sub">ยังไม่บันทึก</span>';
+    if(v && v.attended===false) st = '<span class="tag" style="background:#8B20201a;color:#8B2020">ไม่มา</span>';
+    else if(v) {
+      const chg = (v.meds||[]).filter(m=>m.action!=='continue').length;
+      st = `<span class="tag" style="background:#1B6B471a;color:#1B6B47">บันทึกแล้ว</span>`
+         + (chg?`<span class="pill pill-rem">ปรับ ${chg} รายการ</span>`:'')
+         + (v.keyed_in_hosxp?'<span class="pill pill-ok">คีย์แล้ว</span>':'<span class="pill pill-warn">รอคีย์</span>');
+    }
+    return `<tr>
+      <td><div class="nm">${esc(r.patient?.full_name||r.hn)}</div>
+        <div class="sub">HN ${esc(r.hn)} · ${esc(r.patient?.sex||'')} ${esc(r.patient?.age??'')} ปี</div>
+        <div class="clin">${esc(String(r.clinics||'').replace(/\d+:/g,''))}</div></td>
+      <td class="sub">${nMed} รายการ</td>
+      <td>${st}</td>
+      <td class="right">
+        <button class="btn-sm" data-rec="${esc(r.id)}">${v?'แก้ไข':'บันทึก'}</button>
+        ${!v?` <button class="btn-sm grey" data-miss="${esc(r.id)}">ไม่มา</button>`:''}
+      </td></tr>`;
+  }).join('');
+  $('tb-visit').querySelectorAll('[data-rec]').forEach(b=>
+    b.addEventListener('click',()=>openVisit(b.dataset.rec, o)));
+  $('tb-visit').querySelectorAll('[data-miss]').forEach(b=>
+    b.addEventListener('click',()=>markMissed(b.dataset.miss, o)));
+}
+
+async function markMissed(refId, o){
+  if(!confirm('บันทึกว่าผู้ป่วยไม่มาตามนัด?')) return;
+  const r = LIST.find(x=>x.id===refId);
+  try{
+    await setDoc(doc(db,'visits',refId+'_'+o.date), {
+      referral_id:refId, hn:r.hn, patient_name:r.patient?.full_name||null,
+      hcode:o.hcode, date:o.date, attended:false, meds:[],
+      recorded_by:PROFILE.full_name||ME.email, recorded_at:serverTimestamp(),
+      keyed_in_hosxp:false });
+    await setStatus(refId,'missed');
+    await audit('record_visit', refId, {date:o.date, attended:false});
+    await loadVisits(); renderVisitSub(); renderList();
+  }catch(e){ alert('บันทึกไม่สำเร็จ: '+e.message); }
+}
+
+function openVisit(refId, o){
+  const r = LIST.find(x=>x.id===refId); if(!r) return;
+  const v = visitOf(refId, o.date);
+  const cat = catalogFor(o.hcode);
+  const meds = (r.medications||[]).filter(m=>(m.days_before??0)<=365);
+  const prev = {}; (v?.meds||[]).forEach(m=>prev[m.icode||m.name]=m);
+  const nx = nextRound(o.hcode,o.date);
+
+  const rows = meds.map((m,i)=>{
+    const k = m.icode||m.name, p = prev[k]||{};
+    const act = p.action||'continue';
+    return `<tr data-med="${i}" data-key="${esc(k)}">
+      <td><div class="nm">${esc(m.name)}</div>
+        <div class="sub">${esc(m.usage||'-')}</div>
+        <div class="sub">จ่ายล่าสุด ${thDate(m.last_dispensed)} · ${esc(m.qty??'-')} หน่วย</div></td>
+      <td style="white-space:nowrap">
+        ${['continue','adjust','stop'].map(a=>
+          `<label style="display:block;font-size:13px"><input type="radio" name="a${i}" value="${a}"${
+            act===a?' checked':''}> ${MED_ACTION[a]}</label>`).join('')}</td>
+      <td><input type="text" class="m-usage" style="width:100%" placeholder="วิธีใช้ใหม่"
+            value="${esc(p.usage||'')}"${act==='adjust'?'':' disabled'}>
+          <select class="m-reason" style="width:100%;margin-top:4px"${act==='stop'?'':' disabled'}>
+            <option value="">เลือกเหตุผลที่หยุด</option>
+            ${STOP_REASON.map(x=>`<option${p.reason===x?' selected':''}>${x}</option>`).join('')}
+          </select></td></tr>`;
+  }).join('');
+
+  const added = (v?.meds||[]).filter(m=>m.action==='add');
+
+  $('ov-body').innerHTML = `
+    <h2 style="font-size:20px;font-weight:600">${esc(r.patient?.full_name||r.hn)}</h2>
+    <div class="sub">HN ${esc(r.hn)} · รอบ ${thDate(o.date)} · ${esc(rpstName(o.hcode))}</div>
+    <div class="msg info" style="margin-top:12px">ไม่ต้องแตะรายการที่จ่ายต่อเหมือนเดิม
+      แก้เฉพาะตัวที่แพทย์ปรับเท่านั้น${nx?` · รอบถัดไป ${thDate(nx.date)} ห่าง ${dayDiff(o.date,nx.date)} วัน`:''}</div>
+
+    <div class="frm">
+      <div class="fld"><label>ความดัน</label><input type="text" id="v-bp" style="width:110px"
+        placeholder="120/80" value="${esc(v?.bp||'')}"></div>
+      <div class="fld"><label>DTX</label><input type="number" id="v-dtx" style="width:100px" value="${esc(v?.dtx??'')}"></div>
+      <div class="fld"><label>น้ำหนัก (กก.)</label><input type="number" step="0.1" id="v-wt" style="width:110px" value="${esc(v?.weight??'')}"></div>
+      <div class="fld grow"><label>แพทย์ผู้สั่ง / ผู้ให้บริการ</label>
+        <input type="text" id="v-dr" value="${esc(v?.doctor_name||'')}" placeholder="ชื่อแพทย์ที่ออกหน่วย เว้นว่างได้ถ้าไม่มีแพทย์"></div>
+      <div class="fld"><label>นัดครั้งถัดไป</label>
+        <input type="date" id="v-next" value="${esc(v?.next_appoint||nx?.date||'')}"></div>
+    </div>
+
+    <div class="sec"><div class="st">ทบทวนยาเดิม (${meds.length} รายการ)</div>
+      <div class="tbl-wrap scroll"><table id="tb-med">
+        <thead><tr><th>ยาเดิม</th><th style="width:150px">การสั่ง</th><th style="width:290px">รายละเอียด</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="3" class="empty">ไม่มีรายการยา</td></tr>'}</tbody></table></div></div>
+
+    <div class="sec"><div class="st">ยาที่เพิ่มใหม่</div>
+      <div class="frm">
+        <div class="fld grow"><label>ค้นหาชื่อยา</label>
+          <input type="text" id="v-newdrug" list="dl-drug" placeholder="พิมพ์ชื่อยาเพื่อค้นหา"></div>
+        <div class="fld grow"><label>วิธีใช้</label><input type="text" id="v-newusage"></div>
+        <div class="fld"><label>จำนวน</label><input type="number" id="v-newqty" style="width:90px"></div>
+        <button class="btn-sm" id="v-addmed">เพิ่ม</button>
+      </div>
+      <datalist id="dl-drug">${cat.slice(0,600).map(d=>
+        `<option value="${esc(d.name)}">${esc(d.top_usage).slice(0,60)}</option>`).join('')}</datalist>
+      <div class="sub" style="margin-top:6px">บัญชียาสร้างจากยาที่เคยสั่งจริง ${cat.length} รายการ
+        ${cat!==DRUGCAT?'(เฉพาะที่หน่วยนี้เคยใช้)':''}</div>
+      <div id="v-newlist" style="margin-top:8px"></div></div>
+
+    <div class="frm" style="margin-top:14px">
+      <button class="btn-primary" id="v-save">บันทึกการให้บริการ</button>
+      <div class="fld grow"><div id="v-msg"></div></div>
+    </div>`;
+  $('ov').classList.remove('hidden');
+
+  // เปิด/ปิดช่องตามการเลือก
+  $('tb-med')?.querySelectorAll('tr[data-med]').forEach(tr=>{
+    tr.querySelectorAll('input[type=radio]').forEach(rd=>rd.addEventListener('change',()=>{
+      tr.querySelector('.m-usage').disabled = rd.value!=='adjust';
+      tr.querySelector('.m-reason').disabled = rd.value!=='stop';
+      if(rd.value==='adjust' && !tr.querySelector('.m-usage').value)
+        tr.querySelector('.m-usage').value = meds[+tr.dataset.med].usage||'';
+    }));
+  });
+
+  let NEW = [...added];
+  function drawNew(){
+    $('v-newlist').innerHTML = NEW.length ? NEW.map((m,i)=>
+      `<div style="padding:4px 0;border-bottom:1px solid var(--line);font-size:13.5px">
+        <b>${esc(m.name)}</b> <span class="sub">${esc(m.usage||'-')} · ${esc(m.qty??'-')}</span>
+        <button class="btn-sm red" style="float:right" data-rm="${i}">ลบ</button></div>`).join('')
+      : '<div class="sub">ยังไม่มียาใหม่</div>';
+    $('v-newlist').querySelectorAll('[data-rm]').forEach(b=>
+      b.addEventListener('click',()=>{ NEW.splice(+b.dataset.rm,1); drawNew(); }));
+  }
+  drawNew();
+  $('v-newdrug').addEventListener('change',()=>{
+    const d = cat.find(x=>x.name===$('v-newdrug').value);
+    if(d && !$('v-newusage').value) $('v-newusage').value = d.top_usage||'';
+  });
+  $('v-addmed').addEventListener('click',()=>{
+    const nm=$('v-newdrug').value.trim(); if(!nm) return;
+    const d = cat.find(x=>x.name===nm);
+    NEW.push({icode:d?.icode||'', name:nm, action:'add',
+      usage:$('v-newusage').value.trim()||null,
+      qty:$('v-newqty').value?parseFloat($('v-newqty').value):null});
+    $('v-newdrug').value=$('v-newusage').value=$('v-newqty').value='';
+    drawNew();
+  });
+
+  $('v-save').addEventListener('click', async ()=>{
+    const out = [];
+    $('tb-med')?.querySelectorAll('tr[data-med]').forEach(tr=>{
+      const i=+tr.dataset.med, m=meds[i];
+      const act = tr.querySelector('input[type=radio]:checked')?.value || 'continue';
+      out.push({icode:m.icode||'', name:m.name, action:act,
+        usage: act==='adjust' ? (tr.querySelector('.m-usage').value.trim()||null)
+             : act==='stop' ? null : (m.usage||null),
+        qty: m.qty??null,
+        reason: act==='stop' ? (tr.querySelector('.m-reason').value||null) : null});
+    });
+    NEW.forEach(n=>out.push(n));
+    const stopNoReason = out.filter(m=>m.action==='stop' && !m.reason);
+    if(stopNoReason.length){ $('v-msg').innerHTML=
+      '<div class="msg err">ยาที่หยุดต้องเลือกเหตุผลทุกตัว</div>'; return; }
+    $('v-save').disabled=true;
+    try{
+      await setDoc(doc(db,'visits',refId+'_'+o.date), {
+        referral_id:refId, hn:r.hn, patient_name:r.patient?.full_name||null,
+        hcode:o.hcode, date:o.date, attended:true,
+        bp:$('v-bp').value.trim()||null,
+        dtx:$('v-dtx').value?parseFloat($('v-dtx').value):null,
+        weight:$('v-wt').value?parseFloat($('v-wt').value):null,
+        doctor_name:$('v-dr').value.trim()||null,
+        next_appoint:$('v-next').value||null,
+        meds:out, changed: out.filter(m=>m.action!=='continue').length,
+        recorded_by:PROFILE.full_name||ME.email, recorded_at:serverTimestamp(),
+        keyed_in_hosxp: v?.keyed_in_hosxp||false, vn: v?.vn||null
+      }, {merge:true});
+      await setStatus(refId,'visited', {appoint_date:$('v-next').value||null});
+      await audit('record_visit', refId, {date:o.date, changed:out.filter(m=>m.action!=='continue').length});
+      $('v-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>';
+      await loadVisits(); renderVisitSub(); renderList();
+      setTimeout(()=>$('ov').classList.add('hidden'), 700);
+    }catch(e){ $('v-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+    $('v-save').disabled=false;
+  });
+}
+
+function renderPending(o){
+  const rows = VISITS.filter(v=>v.hcode===o.hcode && v.date===o.date
+                 && v.attended!==false && !v.keyed_in_hosxp);
+  $('pending-list').innerHTML = rows.length ? rows.map(v=>{
+    const chg = (v.meds||[]).filter(m=>m.action!=='continue');
+    return `<div class="sec">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div><b>${esc(v.patient_name||v.hn)}</b>
+          <span class="sub">HN <span class="mono">${esc(v.hn)}</span></span>
+          <button class="btn-sm grey" data-copy="${esc(v.hn)}">คัดลอก HN</button>
+          <div class="sub">${v.bp?'BP '+esc(v.bp):''} ${v.dtx?'· DTX '+esc(v.dtx):''}
+            ${v.doctor_name?'· ผู้สั่ง '+esc(v.doctor_name):''}
+            ${v.next_appoint?'· นัดถัดไป '+thDate(v.next_appoint):''}</div></div>
+        <div class="frm" style="align-items:flex-end">
+          <div class="fld"><label>เลข VN ที่เปิด</label>
+            <input type="text" class="vn-in" data-vid="${esc(v.id)}" style="width:150px" placeholder="VN"></div>
+          <button class="btn-sm" data-keyed="${esc(v.id)}">คีย์แล้ว</button></div>
+      </div>
+      ${chg.length?`<div class="tbl-wrap" style="margin-top:8px"><table>
+        <thead><tr><th style="width:110px">การสั่ง</th><th>ยา</th><th>วิธีใช้ / เหตุผล</th></tr></thead>
+        <tbody>${chg.map(m=>`<tr>
+          <td><span class="tag" style="background:${m.action==='stop'?'#8B2020':'#B8860B'}1a;color:${
+            m.action==='stop'?'#8B2020':'#B8860B'}">${MED_ACTION[m.action]}</span></td>
+          <td>${esc(m.name)}${m.icode?` <span class="sub mono">${esc(m.icode)}</span>`:''}</td>
+          <td class="sub">${m.action==='stop'
+            ? 'เหตุผล: '+esc(m.reason||'-') : esc(m.usage||'-')}</td></tr>`).join('')}</tbody></table></div>`
+      :'<div class="sub" style="margin-top:6px">จ่ายยาเดิมทั้งหมด ไม่มีการปรับ</div>'}
+    </div>`;
+  }).join('') : '<div class="empty">ไม่มีรายการรอคีย์ในรอบนี้</div>';
+
+  $('pending-list').querySelectorAll('[data-copy]').forEach(b=>
+    b.addEventListener('click',()=>{ navigator.clipboard?.writeText(b.dataset.copy);
+      b.textContent='คัดลอกแล้ว'; setTimeout(()=>b.textContent='คัดลอก HN',1200); }));
+  $('pending-list').querySelectorAll('[data-keyed]').forEach(b=>
+    b.addEventListener('click', async ()=>{
+      const id=b.dataset.keyed;
+      const vn=$('pending-list').querySelector(`.vn-in[data-vid="${CSS.escape(id)}"]`).value.trim();
+      if(!vn){ alert('กรอกเลข VN ก่อน'); return; }
+      try{
+        await updateDoc(doc(db,'visits',id), {keyed_in_hosxp:true, vn,
+          keyed_by:PROFILE.full_name||ME.email, keyed_at:serverTimestamp()});
+        await audit('keyed_hosxp', id, {vn});
+        await loadVisits(); renderVisitSub();
+      }catch(e){ alert('บันทึกไม่สำเร็จ: '+e.message); }
+    }));
+}
+
+function renderReview(o){
+  const vs = VISITS.filter(v=>v.hcode===o.hcode && v.date===o.date);
+  const att = vs.filter(v=>v.attended!==false);
+  const miss = vs.filter(v=>v.attended===false);
+  const changed = att.filter(v=>(v.meds||[]).some(m=>m.action!=='continue'));
+  const total = patientsOf(o.hcode,o.date).length;
+
+  const byAction = {};
+  att.forEach(v=>(v.meds||[]).forEach(m=>{
+    if(m.action==='continue') return;
+    const k=m.action+'|'+m.name;
+    if(!byAction[k]) byAction[k]={action:m.action, name:m.name, n:0, who:[]};
+    byAction[k].n++; byAction[k].who.push(v.patient_name||v.hn);
+  }));
+  const list = Object.values(byAction).sort((a,b)=>b.n-a.n);
+
+  $('review-body').innerHTML = `
+    <div class="grid g4" style="margin-bottom:14px">
+      ${[['นัดไว้',total],['มารับบริการ',att.length],['ไม่มา',miss.length],
+         ['มีการปรับยา',changed.length],['คีย์เข้า HOSxP แล้ว',att.filter(v=>v.keyed_in_hosxp).length]]
+        .map(([k,v])=>`<div class="stat"><div class="v mono">${v}</div><div class="k">${k}</div></div>`).join('')}
+    </div>
+    ${list.length?`<div class="tbl-wrap"><table>
+      <thead><tr><th style="width:110px">การสั่ง</th><th>ยา</th><th class="right" style="width:60px">คน</th><th>รายชื่อ</th></tr></thead>
+      <tbody>${list.map(x=>`<tr>
+        <td><span class="tag" style="background:${x.action==='stop'?'#8B2020':x.action==='add'?'#1B6B47':'#B8860B'}1a;color:${
+          x.action==='stop'?'#8B2020':x.action==='add'?'#1B6B47':'#B8860B'}">${MED_ACTION[x.action]}</span></td>
+        <td>${esc(x.name)}</td><td class="right mono">${x.n}</td>
+        <td class="sub">${esc(x.who.join(', '))}</td></tr>`).join('')}</tbody></table></div>`
+    :'<div class="empty">รอบนี้ยังไม่มีการปรับยา</div>'}
+    ${miss.length?`<div class="sec"><div class="st">ไม่มาตามนัด ${miss.length} คน</div>
+      <div class="sub">${miss.map(v=>esc(v.patient_name||v.hn)).join(', ')}</div></div>`:''}`;
+}
+
 /* ================= จัดการผู้ใช้ ================= */
+let PENDING=[];
+async function loadPending(){
+  try{
+    const s=await getDocs(collection(db,'pending_users'));
+    PENDING=s.docs.map(d=>({uid:d.id, ...d.data()}));
+  }catch(e){ PENDING=[]; }
+  renderPendingUsers();
+}
+function renderPendingUsers(){
+  $('pend-count').textContent = PENDING.length ? `${PENDING.length} คำขอ` : 'ไม่มีคำขอค้าง';
+  $('pend-body').innerHTML = PENDING.length ? `<div class="tbl-wrap"><table>
+    <thead><tr><th>ผู้ขอ</th><th>ติดต่อ</th><th>หน่วยบริการ</th><th>บทบาทที่จะให้</th><th style="width:190px"></th></tr></thead>
+    <tbody>${PENDING.map(p=>`<tr>
+      <td><div class="nm">${esc(p.full_name||'-')}</div>
+        <div class="sub">${esc(p.position||'')}</div>
+        <div class="sub">${esc(p.email||'')}</div></td>
+      <td class="mono">${esc(p.phone||'-')}</td>
+      <td><select data-phc="${esc(p.uid)}">
+        ${RPST.map(r=>`<option value="${esc(r.hcode)}"${p.hcode===r.hcode?' selected':''}>${esc(r.name)}</option>`).join('')}
+      </select></td>
+      <td><select data-prole="${esc(p.uid)}">
+        ${Object.entries(ROLE_LABEL).map(([k,v])=>
+          `<option value="${k}"${k==='rpst'?' selected':''}>${v}</option>`).join('')}</select></td>
+      <td class="right"><button class="btn-sm" data-appr="${esc(p.uid)}">อนุมัติ</button>
+        <button class="btn-sm red" data-rej="${esc(p.uid)}">ปฏิเสธ</button></td>
+    </tr>`).join('')}</tbody></table></div>`
+    : '<div class="sub">ไม่มีคำขอรออนุมัติ</div>';
+
+  $('pend-body').querySelectorAll('[data-appr]').forEach(b=>
+    b.addEventListener('click', async ()=>{
+      const uid=b.dataset.appr, p=PENDING.find(x=>x.uid===uid);
+      const role=$('pend-body').querySelector(`[data-prole="${CSS.escape(uid)}"]`).value;
+      const hcode=$('pend-body').querySelector(`[data-phc="${CSS.escape(uid)}"]`).value;
+      if(role==='rpst' && !hcode){ alert('บทบาท รพ.สต. ต้องเลือกหน่วยบริการ'); return; }
+      b.disabled=true;
+      try{
+        await setDoc(doc(db,'users',uid), {full_name:p.full_name, email:p.email,
+          phone:p.phone||null, position:p.position||null,
+          role, hcode: role==='rpst'?hcode:null,
+          approved_by:ME.email, approved_at:serverTimestamp()});
+        await deleteDoc(doc(db,'pending_users',uid));
+        await audit('approve_user', uid, {role, hcode, name:p.full_name});
+        PENDING=PENDING.filter(x=>x.uid!==uid);
+        renderPendingUsers(); await loadUsers();
+      }catch(e){ alert('อนุมัติไม่สำเร็จ: '+e.message); b.disabled=false; }
+    }));
+  $('pend-body').querySelectorAll('[data-rej]').forEach(b=>
+    b.addEventListener('click', async ()=>{
+      if(!confirm('ปฏิเสธคำขอนี้? บัญชีล็อกอินจะยังอยู่ ถ้าต้องการลบต้องไปลบที่ Firebase Console > Authentication')) return;
+      try{
+        await deleteDoc(doc(db,'pending_users',b.dataset.rej));
+        await audit('reject_user', b.dataset.rej);
+        PENDING=PENDING.filter(x=>x.uid!==b.dataset.rej); renderPendingUsers();
+      }catch(e){ alert('ไม่สำเร็จ: '+e.message); }
+    }));
+}
+
 async function loadUsers(){
   $('u-hcode').innerHTML = '<option value="">(ไม่ผูก รพ.สต.)</option>' +
     RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');

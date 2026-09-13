@@ -146,6 +146,10 @@ tbody tr:hover{background:#FAFCFA}
 .old{color:var(--amber)}
 .right{text-align:right}
 .mono{font-variant-numeric:tabular-nums}
+.btn-eye{background:none;border:none;cursor:pointer;font-size:14px;opacity:.4;padding:0 4px;vertical-align:middle}
+.btn-eye:hover{opacity:1}
+.masked{letter-spacing:.5px}
+.reveal-warn{background:var(--warn-dim);color:var(--warn);padding:6px 12px;border-radius:6px;font-size:12px;margin:6px 0;display:inline-block}
 .scroll{max-height:300px;overflow-y:auto}
 @media(max-width:700px){.barrow .lbl{width:110px}#map{height:360px}}
 </style>
@@ -221,6 +225,7 @@ tbody tr:hover{background:#FAFCFA}
         <div style="flex:1"></div>
         <input type="text" id="q" placeholder="ค้นหาชื่อ หรือ HN" style="width:190px">
         <button class="btn-ghost" id="btn-reload">โหลดใหม่</button>
+        <button class="btn-sm" id="btn-add-pt" style="margin-left:auto">+ ขอเพิ่มผู้ป่วย</button>
       </div>
       <div id="batch-bar" class="msg ok hidden"></div>
       <div class="panel" style="padding:0"><div class="tbl-wrap"><table>
@@ -411,6 +416,27 @@ tbody tr:hover{background:#FAFCFA}
   </main>
 </div>
 
+<div id="ov-add" class="ov hidden"><div class="modal" style="max-width:520px">
+  <button class="x" onclick="$('ov-add').classList.add('hidden')">&times;</button>
+  <h2>ขอเพิ่มผู้ป่วยเข้าระบบ</h2>
+  <div class="msg info" style="margin-top:8px">
+    <b>กรณี A:</b> มีใน HOSxP แล้ว แต่ไม่ได้ถูกส่งต่อ (เช่น คลินิกไขมัน COPD ฯลฯ)<br>
+    กรอก HN แล้วส่งคำขอ ผู้ดูแลระบบจะตรวจสอบและอนุมัติ pusher รอบถัดไปจะดึงข้อมูลมาให้เอง<br><br>
+    <b>กรณี B:</b> ไม่มีใน HOSxP เลย (คนไข้ใหม่/ย้ายมาจากที่อื่น)<br>
+    ต้องมาทำทะเบียนที่ รพ.สวี ก่อน แล้วจึงขอเพิ่มได้
+  </div>
+  <div class="frm" style="margin-top:14px">
+    <div class="fld"><label>HN</label><input type="text" id="ap-hn" placeholder="เช่น 560001337" style="width:140px"></div>
+    <div class="fld"><label>หน่วยปลายทาง</label><select id="ap-hcode"></select></div>
+    <div class="fld grow"><label>เหตุผล</label><input type="text" id="ap-reason" placeholder="เช่น คลินิกไขมัน ต้องการรับยาที่ รพ.สต."></div>
+  </div>
+  <div class="frm" style="margin-top:10px">
+    <button class="btn-primary" id="btn-ap-send">ส่งคำขอ</button>
+  </div>
+  <div id="ap-msg" style="margin-top:10px"></div>
+  <div id="ap-list" style="margin-top:14px"></div>
+</div></div>
+
 <div id="ov" class="ov hidden"><div class="modal"><button class="x" id="ov-x">&times;</button><div id="ov-body"></div></div></div>
 
 <script type="module">
@@ -468,7 +494,9 @@ const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออ
   edit_outreach:'แก้ไขวันนัด', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
   edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.',
   record_visit:'บันทึกการให้บริการ', keyed_hosxp:'คีย์เข้า HOSxP แล้ว',
-  approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ' };
+  approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
+  reveal_sensitive:'เปิดดูข้อมูลส่วนบุคคล', add_patient_request:'ขอเพิ่มผู้ป่วย',
+  approve_add_patient:'อนุมัติเพิ่มผู้ป่วย' };
 
 /* ================= INIT ================= */
 const app  = initializeApp(FIREBASE_CONFIG);
@@ -483,6 +511,26 @@ const SELECTED = new Set();
 
 /* ================= UTIL ================= */
 const $ = id => document.getElementById(id);
+/* ====== PDPA ====== */
+const SENSITIVE_FIELDS = ['full_name','fname','lname','pname','address_full','phone','cid_last4','birthday'];
+function maskName(s){ if(!s) return '-'; const w=String(s).split(' '); return w.map((p,i)=>i===0?p[0]+'***':p[0]+'***').join(' '); }
+function maskAddr(s){ return s ? 'หมู่ ...' : '-'; }
+function maskPhone(s){ return s ? s.slice(0,-4)+'****' : '-'; }
+function maskText(s,n){ return s ? s.slice(0,n)+'...' : '-'; }
+function eyeBtn(refId, field, label){
+  return `<button class="btn-eye" title="เปิดดู${label} (มีบันทึก log)" data-eye="${esc(refId)}" data-ef="${field}">`
+    + '👁</button>';
+}
+async function revealField(refId, field){
+  const r = LIST.find(x=>x.id===refId); if(!r) return;
+  const p = r.patient||{};
+  const val = field==='full_name'?p.full_name : field==='address'?p.address_full
+    : field==='phone'?p.phone : field==='labs'?'labs' : field==='birthday'?p.birthday : '';
+  // บันทึก log เฉพาะตอนเปิดดู sensitive data
+  await audit('reveal_sensitive', refId, {field, hn:r.hn});
+  return val;
+}
+
 const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const TMON = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
@@ -543,6 +591,7 @@ onAuthStateChanged(auth, async user => {
   }
   showOnly('screen-app');
   await startApp();
+  // login log ส่งเฉพาะครั้งแรกของ session
 });
 $('btn-wait-out').addEventListener('click', ()=>signOut(auth));
 $('lnk-reg').addEventListener('click', async e=>{ e.preventDefault();
@@ -605,7 +654,7 @@ const TABS = [
   {id:'batch',label:'จัดชุดเฉพาะกิจ', all:1},
   {id:'dash', label:'แดชบอร์ด',      seesAll:1},
   {id:'user', label:'จัดการผู้ใช้',   adminOnly:1},
-  {id:'drug', label:'วิธีใช้ยา',      adminOnly:1},
+  {id:'drug', label:'วิธีใช้ยา',      seesAll:1},
   {id:'log',  label:'บันทึกการเข้าถึง', adminOnly:1},
 ];
 function buildNav(){
@@ -669,7 +718,7 @@ async function loadList(){
     LIST = s.docs.map(d=>({id:d.id, ...d.data()}))
                  .sort((a,b)=>String(b.refer_date||'').localeCompare(String(a.refer_date||'')));
     renderList();
-    audit('view_list', scope||'ทุก รพ.สต.', {results:LIST.length});
+    // audit view_list ถูกเอาออกเพื่อประหยัดโควตา
   }catch(e){
     $('tb-list').innerHTML = `<tr><td colspan="7" class="empty">โหลดไม่สำเร็จ: ${esc(e.message)}</td></tr>`;
   }
@@ -725,6 +774,14 @@ function renderList(){
         <button class="btn-sm grey" data-open="${esc(r.id)}">ดู</button></td></tr>`;
   }).join('');
   $('tb-list').querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openDetail(b.dataset.open)));
+  $('tb-list').querySelectorAll('.btn-eye').forEach(b=>b.addEventListener('click', async (e)=>{
+    e.stopPropagation();
+    const rid=b.dataset.eye, f=b.dataset.ef;
+    const v = await revealField(rid, f);
+    const span = b.parentElement.querySelector('.masked');
+    if(span) span.textContent = v || '-';
+    b.style.display='none';
+  }));
   $('tb-list').querySelectorAll('[data-quick]').forEach(b=>b.addEventListener('click',()=>quickStatus(b.dataset.quick,b.dataset.to)));
   $('tb-list').querySelectorAll('.rowchk').forEach(c=>c.addEventListener('change',()=>{
     c.checked?SELECTED.add(c.dataset.id):SELECTED.delete(c.dataset.id); updateBatchBar(); }));
@@ -779,13 +836,17 @@ function openDetail(id){
       <td class="${old?'old':''}">${thDate(m.last_dispensed)}<div class="sub">จ่าย ${esc(m.times_dispensed??'-')} ครั้ง</div></td></tr>`;
   }).join('');
   $('ov-body').innerHTML=`
-    <h2 style="font-size:20px;font-weight:600">${esc(p.full_name||r.hn)}</h2>
+    <h2 style="font-size:20px;font-weight:600"><span id="d-name">${esc(maskName(p.full_name)||r.hn)}</span>
+      <button class="btn-eye" id="d-eye-name" title="เปิดดูชื่อเต็ม (มีบันทึก log)">👁</button></h2>
+    <div class="reveal-warn">ข้อมูลบางส่วนถูกซ่อนเพื่อคุ้มครองความเป็นส่วนตัว การเปิดดูจะถูกบันทึก</div>
     <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี · ${esc(p.pttype_name||'')}
       <span class="tag" style="background:${SC[st]}1a;color:${SC[st]};margin-left:6px">${STATUS[st]||st}</span></div>
     <div class="grid g2">
       <div class="sec"><div class="st">ข้อมูลทั่วไป</div><table class="kv">
-        <tr><td>ที่อยู่</td><td>${esc(p.address_full||'-')}</td></tr>
-        <tr><td>โทรศัพท์</td><td>${esc(p.phone||'-')}</td></tr>
+        <tr><td>ที่อยู่</td><td><span id="d-addr">${esc(maskAddr(p.address_full))}</span>
+          <button class="btn-eye" id="d-eye-addr">👁</button></td></tr>
+        <tr><td>โทรศัพท์</td><td><span id="d-phone">${esc(maskPhone(p.phone))}</span>
+          <button class="btn-eye" id="d-eye-phone">👁</button></td></tr>
         <tr><td>คลินิก</td><td>${esc(String(r.clinics||'').replace(/\d+:/g,'')||'-')}</td></tr>
         <tr><td>วันที่ส่งต่อ</td><td>${thDate(r.refer_date)}</td></tr>
         <tr><td>ปลายทาง</td><td>${esc(r.hcode_name||r.hcode||'-')}
@@ -809,6 +870,21 @@ function openDetail(id){
       <div id="d-msg" style="margin-top:8px"></div></div>`
     :'<div class="sub" style="margin-top:12px">บัญชีของคุณดูข้อมูลได้อย่างเดียว</div>'}`;
   $('ov').classList.remove('hidden');
+  // PDPA reveal buttons
+  $('d-eye-name')?.addEventListener('click', async ()=>{
+    await audit('reveal_sensitive',id,{field:'full_name',hn:r.hn});
+    $('d-name').textContent=p.full_name||r.hn; $('d-eye-name').style.display='none'; });
+  $('d-eye-addr')?.addEventListener('click', async ()=>{
+    await audit('reveal_sensitive',id,{field:'address',hn:r.hn});
+    $('d-addr').textContent=p.address_full||'-'; $('d-eye-addr').style.display='none'; });
+  $('d-eye-phone')?.addEventListener('click', async ()=>{
+    await audit('reveal_sensitive',id,{field:'phone',hn:r.hn});
+    $('d-phone').textContent=p.phone||'-'; $('d-eye-phone').style.display='none'; });
+  $('d-eye-lab')?.addEventListener('click', async ()=>{
+    await audit('reveal_sensitive',id,{field:'labs',hn:r.hn});
+    $('d-lab').innerHTML = labs ? '<table><tr><th>รายการ</th><th>ผล</th><th>วันที่</th></tr>'+labs+'</table>'
+      : '<div class="sub">ไม่มีข้อมูล</div>';
+    $('d-eye-lab').style.display='none'; });
   if(canEdit()) $('d-save').addEventListener('click', async ()=>{
     try{
       await setStatus(id, $('d-st').value,
@@ -1580,6 +1656,81 @@ function renderReview(o){
     :'<div class="empty">รอบนี้ยังไม่มีการปรับยา</div>'}
     ${miss.length?`<div class="sec"><div class="st">ไม่มาตามนัด ${miss.length} คน</div>
       <div class="sub">${miss.map(v=>esc(v.patient_name||v.hn)).join(', ')}</div></div>`:''}`;
+}
+
+/* ================= ขอเพิ่มผู้ป่วย ================= */
+$('btn-add-pt').addEventListener('click', ()=>{
+  $('ap-hcode').innerHTML = (isRpst()
+    ? RPST.filter(r=>r.hcode===myHcode())
+    : RPST).map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
+  $('ap-hcode').disabled = isRpst();
+  loadAddRequests();
+  $('ov-add').classList.remove('hidden');
+});
+$('btn-ap-send').addEventListener('click', async ()=>{
+  const hn=$('ap-hn').value.trim(), hcode=isRpst()?myHcode():$('ap-hcode').value,
+        reason=$('ap-reason').value.trim();
+  if(!hn){ $('ap-msg').innerHTML='<div class="msg err">กรอก HN</div>'; return; }
+  if(!reason){ $('ap-msg').innerHTML='<div class="msg err">กรอกเหตุผล</div>'; return; }
+  $('btn-ap-send').disabled=true;
+  try{
+    await addDoc(collection(db,'add_requests'), {
+      hn, hcode, hcode_name:rpstName(hcode), reason,
+      requested_by: PROFILE.full_name||ME.email, requested_by_uid:ME.uid,
+      requested_at: serverTimestamp(), status:'pending'
+    });
+    await audit('add_patient_request', hn, {hcode, reason});
+    $('ap-msg').innerHTML='<div class="msg ok">ส่งคำขอแล้ว ผู้ดูแลระบบจะตรวจสอบ</div>';
+    $('ap-hn').value=$('ap-reason').value='';
+    loadAddRequests();
+  }catch(e){ $('ap-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  $('btn-ap-send').disabled=false;
+});
+async function loadAddRequests(){
+  try{
+    const scope = isRpst() ? myHcode() : null;
+    const q1 = scope ? query(collection(db,'add_requests'), where('hcode','==',scope), limit(200))
+                     : query(collection(db,'add_requests'), limit(200));
+    const s = await getDocs(q1);
+    const rows = s.docs.map(d=>({id:d.id, ...d.data()})).sort((a,b)=>
+      String(b.status||'').localeCompare(String(a.status||'')));
+    $('ap-list').innerHTML = rows.length ? `<div class="sec"><div class="st">คำขอที่ส่งแล้ว</div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>HN</th><th>ปลายทาง</th><th>เหตุผล</th><th>ผู้ขอ</th><th>สถานะ</th>
+          ${isAdmin()?'<th></th>':''}</tr></thead>
+        <tbody>${rows.map(r=>`<tr>
+          <td class="mono">${esc(r.hn)}</td>
+          <td class="sub">${esc(r.hcode_name||r.hcode)}</td>
+          <td class="sub">${esc(r.reason||'-')}</td>
+          <td class="sub">${esc(r.requested_by||'-')}</td>
+          <td>${r.status==='pending'
+            ?'<span class="tag" style="background:#B8860B1a;color:#B8860B">รออนุมัติ</span>'
+            :r.status==='approved'
+              ?'<span class="tag" style="background:#1B6B471a;color:#1B6B47">อนุมัติแล้ว รอ pusher</span>'
+              :'<span class="tag" style="background:#8B20201a;color:#8B2020">ปฏิเสธ</span>'}</td>
+          ${isAdmin()&&r.status==='pending'?`<td class="right">
+            <button class="btn-sm" data-apapr="${esc(r.id)}">อนุมัติ</button>
+            <button class="btn-sm red" data-aprej="${esc(r.id)}">ปฏิเสธ</button></td>`
+            :(isAdmin()?'<td></td>':'')}
+        </tr>`).join('')}</tbody></table></div></div>` : '';
+    $('ap-list').querySelectorAll('[data-apapr]').forEach(b=>
+      b.addEventListener('click', async ()=>{
+        try{
+          await updateDoc(doc(db,'add_requests',b.dataset.apapr),
+            {status:'approved', approved_by:ME.email, approved_at:serverTimestamp()});
+          await audit('approve_add_patient', b.dataset.apapr);
+          loadAddRequests();
+        }catch(e){ alert('ไม่สำเร็จ: '+e.message); }
+      }));
+    $('ap-list').querySelectorAll('[data-aprej]').forEach(b=>
+      b.addEventListener('click', async ()=>{
+        try{
+          await updateDoc(doc(db,'add_requests',b.dataset.aprej),
+            {status:'rejected', rejected_by:ME.email});
+          loadAddRequests();
+        }catch(e){ alert('ไม่สำเร็จ: '+e.message); }
+      }));
+  }catch(e){ console.warn('loadAddRequests', e); }
 }
 
 /* ================= จัดการผู้ใช้ ================= */

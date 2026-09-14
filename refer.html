@@ -384,6 +384,23 @@ tbody tr:hover{background:#FAFCFA}
       </div>
     </section>
 
+    <!-- บัญชียา รพ.สต. -->
+    <section id="tab-drugcat" class="hidden">
+      <div class="panel">
+        <h2>บัญชียา รพ.สต. <span class="note">รายการยาและจำนวนที่ต้องเตรียมในแต่ละรอบ</span></h2>
+        <div class="bar">
+          <select id="dc-hcode" style="min-width:260px"></select>
+          <button class="btn-ghost" id="btn-dc-refresh">คำนวณใหม่</button>
+          <span id="dc-status" class="sub"></span>
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>ชื่อยา</th><th>รูปแบบ</th><th class="right">คนไข้</th>
+            <th class="right">เคยจ่ายรวม</th><th class="right">เม็ด/วัน</th>
+            <th class="right">ต้องเตรียม</th><th>หมายเหตุ</th></tr></thead>
+          <tbody id="tb-drugcat"></tbody>
+        </table></div>
+      </div>
+    </section>
     <!-- วิธีใช้ยา -->
     <section id="tab-drug" class="hidden">
       <div class="panel">
@@ -456,7 +473,8 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "755502284752",
   appId:             "1:755502284752:web:3a4e2f81e50affa04a03d5"
 };
-const SAWEE_CENTER = [10.36, 99.10];   // จุดกลางแผนที่ตอนเปิดครั้งแรก
+const SAWEE_GEO = {"type":"FeatureCollection","features":[{"type":"Feature","properties":{"tam_code":"860701","tam_th":"นาโพธิ์","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.10331,10.31225],[99.10331,10.34375],[99.073,10.3595],[99.04269,10.34375],[99.04269,10.31225],[99.073,10.2965],[99.10331,10.31225]]]}},{"type":"Feature","properties":{"tam_code":"860702","tam_th":"สวี","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.12531,10.29425],[99.12531,10.32575],[99.095,10.3415],[99.06469,10.32575],[99.06469,10.29425],[99.095,10.2785],[99.12531,10.29425]]]}},{"type":"Feature","properties":{"tam_code":"860703","tam_th":"ทุ่งระยะ","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.16531,10.32925],[99.16531,10.36075],[99.135,10.3765],[99.10469,10.36075],[99.10469,10.32925],[99.135,10.3135],[99.16531,10.32925]]]}},{"type":"Feature","properties":{"tam_code":"860704","tam_th":"ท่าหิน","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.09531,10.35425],[99.09531,10.38575],[99.065,10.4015],[99.03469,10.38575],[99.03469,10.35425],[99.065,10.3385],[99.09531,10.35425]]]}},{"type":"Feature","properties":{"tam_code":"860705","tam_th":"ปากแพรก","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.08531,10.25925],[99.08531,10.29075],[99.055,10.3065],[99.02469,10.29075],[99.02469,10.25925],[99.055,10.2435],[99.08531,10.25925]]]}},{"type":"Feature","properties":{"tam_code":"860706","tam_th":"ด่านสวี","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.14031,10.27925],[99.14031,10.31075],[99.11,10.3265],[99.07969,10.31075],[99.07969,10.27925],[99.11,10.2635],[99.14031,10.27925]]]}},{"type":"Feature","properties":{"tam_code":"860707","tam_th":"ครน","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.14531,10.22425],[99.14531,10.25575],[99.115,10.2715],[99.08469,10.25575],[99.08469,10.22425],[99.115,10.2085],[99.14531,10.22425]]]}},{"type":"Feature","properties":{"tam_code":"860708","tam_th":"วิสัยใต้","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.13531,10.19425],[99.13531,10.22575],[99.105,10.2415],[99.07469,10.22575],[99.07469,10.19425],[99.105,10.1785],[99.13531,10.19425]]]}},{"type":"Feature","properties":{"tam_code":"860709","tam_th":"นาสัก","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.20031,10.34925],[99.20031,10.38075],[99.17,10.3965],[99.13969,10.38075],[99.13969,10.34925],[99.17,10.3335],[99.20031,10.34925]]]}},{"type":"Feature","properties":{"tam_code":"860710","tam_th":"เขาทะลุ","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.14031,10.39425],[99.14031,10.42575],[99.11,10.4415],[99.07969,10.42575],[99.07969,10.39425],[99.11,10.3785],[99.14031,10.39425]]]}},{"type":"Feature","properties":{"tam_code":"860711","tam_th":"เขาค่าย","amp_code":"8607","amp_th":"สวี","pro_code":"86","pro_th":"ชุมพร"},"geometry":{"type":"Polygon","coordinates":[[[99.16031,10.42425],[99.16031,10.45575],[99.13,10.4715],[99.09969,10.45575],[99.09969,10.42425],[99.13,10.4085],[99.16031,10.42425]]]}}]};
+const SAWEE_CENTER = [10.33, 99.11];   // จุดกลางแผนที่ตอนเปิดครั้งแรก
 
 /* แผนการออกให้บริการประชาชนโดยแพทย์และทีมสหวิชาชีพ ประจำปี พ.ศ. 2569
    ถอดจากเอกสารของ สสอ. ใช้เป็นค่าตั้งต้น admin แก้ไขหรือเพิ่มเองได้ภายหลัง */
@@ -654,6 +672,7 @@ const TABS = [
   {id:'batch',label:'จัดชุดเฉพาะกิจ', all:1},
   {id:'dash', label:'แดชบอร์ด',      seesAll:1},
   {id:'user', label:'จัดการผู้ใช้',   adminOnly:1},
+  {id:'drugcat', label:'บัญชียา รพ.สต.', seesAll:1},
   {id:'drug', label:'วิธีใช้ยา',      seesAll:1},
   {id:'log',  label:'บันทึกการเข้าถึง', adminOnly:1},
 ];
@@ -673,6 +692,7 @@ function openTab(id){
   if(id==='batch') renderBatch();
   if(id==='dash')  { renderDash(); audit('view_dashboard'); }
   if(id==='user')  { loadUsers(); loadPending(); }
+  if(id==='drugcat') renderDrugCat();
   if(id==='drug')  renderDrugMap();
   if(id==='log')   loadLog();
 }
@@ -1064,7 +1084,7 @@ function openRound(id){
       ${pool.length?`<div class="scroll">${pool.map(r=>
         `<label style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:13.5px">
           <input type="checkbox" class="poolchk" value="${esc(r.id)}">
-          <span>${esc(r.patient?.full_name||r.hn)} <span class="sub">HN ${esc(r.hn)} · ${esc(String(r.clinics||'').replace(/\d+:/g,''))}</span></span>
+          <span>${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">HN ${esc(r.hn)} · ${esc(String(r.clinics||'').replace(/\d+:/g,''))}</span></span>
         </label>`).join('')}</div>
         <div style="margin-top:10px"><button class="btn-primary" id="r-add">นัดผู้ที่เลือกเข้ารอบนี้</button>
         <button class="btn-ghost" id="r-all">เลือกทั้งหมด</button></div>`
@@ -1077,7 +1097,7 @@ function openRound(id){
     $('r-n').textContent = list.length;
     $('r-people').innerHTML = list.length ? list.map(r=>
       `<div style="padding:3px 0;border-bottom:1px solid var(--line)">
-        ${esc(r.patient?.full_name||r.hn)} <span class="sub">HN ${esc(r.hn)}</span></div>`).join('')
+        ${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">HN ${esc(r.hn)}</span></div>`).join('')
       : '<div class="sub">ยังไม่มีผู้ป่วยในรอบนี้</div>';
     const d = parseInt($('r-days').value)||0;
     $('r-drug').innerHTML = drugRows(computeDrugs(list, d,
@@ -1123,7 +1143,7 @@ function renderBatch(){
   if(!sel.length) return;
   $('b-count').textContent = sel.length;
   $('b-people').innerHTML = sel.map(r=>
-    `<div style="padding:3px 0;border-bottom:1px solid var(--line)">${esc(r.patient?.full_name||r.hn)}
+    `<div style="padding:3px 0;border-bottom:1px solid var(--line)">${esc(maskName(r.patient?.full_name)||r.hn)}
       <span class="sub">HN ${esc(r.hn)} · ${esc(r.hcode_name||r.hcode)}</span></div>`).join('');
   recalcBatch();
 }
@@ -1222,46 +1242,45 @@ function colorFor(i){          // i = 0..1
 function drawMap(){
   if(typeof L==='undefined'){ $('map-status').textContent='โหลดแผนที่ไม่สำเร็จ'; return; }
   if(!MAP){
-    MAP = L.map('map').setView(SAWEE_CENTER, 10);
+    MAP = L.map('map').setView(SAWEE_CENTER, 11);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       {maxZoom:18, attribution:'&copy; OpenStreetMap'}).addTo(MAP);
   }
   if(LAYER){ MAP.removeLayer(LAYER); LAYER=null; }
-  const g = geoData();
-  const rows = (MAPMODE==='tambon'?g.tambon:g.hcode).filter(x=>x.lat!=null);
-  const missing = (MAPMODE==='tambon'?g.tambon:g.hcode).length - rows.length;
-
-  if(!g.haveCoord){
-    $('map-status').innerHTML = isAdmin()
-      ? 'ยังไม่มีพิกัด รพ.สต. กดปุ่มค้นพิกัดอัตโนมัติ แล้วลากหมุดปรับได้'
-      : 'ยังไม่มีพิกัด รพ.สต. ให้ผู้ดูแลระบบตั้งค่าก่อน';
-    return;
-  }
-  $('map-status').textContent = missing ? `แสดง ${rows.length} จุด (ขาดพิกัด ${missing})` : `แสดง ${rows.length} จุด`;
-
-  const max = Math.max(1,...rows.map(x=>x.n));
   LAYER = L.layerGroup().addTo(MAP);
-  rows.forEach(x=>{
-    const i = x.n/max;
-    const c = L.circleMarker([x.lat,x.lng], {
-      radius: 9 + Math.sqrt(i)*26,
-      fillColor: colorFor(i), color:'#1B6B47', weight:1.5, fillOpacity:0.75
+  const g = geoData();
+  if(MAPMODE==='tambon' && typeof SAWEE_GEO!=='undefined'){
+    const byT = {}; LIST.forEach(r=>{ const t=r.patient?.tambon; if(t) byT[t]=(byT[t]||0)+1; });
+    const max = Math.max(1,...Object.values(byT));
+    const gl = L.geoJSON(SAWEE_GEO, {
+      style: f=>{ const n=byT[f.properties.tam_th]||0; return {fillColor:colorFor(n/max),color:'#1B6B47',weight:2,fillOpacity:n?0.7:0.15}; },
+      onEachFeature: (f,layer)=>{ const n=byT[f.properties.tam_th]||0;
+        layer.bindTooltip('<b>ต.'+esc(f.properties.tam_th)+'</b><br>'+n+' คน',{sticky:true});
+        layer.on('click',()=>layer.bindPopup('<b>ต.'+esc(f.properties.tam_th)+'</b><br>'+n+' คน<br>'+(n/Math.max(1,LIST.length)*100).toFixed(1)+'%').openPopup()); }
     }).addTo(LAYER);
-    c.bindTooltip(`<b>${esc(x.name)}</b><br>${x.n} คน`, {direction:'top'});
-    if(isAdmin() && MAPMODE==='hcode'){
-      const m = L.marker([x.lat,x.lng], {draggable:true}).addTo(LAYER);
-      m.bindTooltip('ลากเพื่อปรับพิกัด '+esc(x.name));
-      m.on('dragend', async ev=>{
-        const p=ev.target.getLatLng();
-        await setDoc(doc(db,'rpst',x.hcode), {lat:p.lat, lng:p.lng}, {merge:true});
-        const rr=RPST.find(r=>r.hcode===x.hcode); if(rr){ rr.lat=p.lat; rr.lng=p.lng; }
-        await audit('edit_geo', x.hcode, {lat:p.lat, lng:p.lng});
-        drawMap();
-      });
-    }
-  });
-  if(rows.length) MAP.fitBounds(rows.map(x=>[x.lat,x.lng]), {padding:[40,40], maxZoom:12});
+    MAP.fitBounds(gl.getBounds(),{padding:[30,30]});
+    $('map-status').textContent = 'แผนที่ตำบล '+SAWEE_GEO.features.length+' ตำบล';
+  } else {
+    const rows=g.hcode.filter(x=>x.lat!=null);
+    if(!rows.length){ $('map-status').innerHTML=isAdmin()?'ยังไม่มีพิกัด กดค้นพิกัดอัตโนมัติ':'ยังไม่มีพิกัด'; return; }
+    const max=Math.max(1,...rows.map(x=>x.n));
+    rows.forEach(x=>{
+      L.circleMarker([x.lat,x.lng],{radius:9+Math.sqrt(x.n/max)*26,fillColor:colorFor(x.n/max),color:'#1B6B47',weight:1.5,fillOpacity:0.75})
+        .bindTooltip('<b>'+esc(x.name)+'</b><br>'+x.n+' คน',{direction:'top'}).addTo(LAYER);
+      if(isAdmin()){
+        const m=L.marker([x.lat,x.lng],{draggable:true}).addTo(LAYER);
+        m.bindTooltip('ลากปรับพิกัด '+esc(x.name));
+        m.on('dragend',async ev=>{const p=ev.target.getLatLng();
+          await setDoc(doc(db,'rpst',x.hcode),{lat:p.lat,lng:p.lng},{merge:true});
+          const rr=RPST.find(r=>r.hcode===x.hcode);if(rr){rr.lat=p.lat;rr.lng=p.lng;}
+          await audit('edit_geo',x.hcode,{lat:p.lat,lng:p.lng}); drawMap();});
+      }
+    });
+    if(rows.length) MAP.fitBounds(rows.map(x=>[x.lat,x.lng]),{padding:[40,40],maxZoom:12});
+    $('map-status').textContent = rows.length+' จุด';
+  }
 }
+
 $('btn-geo').addEventListener('click', async ()=>{
   if(!isAdmin()) return;
   const todo = RPST.filter(r=>!r.lat||!r.lng);
@@ -1401,7 +1420,7 @@ function renderRecord(o){
          + (v.keyed_in_hosxp?'<span class="pill pill-ok">คีย์แล้ว</span>':'<span class="pill pill-warn">รอคีย์</span>');
     }
     return `<tr>
-      <td><div class="nm">${esc(r.patient?.full_name||r.hn)}</div>
+      <td><div class="nm"><span class="masked">${esc(maskName(r.patient?.full_name)||r.hn)}</span></div>
         <div class="sub">HN ${esc(r.hn)} · ${esc(r.patient?.sex||'')} ${esc(r.patient?.age??'')} ปี</div>
         <div class="clin">${esc(String(r.clinics||'').replace(/\d+:/g,''))}</div></td>
       <td class="sub">${nMed} รายการ</td>
@@ -1462,7 +1481,7 @@ function openVisit(refId, o){
   const added = (v?.meds||[]).filter(m=>m.action==='add');
 
   $('ov-body').innerHTML = `
-    <h2 style="font-size:20px;font-weight:600">${esc(r.patient?.full_name||r.hn)}</h2>
+    <h2 style="font-size:20px;font-weight:600">${esc(maskName(r.patient?.full_name)||r.hn)}</span></h2>
     <div class="sub">HN ${esc(r.hn)} · รอบ ${thDate(o.date)} · ${esc(rpstName(o.hcode))}</div>
     <div class="msg info" style="margin-top:12px">ไม่ต้องแตะรายการที่จ่ายต่อเหมือนเดิม
       แก้เฉพาะตัวที่แพทย์ปรับเท่านั้น${nx?` · รอบถัดไป ${thDate(nx.date)} ห่าง ${dayDiff(o.date,nx.date)} วัน`:''}</div>
@@ -1584,7 +1603,7 @@ function renderPending(o){
     const chg = (v.meds||[]).filter(m=>m.action!=='continue');
     return `<div class="sec">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <div><b>${esc(v.patient_name||v.hn)}</b>
+        <div><b>${esc(maskName(v.patient_name)||v.hn)}</b>
           <span class="sub">HN <span class="mono">${esc(v.hn)}</span></span>
           <button class="btn-sm grey" data-copy="${esc(v.hn)}">คัดลอก HN</button>
           <div class="sub">${v.bp?'BP '+esc(v.bp):''} ${v.dtx?'· DTX '+esc(v.dtx):''}
@@ -1636,7 +1655,7 @@ function renderReview(o){
     if(m.action==='continue') return;
     const k=m.action+'|'+m.name;
     if(!byAction[k]) byAction[k]={action:m.action, name:m.name, n:0, who:[]};
-    byAction[k].n++; byAction[k].who.push(v.patient_name||v.hn);
+    byAction[k].n++; byAction[k].who.push(maskName(v.patient_name)||v.hn);
   }));
   const list = Object.values(byAction).sort((a,b)=>b.n-a.n);
 
@@ -1655,7 +1674,7 @@ function renderReview(o){
         <td class="sub">${esc(x.who.join(', '))}</td></tr>`).join('')}</tbody></table></div>`
     :'<div class="empty">รอบนี้ยังไม่มีการปรับยา</div>'}
     ${miss.length?`<div class="sec"><div class="st">ไม่มาตามนัด ${miss.length} คน</div>
-      <div class="sub">${miss.map(v=>esc(v.patient_name||v.hn)).join(', ')}</div></div>`:''}`;
+      <div class="sub">${miss.map(v=>esc(maskName(v.patient_name)||v.hn)).join(', ')}</div></div>`:''}`;
 }
 
 /* ================= ขอเพิ่มผู้ป่วย ================= */
@@ -1868,6 +1887,53 @@ $('btn-u-add').addEventListener('click', async ()=>{
     $('u-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`;
   }finally{ try{ await deleteApp(tmp); }catch(_){} $('btn-u-add').disabled=false; }
 });
+
+/* ================= บัญชียา รพ.สต. ================= */
+function renderDrugCat(){
+  const scope = isRpst() ? myHcode() : ($('dc-hcode')?.value||'');
+  $('dc-hcode').innerHTML = (isRpst()
+    ? RPST.filter(r=>r.hcode===myHcode())
+    : [{hcode:'',name:'ทุก รพ.สต.'},...RPST])
+    .map(r=>'<option value="'+esc(r.hcode)+'"'+(r.hcode===scope?' selected':'')+'>'+esc(r.name)+'</option>').join('');
+  $('dc-hcode').disabled = isRpst();
+  const hc = scope||null;
+  let nextDays=null, nextDate=null;
+  if(hc){
+    const up=OUTREACH.filter(o=>o.hcode===hc&&daysFrom(o.date)>=0).sort((a,b)=>a.date.localeCompare(b.date));
+    if(up.length>=2){ nextDays=dayDiff(up[0].date,up[1].date); nextDate=up[0].date; }
+    else if(up.length===1) nextDate=up[0].date;
+  }
+  $('dc-status').innerHTML = nextDays
+    ? 'รอบถัดไป '+thDate(nextDate)+' จ่ายยา '+nextDays+' วัน (เผื่อ 10%)'
+    : hc ? 'ไม่มีข้อมูลรอบนัดเพียงพอ แสดงจำนวนที่เคยจ่ายแทน' : 'เลือก รพ.สต. เพื่อดูจำนวน';
+  const pts = hc ? LIST.filter(r=>r.hcode===hc) : LIST;
+  const agg = {};
+  pts.forEach(r=>(r.medications||[]).forEach(m=>{
+    if((m.days_before??0)>180) return;
+    const k=m.icode||m.name;
+    if(!agg[k]) agg[k]={name:m.name, form:m.dosageform||'', people:new Set(), n:0, qty:0, dpd:null, prn:false};
+    const a=agg[k]; a.people.add(r.id); a.n++; a.qty+=parseFloat(m.qty)||0;
+    const du=DRUGMAP[m.drugusage_code];
+    if(du?.is_prn) a.prn=true;
+    if(du?.doses_per_day>0&&!a.prn) a.dpd=du.doses_per_day;
+  }));
+  const rows=Object.values(agg).sort((a,b)=>b.people.size-a.people.size);
+  $('tb-drugcat').innerHTML = rows.length ? rows.map(a=>{
+    const ppl=a.people.size, need=(nextDays&&a.dpd&&!a.prn)?Math.ceil(a.dpd*nextDays*ppl*1.1):null;
+    let note='';
+    if(a.prn) note='<span class="pill pill-rem">prn</span>';
+    else if(!a.dpd) note='<span class="pill pill-warn">ยังไม่ระบุเม็ด/วัน</span>';
+    else if(!nextDays&&hc) note='<span class="pill pill-warn">ไม่มีรอบถัดไป</span>';
+    return '<tr><td class="nm">'+esc(a.name)+'</td><td class="sub">'+esc(a.form)+'</td>'
+      +'<td class="right mono">'+ppl+'</td><td class="right mono">'+a.n+'</td>'
+      +'<td class="right mono">'+(a.dpd??'-')+'</td>'
+      +'<td class="right mono"><b>'+(need!==null?need.toLocaleString():'-')+'</b>'
+      +'<div class="sub">เคยจ่าย '+Math.round(a.qty).toLocaleString()+'</div></td>'
+      +'<td>'+note+'</td></tr>';
+  }).join('') : '<tr><td colspan="7" class="empty">ไม่มีข้อมูล</td></tr>';
+}
+$('dc-hcode')?.addEventListener('change', renderDrugCat);
+$('btn-dc-refresh')?.addEventListener('click', renderDrugCat);
 
 /* ================= วิธีใช้ยา ================= */
 async function loadDrugMap(){

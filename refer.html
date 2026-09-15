@@ -223,7 +223,7 @@ tbody tr:hover{background:#FAFCFA}
         <button class="chip" data-f="visited">มารับยาแล้ว</button>
         <button class="chip" data-f="missed">ไม่มาตามนัด</button>
         <div style="flex:1"></div>
-        <input type="text" id="q" placeholder="ค้นหาชื่อ หรือ HN" style="width:190px">
+        <input type="text" id="q" placeholder="ค้นหา HN หรือเลขบัตร 4 ตัวท้าย" style="width:220px">
         <button class="btn-ghost" id="btn-reload">โหลดใหม่</button>
         <button class="btn-sm" id="btn-add-pt" style="margin-left:auto">+ ขอเพิ่มผู้ป่วย</button>
       </div>
@@ -531,7 +531,7 @@ const SELECTED = new Set();
 const $ = id => document.getElementById(id);
 /* ====== PDPA ====== */
 const SENSITIVE_FIELDS = ['full_name','fname','lname','pname','address_full','phone','cid_last4','birthday'];
-function maskName(s){ if(!s) return '-'; const w=String(s).split(' '); return w.map((p,i)=>i===0?p[0]+'***':p[0]+'***').join(' '); }
+function maskName(s){ return s ? '••• •••••' : '-'; }  // ไม่แสดงตัวอักษรใดของชื่อจริงเลย ต้องกดเปิดตาเท่านั้น
 function maskAddr(s){ return s ? 'หมู่ ...' : '-'; }
 function maskPhone(s){ return s ? s.slice(0,-4)+'****' : '-'; }
 function maskText(s,n){ return s ? s.slice(0,n)+'...' : '-'; }
@@ -745,14 +745,16 @@ async function loadList(){
 }
 const stOf = r => r.workflow?.status || 'new';
 function filtered(){
-  const q = $('q').value.trim().toLowerCase();
+  // ค้นหาด้วย HN หรือเลขบัตร ปชช. 4 ตัวท้ายเท่านั้น — ห้ามค้นด้วยชื่อ
+  const q = $('q').value.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
   return LIST.filter(r=>{
     const st = stOf(r);
     if(FILTER==='todo' && !TODO.includes(st)) return false;
     if(FILTER!=='todo' && FILTER!=='all' && st!==FILTER) return false;
     if(q){
-      const n=(r.patient?.full_name||'').toLowerCase();
-      if(!n.includes(q) && !(r.hn||'').toLowerCase().includes(q)) return false;
+      const hn = (r.hn||'').toLowerCase();
+      const last4 = (r.patient?.cid_last4||'').toLowerCase();
+      if(!hn.includes(q) && last4 !== q) return false;
     }
     return true;
   });
@@ -778,7 +780,8 @@ function renderList(){
     const nl = {acknowledged:'รับตัว', scheduled:'นัด', visited:'มารับยาแล้ว'}[next];
     return `<tr>
       <td><input type="checkbox" class="rowchk" data-id="${esc(r.id)}"${SELECTED.has(r.id)?' checked':''}></td>
-      <td><div class="nm">${esc(p.full_name||r.hn)}</div>
+      <td><div class="nm"><span class="masked">${maskName(p.full_name)||esc(r.hn)}</span>
+          ${eyeBtn(r.id,'full_name','ชื่อ')}</div>
         <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี
           ${p.moo?` · หมู่ ${esc(p.moo)} ${esc(p.tambon||'')}`:''}
           ${r.case_type==='data_only'?'<span class="pill pill-rem">Remission</span>':''}

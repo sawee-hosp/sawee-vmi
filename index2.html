@@ -190,7 +190,7 @@
     };
 
     const APP_SCHEMA_VERSION = 18;
-    const APP_VERSION = '5.2.0-refactor';
+    const APP_VERSION = '5.2.1-resilient-load';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -7199,94 +7199,76 @@ const App = () => {
         const isAdmin = normalizeUserRole(activeUser.role) === 'admin';
         const hospId = activeUser.hospital_id;
 
-        try {
-          // Master เปลี่ยนไม่บ่อย: cache ในหน่วยความจำ 5 นาที ลดการอ่านซ้ำหลังทุก action
-          const cacheAge=Date.now()-toNonNegativeNumber(masterCacheRef.current?.at);
-          const forceMaster=!!options.forceMaster || (isAdmin && currentView==='config');
-          let masterData=!forceMaster&&masterCacheRef.current?.data&&cacheAge<300000?masterCacheRef.current.data:null;
-          if(!masterData){
-            const [drugsSnap,hospSnap,unitSnap,configSnap]=await Promise.all([
-              db.collection('master_drugs').get(),
-              db.collection('master_hospitals').get(),
-              db.collection('master_unit').get(),
-              db.collection('config').doc('drug_types').get()
-            ]);
-            masterData={
-              drugs:drugsSnap.docs.map(d=>({id:d.id,...d.data()})),
-              hospitals:hospSnap.docs.map(d=>({id:d.id,...d.data()})),
-              units:unitSnap.docs.map(d=>({id:d.id,...d.data()})),
-              drugTypes:configSnap.exists?configSnap.data():null
-            };
-            masterCacheRef.current={at:Date.now(),data:masterData};
-          }
+        if (!isAdmin && !hospId) {
+          showToast('บัญชีผู้ใช้นี้ยังไม่ได้ผูก รพ.สต. กรุณาแจ้งผู้ดูแลระบบ', 'error');
+          return;
+        }
 
-          // Fuzzy จะ clean ตอนบันทึก/Import เท่านั้น
-          // ไม่เขียนฐานข้อมูลระหว่าง Login/Refresh เพื่อไม่ให้กระทบสิทธิ์ Admin
+        // โหลดแยกอิสระทีละ collection: ถ้าอันใดพัง อันที่เหลือยังแสดงผลได้ตามปกติ
+        // (ของเดิมใช้ Promise.all ก้อนเดียว พังหนึ่งอัน = หน้าจอว่างทั้งระบบ)
+        const scoped = (col, field) => isAdmin ? db.collection(col) : db.collection(col).where(field, '==', hospId);
+        const tasks = [
+          ['master_drugs',      () => db.collection('master_drugs').get()],
+          ['master_hospitals',  () => db.collection('master_hospitals').get()],
+          ['master_unit',       () => db.collection('master_unit').get()],
+          ['config/drug_types', () => db.collection('config').doc('drug_types').get()],
+          ['users',             () => isAdmin ? db.collection('users').get() : Promise.resolve(null)],
+          ['config_par',        () => scoped('config_par', 'hospital_id').get()],
+          ['current_excess',    () => scoped('current_excess', 'hospital_id').get()],
+          ['requisitions',      () => scoped('requisitions', 'hospitalId').get()],
+          ['stock_adjustments', () => scoped('stock_adjustments', 'hospital_id').get()],
+          ['historical_usages', () => scoped('historical_usages', 'hospital_id').get()]
+        ];
 
-          if (isAdmin) {
-            // หน้า Dashboard ของ Admin ไม่ต้องอ่านข้อมูลรายยา 3 collection ของทุก รพ.สต.
-            const [userSnap,reqSnap,adjSnap]=await Promise.all([
-              db.collection('users').get(),
-              db.collection('requisitions').get(),
-              db.collection('stock_adjustments').where('status','==','Pending').get()
-            ]);
-            const requisitionRows=reqSnap.docs.map(d=>({id:d.id,...d.data()}));
-            const globalViews=['config','summary_report','item_usage_report','map_dashboard','drug_history'];
-            const wantsGlobal=options.adminScope==='global'||globalViews.includes(currentView);
-            const focusedReq=requisitionRows.find(r=>String(r.id)===String(currentReqId));
-            const focusedHosp=safeText(options.hospitalId||focusedReq?.hospitalId||targetUploadHosp);
-            let scopedData=null;
-            if(wantsGlobal){
-              const [parSnap,balSnap,histSnap]=await Promise.all([
-                db.collection('config_par').get(),
-                db.collection('current_excess').get(),
-                db.collection('historical_usages').get()
-              ]);
-              scopedData={global:true,hospitalId:'',parLevels:parSnap.docs.map(d=>({id:d.id,...d.data()})),balances:balSnap.docs.map(d=>({id:d.id,...d.data()})),historicalUsages:histSnap.docs.map(d=>({id:d.id,...d.data()}))};
-            } else if(focusedHosp){
-              const [parSnap,balSnap,histSnap]=await Promise.all([
-                db.collection('config_par').where('hospital_id','==',focusedHosp).get(),
-                db.collection('current_excess').where('hospital_id','==',focusedHosp).get(),
-                db.collection('historical_usages').where('hospital_id','==',focusedHosp).get()
-              ]);
-              scopedData={global:false,hospitalId:focusedHosp,parLevels:parSnap.docs.map(d=>({id:d.id,...d.data()})),balances:balSnap.docs.map(d=>({id:d.id,...d.data()})),historicalUsages:histSnap.docs.map(d=>({id:d.id,...d.data()}))};
-            }
-            setAppDb(prev=>{
-              const mergeHospital=(oldRows,newRows,id)=>[...(oldRows||[]).filter(x=>String(x.hospital_id)!==String(id)),...newRows];
-              return {
-                ...prev,...masterData,
-                requisitions:requisitionRows,
-                usersList:userSnap.docs.map(d=>({id:d.id,...d.data()})),
-                stockAdjustments:adjSnap.docs.map(d=>({id:d.id,...d.data()})),
-                parLevels:!scopedData?prev.parLevels:scopedData.global?scopedData.parLevels:mergeHospital(prev.parLevels,scopedData.parLevels,scopedData.hospitalId),
-                balances:!scopedData?prev.balances:scopedData.global?scopedData.balances:mergeHospital(prev.balances,scopedData.balances,scopedData.hospitalId),
-                historicalUsages:!scopedData?prev.historicalUsages:scopedData.global?scopedData.historicalUsages:mergeHospital(prev.historicalUsages,scopedData.historicalUsages,scopedData.hospitalId)
-              };
-            });
-          } else {
-            if (!hospId) throw new Error('บัญชีผู้ใช้นี้ยังไม่ได้ผูก รพ.สต.');
-            const [parSnap,balSnap,reqSnap,adjSnap,histSnap]=await Promise.all([
-              db.collection('config_par').where('hospital_id', '==', hospId).get(),
-              db.collection('current_excess').where('hospital_id', '==', hospId).get(),
-              db.collection('requisitions').where('hospitalId', '==', hospId).get(),
-              db.collection('stock_adjustments').where('hospital_id', '==', hospId).get(),
-              db.collection('historical_usages').where('hospital_id', '==', hospId).get()
-            ]);
-            setAppDb({
-              ...masterData,
-              parLevels:parSnap.docs.map(d=>({id:d.id,...d.data()})),
-              balances:balSnap.docs.map(d=>({id:d.id,...d.data()})),
-              requisitions:reqSnap.docs.map(d=>({id:d.id,...d.data()})),
-              usersList:[{id:activeUser.uid,...activeUser}],
-              stockAdjustments:adjSnap.docs.map(d=>({id:d.id,...d.data()})),
-              historicalUsages:histSnap.docs.map(d=>({id:d.id,...d.data()}))
-            });
+        const settled = await Promise.allSettled(tasks.map(t => t[1]()));
+        const failed = [];
+        settled.forEach((r, i) => {
+          if (r.status === 'rejected') {
+            failed.push({ name: tasks[i][0], code: r.reason?.code || '', message: r.reason?.message || String(r.reason) });
+            console.error(`[Sawee Rxfill] load failed: ${tasks[i][0]}`, r.reason);
           }
-        } catch (error) {
-          // ให้สิทธิ์ผู้ใช้คงอยู่เหมือนไฟล์เดิม แม้ข้อมูลบาง collection โหลดไม่สำเร็จ
-          // เพื่อไม่ให้ refresh error ถูกตีความเป็น auth error แล้ว signOut Admin
-          console.error('[Sawee Rxfill] refreshData error:', error);
-          showToast('โหลดข้อมูลบางส่วนไม่สำเร็จ: ' + error.message, 'error');
+        });
+
+        const snapAt = (i) => settled[i].status === 'fulfilled' ? settled[i].value : null;
+        const rowsAt = (i) => { const snap = snapAt(i); return snap ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : null; };
+
+        const drugs        = rowsAt(0);
+        const hospitals    = rowsAt(1);
+        const units        = rowsAt(2);
+        const configSnap   = snapAt(3);
+        const usersSnap    = snapAt(4);
+        const parLevels    = rowsAt(5);
+        const balances     = rowsAt(6);
+        const requisitions = rowsAt(7);
+        const adjustments  = rowsAt(8);
+        const histories    = rowsAt(9);
+
+        // collection ที่โหลดไม่สำเร็จ ให้คงค่าที่เคยโหลดได้ไว้ ไม่ล้างเป็นค่าว่าง
+        setAppDb(prev => ({
+          ...prev,
+          drugs:             drugs        ?? prev.drugs        ?? [],
+          hospitals:         hospitals    ?? prev.hospitals    ?? [],
+          units:             units        ?? prev.units        ?? [],
+          parLevels:         parLevels    ?? prev.parLevels    ?? [],
+          balances:          balances     ?? prev.balances     ?? [],
+          requisitions:      requisitions ?? prev.requisitions ?? [],
+          usersList:         isAdmin
+                               ? (usersSnap ? usersSnap.docs.map(d => ({ id: d.id, ...d.data() })) : (prev.usersList ?? []))
+                               : [{ id: activeUser.uid, ...activeUser }],
+          stockAdjustments:  adjustments  ?? prev.stockAdjustments ?? [],
+          drugTypes:         configSnap ? (configSnap.exists ? configSnap.data() : null) : (prev.drugTypes ?? null),
+          historicalUsages:  histories    ?? prev.historicalUsages ?? []
+        }));
+
+        if (failed.length) {
+          const isPermission = failed.some(f => f.code === 'permission-denied');
+          const isQuota = failed.some(f => f.code === 'resource-exhausted');
+          const detail = failed.map(f => f.name).join(', ');
+          const hint = isPermission
+            ? ' — สิทธิ์ Firestore ไม่ผ่าน ให้ตรวจ users doc (field active / hospital_id) และกฎที่ deploy อยู่'
+            : (isQuota ? ' — โควตา Firestore หมดรายวัน' : '');
+          showToast(`โหลดไม่สำเร็จ: ${detail}${hint}`, 'error');
+          console.error('[Sawee Rxfill] refreshData failures:', failed);
         }
       };
 
@@ -7385,7 +7367,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.2.0 Refactor</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.2.1</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

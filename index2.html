@@ -25,12 +25,17 @@
     @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap');
     /* ฟอนต์ราชการ TH SarabunNew โหลดจากรีโปของโรงพยาบาลเอง
        เครื่องที่ติดตั้ง TH SarabunPSK ไว้แล้วจะใช้ตัวในเครื่องก่อน (local) ที่เหลือโหลดจาก URL นี้ */
+    /* ใช้ไฟล์ฟอนต์จากรีโปของโรงพยาบาลเป็นแหล่งเดียว ไม่เรียก local() เพราะฟอนต์ในแต่ละเครื่อง
+       เป็นคนละรุ่นกัน (PSK / New / เวอร์ชันเก่า) จะทำให้ขนาดและระยะห่างไม่ตรงกันทุกเครื่อง */
     @font-face {
       font-family: 'THSarabunNew';
-      src: local('TH SarabunPSK'), local('TH Sarabun New'), local('THSarabunNew'),
-           url('https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/refs/heads/main/font/THSarabunNew.ttf') format('truetype'),
-           url('https://github.com/sawee-hosp/sawee-vmi/raw/refs/heads/main/font/THSarabunNew.ttf') format('truetype');
-      font-weight: normal; font-style: normal; font-display: swap;
+      src: url('https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/refs/heads/main/font/THSarabunNew.ttf') format('truetype');
+      font-weight: 400; font-style: normal; font-display: block;
+    }
+    @font-face {
+      font-family: 'THSarabunNew';
+      src: url('https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/refs/heads/main/font/THSarabunNew.ttf') format('truetype');
+      font-weight: 700; font-style: normal; font-display: block;
     }
     body { font-family: 'Sarabun', sans-serif; background-color: #f1f5f9; }
     .bg-gradient-main { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); }
@@ -104,9 +109,9 @@
        ฟอนต์: TH SarabunPSK ในเครื่อง (มาตรฐานหนังสือราชการ) ไม่มีจึงถอยไป Sarabun ของ Google */
     .vac-stage { display: flex; justify-content: center; overflow-x: auto; padding: 4mm 0; background: #e2e8f0; border-radius: 14px; }
     .vac-sheet {
-      font-family: 'THSarabunNew', 'TH SarabunPSK', 'TH Sarabun New', 'Sarabun', sans-serif;
+      font-family: 'THSarabunNew', 'Sarabun', sans-serif;
       width: 210mm; min-height: 297mm; padding: 12mm 12mm 14mm 12mm;
-      background: #fff; color: #000; font-size: 10.5pt; line-height: 1.25;
+      background: #fff; color: #000; font-size: 14pt; line-height: 1.2;
       box-shadow: 0 6px 24px rgba(15,23,42,.18); flex: 0 0 auto;
     }
 
@@ -122,7 +127,7 @@
     /* ครุฑกลางหน้า ชื่อแบบฟอร์มตัวเล็กมุมขวาบน */
     .vac-masthead { position: relative; text-align: center; height: 19mm; }
     .vac-garuda { height: 17mm; width: auto; display: block; margin: 0 auto; }
-    .vac-formcode { position: absolute; right: 0; top: 0; font-size: 9pt; white-space: nowrap; }
+    .vac-formcode { position: absolute; right: 0; top: 0; font-size: 12pt; white-space: nowrap; }
 
     /* บล็อกขวาเริ่มที่กึ่งกลางหน้า ตรงใต้ครุฑพอดี ตามรูปแบบหนังสือราชการ */
     .vac-headgrid { display: flex; align-items: flex-start; }
@@ -134,12 +139,12 @@
     .vac-inline { display: block; }
 
     .vac-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 2.5mm; border: 0.9pt solid #000; }
-    .vac-table th, .vac-table td { border: 0.5pt solid #000; padding: 0.4mm 0.8mm; vertical-align: middle; font-size: 9pt; line-height: 1.15; }
+    .vac-table th, .vac-table td { border: 0.5pt solid #000; padding: 0.4mm 0.8mm; vertical-align: middle; font-size: 12pt; line-height: 1.1; }
     .vac-table th { font-weight: normal; text-align: center; }
     .vac-table td { height: 4.6mm; }
     .vac-group, .vac-table th { text-align: center; }
     .vac-group { text-align: center; }
-    .vac-name { font-size: 9pt; }
+    .vac-name { font-size: 12pt; }
     .vac-calc, .vac-num { text-align: center; }
     .vac-num { display: block; text-align: center; }
     /* ช่องที่ต้องกรอกเอง แรเงาฟ้าอ่อนแบบต้นฉบับ ที่เหลือคำนวณให้อัตโนมัติ */
@@ -150,7 +155,7 @@
     .vac-sign > * { display: block; text-align: center; margin-bottom: 0.6mm; }
     .vac-signspace { height: 9mm; }
     .vac-signpos { text-align: center; }
-    .vac-note { margin-top: 4mm; font-size: 8.5pt; font-style: italic; }
+    .vac-note { margin-top: 4mm; font-size: 11pt; font-style: italic; }
 
     @media print {
       .vac-stage { display: block; padding: 0; background: #fff; border-radius: 0; overflow: visible; }
@@ -213,6 +218,9 @@
 
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
+    // บางเครือข่าย (พร็อกซีโรงพยาบาล / ส่วนขยายเบราว์เซอร์) ตัดการเชื่อมต่อแบบ WebChannel ของ Firestore
+    // ทำให้ Console ขึ้น 'Listen ... 404 / transport errored' เป็นระยะ บังคับใช้ long-polling แทนจึงเงียบและเสถียรกว่า
+    try { db.settings({ experimentalAutoDetectLongPolling: true, merge: true }); } catch (e) { console.warn('firestore settings skipped', e); }
     const auth = firebase.auth();
 
     const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
@@ -416,7 +424,7 @@
     // ===================== END ระบบวัคซีน =====================
 
     const APP_SCHEMA_VERSION = 18;
-    const APP_VERSION = '5.4.1-vaccine-wysiwyg';
+    const APP_VERSION = '5.4.2-vaccine-font';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -8058,7 +8066,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.4.1</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.4.2</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

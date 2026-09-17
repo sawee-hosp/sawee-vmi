@@ -23,6 +23,15 @@
   
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap');
+    /* ฟอนต์ราชการ TH SarabunNew โหลดจากรีโปของโรงพยาบาลเอง
+       เครื่องที่ติดตั้ง TH SarabunPSK ไว้แล้วจะใช้ตัวในเครื่องก่อน (local) ที่เหลือโหลดจาก URL นี้ */
+    @font-face {
+      font-family: 'THSarabunNew';
+      src: local('TH SarabunPSK'), local('TH Sarabun New'), local('THSarabunNew'),
+           url('https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/refs/heads/main/font/THSarabunNew.ttf') format('truetype'),
+           url('https://github.com/sawee-hosp/sawee-vmi/raw/refs/heads/main/font/THSarabunNew.ttf') format('truetype');
+      font-weight: normal; font-style: normal; font-display: swap;
+    }
     body { font-family: 'Sarabun', sans-serif; background-color: #f1f5f9; }
     .bg-gradient-main { background: linear-gradient(135deg, #0d9488 0%, #059669 100%); }
     
@@ -95,7 +104,7 @@
        ฟอนต์: TH SarabunPSK ในเครื่อง (มาตรฐานหนังสือราชการ) ไม่มีจึงถอยไป Sarabun ของ Google */
     .vac-stage { display: flex; justify-content: center; overflow-x: auto; padding: 4mm 0; background: #e2e8f0; border-radius: 14px; }
     .vac-sheet {
-      font-family: 'TH SarabunPSK', 'TH Sarabun New', 'THSarabunNew', 'Sarabun', sans-serif;
+      font-family: 'THSarabunNew', 'TH SarabunPSK', 'TH Sarabun New', 'Sarabun', sans-serif;
       width: 210mm; min-height: 297mm; padding: 12mm 12mm 14mm 12mm;
       background: #fff; color: #000; font-size: 10.5pt; line-height: 1.25;
       box-shadow: 0 6px 24px rgba(15,23,42,.18); flex: 0 0 auto;
@@ -112,7 +121,7 @@
 
     /* ครุฑกลางหน้า ชื่อแบบฟอร์มตัวเล็กมุมขวาบน */
     .vac-masthead { position: relative; text-align: center; height: 19mm; }
-    .vac-garuda { height: 17mm; width: auto; }
+    .vac-garuda { height: 17mm; width: auto; display: block; margin: 0 auto; }
     .vac-formcode { position: absolute; right: 0; top: 0; font-size: 9pt; white-space: nowrap; }
 
     /* บล็อกขวาเริ่มที่กึ่งกลางหน้า ตรงใต้ครุฑพอดี ตามรูปแบบหนังสือราชการ */
@@ -139,6 +148,7 @@
     /* คำลงท้าย 3 บรรทัด จัดกึ่งกลางร่วมแกนเดียวกัน และเยื้องขวาเล็กน้อยตามหนังสือราชการ */
     .vac-sign { margin-top: 4mm; margin-left: 46%; width: 50%; text-align: center; }
     .vac-sign > * { display: block; text-align: center; margin-bottom: 0.6mm; }
+    .vac-signspace { height: 9mm; }
     .vac-signpos { text-align: center; }
     .vac-note { margin-top: 4mm; font-size: 8.5pt; font-style: italic; }
 
@@ -333,6 +343,8 @@
       const merged = { ...VACCINE_LABELS_DEFAULT, ...(saved || {}) };
       const m = String(merged.formTitle || '').match(/^(.*?)\s*(\(.*\))\s*$/);
       if (m) { merged.formTitle = m[1].trim(); merged.formYear = (saved && saved.formYear) ? saved.formYear : m[2]; }
+      // ใบรุ่นก่อนเก็บ 'หน่วยบริการ (รพ.สต./ฝ่าย)' ไว้ ให้ตัดวงเล็บออกเพื่อเว้นที่ให้ชื่อหน่วยงานจริง
+      merged.unitLabel = String(merged.unitLabel || '').replace(/\s*\(\s*รพ\.สต\.\s*\/\s*ฝ่าย\s*\)\s*/g, '').trim() || 'หน่วยบริการ';
       return merged;
     };
 
@@ -353,12 +365,18 @@
     //   ที่ต้องการใช้  E = ROUNDUP(เป้าหมาย x factor / divisor, 0)
     //   ที่ขอเบิก      G = IF(คงเหลือ - E >= 0, 0, E - คงเหลือ)
     //   อัตราสูญเสีย   J = IF(เปิดใช้ = 0, "", ((เปิดใช้ x dose - ผู้รับบริการ) / (เปิดใช้ x dose)) x 100)
+    // '-' ที่ใช้เป็นตัวแทนช่องว่าง หรือช่องว่างพิเศษที่ติดมาจากการพิมพ์ ต้องไม่ทำให้ค่ากลายเป็น 0
+    const parseVaccineNum = (v) => {
+      const cleaned = String(v ?? '').replace(/[^0-9.]/g, '');
+      return cleaned === '' ? 0 : toNonNegativeNumber(cleaned);
+    };
+
     const calcVaccineRow = (row) => {
       const c = row?.calc || { factor:1, divisor:1, dose:1 };
-      const target = toNonNegativeNumber(row?.target);
-      const carry = toNonNegativeNumber(row?.carry);
-      const served = toNonNegativeNumber(row?.served);
-      const opened = toNonNegativeNumber(row?.opened);
+      const target = parseVaccineNum(row?.target);
+      const carry = parseVaccineNum(row?.carry);
+      const served = parseVaccineNum(row?.served);
+      const opened = parseVaccineNum(row?.opened);
       const need = target > 0 ? Math.ceil((target * c.factor) / Math.max(1, c.divisor)) : 0;
       const request = (carry - need) >= 0 ? 0 : (need - carry);
       const denom = opened * Math.max(1, c.dose);
@@ -379,12 +397,12 @@
         const drug = byId.get(String(r.drug_id));
         const unit_price = drug ? toNonNegativeNumber(drug.price) : 0;
         const value = unit_price * calc.request;
-        totals.target_people += toNonNegativeNumber(r.target);
+        totals.target_people += parseVaccineNum(r.target);
         totals.need_vials += calc.need;
-        totals.carry_vials += toNonNegativeNumber(r.carry);
+        totals.carry_vials += parseVaccineNum(r.carry);
         totals.requested_vials += calc.request;
-        totals.served_people += toNonNegativeNumber(r.served);
-        totals.opened_vials += toNonNegativeNumber(r.opened);
+        totals.served_people += parseVaccineNum(r.served);
+        totals.opened_vials += parseVaccineNum(r.opened);
         totals.total_value += value;
         return {
           ...r, ...calc,
@@ -398,7 +416,7 @@
     // ===================== END ระบบวัคซีน =====================
 
     const APP_SCHEMA_VERSION = 18;
-    const APP_VERSION = '5.4.0-vaccine-wysiwyg';
+    const APP_VERSION = '5.4.1-vaccine-wysiwyg';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -6731,7 +6749,7 @@ const MapDashboardView = ({ ctx }) => {
             onChange(t === '-' ? '' : t);
             e.currentTarget.innerText = show(t === '-' ? '' : t);
           }}
-          onInput={e => onChange(e.currentTarget.innerText.replace(/\n+$/, '').trim())}
+          onInput={e => onChange(e.currentTarget.innerText.replace(/[^0-9.]/g, ''))}
           className="vac-edit vac-num"
         />
       );
@@ -7040,9 +7058,9 @@ const MapDashboardView = ({ ctx }) => {
                     )}
                     <td className="vac-name"><VacEdit block value={r.name} onChange={v => setRow(r.id, 'name', v)} /></td>
                     <td className="vac-fill"><VacNum value={r.target} onChange={v => setRow(r.id, 'target', v)} /></td>
-                    <td className="vac-calc">{dash(toNonNegativeNumber(r.target) > 0 ? r.need : '')}</td>
+                    <td className="vac-calc">{dash(r.need > 0 ? r.need : '')}</td>
                     <td className="vac-fill"><VacNum value={r.carry} onChange={v => setRow(r.id, 'carry', v)} /></td>
-                    <td className="vac-calc">{dash(toNonNegativeNumber(r.target) > 0 ? r.request : '')}</td>
+                    <td className="vac-calc">{dash(r.request > 0 ? r.request : '')}</td>
                     <td className="vac-fill"><VacNum value={r.served} onChange={v => setRow(r.id, 'served', v)} /></td>
                     <td className="vac-fill"><VacNum value={r.opened} onChange={v => setRow(r.id, 'opened', v)} /></td>
                     <td className="vac-calc">{dash(r.wastageText)}</td>
@@ -7053,6 +7071,7 @@ const MapDashboardView = ({ ctx }) => {
 
             <div className="vac-sign">
               <VacEdit block value={L.closing} onChange={v => setLabel('closing', v)} />
+              <div className="vac-signspace"></div>
               <VacEdit block value={L.signName} onChange={v => setLabel('signName', v)} placeholder="(……………………….……………..…....)" />
               <div className="vac-signpos">
                 <VacEdit value={L.positionLabel} onChange={v => setLabel('positionLabel', v)} />
@@ -8039,7 +8058,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.4.0</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.4.1</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

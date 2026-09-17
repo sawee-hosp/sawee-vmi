@@ -89,48 +89,66 @@
       }
     }
     
-    /* ================= แบบฟอร์มวัคซีน ว.3/1 : ล็อกให้พอดี A4 พอร์ตเทรต 1 หน้า =================
-       ฟอนต์: ใช้ TH SarabunPSK ที่ติดตั้งในเครื่อง (มาตรฐานราชการไทย) ถ้าไม่มีจึงถอยไป Sarabun ของ Google */
+    /* ================= แบบฟอร์มวัคซีน ว.3/1 : พอดี A4 พอร์ตเทรต 1 หน้า =================
+       ฟอนต์: TH SarabunPSK ที่ติดตั้งในเครื่อง (มาตรฐานหนังสือราชการไทย) ถ้าไม่มีจึงถอยไป Sarabun ของ Google
+       หลักการพิมพ์: บนจอใช้ <input> แก้ไขได้ / ตอนพิมพ์สลับเป็น <span> ที่ตัดบรรทัดได้เอง
+       เพราะ input ตัดคำไม่เป็น ข้อความยาวจะโดนตัดหายตอนพิมพ์ */
     .vac-sheet {
       font-family: 'TH SarabunPSK', 'TH Sarabun New', 'THSarabunNew', 'Sarabun', sans-serif;
-      width: 190mm; max-width: 100%; padding: 4mm 0 0 0; color: #000; background: #fff;
-      font-size: 14px; line-height: 1.25;
+      width: 190mm; max-width: 100%; padding: 3mm 0 0 0; color: #000; background: #fff;
+      font-size: 15px; line-height: 1.3;
     }
-    .vac-head { position: relative; height: 22mm; }
-    .vac-garuda { position: absolute; left: 50%; top: 0; transform: translateX(-50%); height: 20mm; width: auto; }
-    .vac-head-title { position: absolute; right: 0; top: 4mm; text-align: right; }
-    .vac-line { display: flex; align-items: flex-end; gap: 2px; margin-bottom: 0.6mm; }
-    .vac-row-between { justify-content: space-between; }
-    .vac-align-right { justify-content: flex-end; }
-    .vac-left, .vac-right { display: flex; align-items: flex-end; gap: 2px; }
+    .vac-field { display: inline-block; vertical-align: bottom; }
+    .vac-grow { flex: 1 1 auto; min-width: 0; }
+    .vac-sheet .vac-input {
+      width: 100%; font-family: inherit; font-size: inherit; line-height: inherit;
+      background: transparent; outline: none; border: none; padding: 0 1px; color: #000;
+    }
+    .vac-sheet .vac-dot { border-bottom: 1px dotted #94a3b8; }
+    .vac-sheet .vac-input:focus { background: #ecfdf5; border-bottom-color: #10b981; }
+    .vac-print { display: none; white-space: normal; overflow-wrap: anywhere; width: 100%; }
+    .vac-small { font-size: 0.92em; }
+
+    .vac-topline { position: relative; height: 6mm; display: flex; justify-content: flex-end; }
+    .vac-formcode { display: inline-flex; align-items: flex-end; }
+    .vac-garuda-wrap { text-align: center; margin-top: -2mm; }
+    .vac-garuda { height: 18mm; width: auto; display: inline-block; }
+
+    /* ตามรูปแบบหนังสือราชการ: เลขที่หนังสืออยู่ซ้าย หน่วยบริการและวันที่อยู่ขวา ใต้ตราครุฑ */
+    .vac-headgrid { display: flex; align-items: flex-start; gap: 4mm; margin-top: 1mm; }
+    .vac-headleft { width: 48%; display: flex; align-items: flex-end; gap: 2px; }
+    .vac-headright { width: 52%; }
+    .vac-line { display: flex; align-items: flex-end; gap: 2px; margin-bottom: 0.8mm; }
+    .vac-mt { margin-top: 1.5mm; }
+    .vac-indent { padding-left: 12mm; }
     .vac-inline { display: inline-flex; align-items: flex-end; justify-content: center; gap: 2px; width: 100%; }
 
     .vac-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 2mm; }
-    .vac-table th, .vac-table td { border: 1px solid #000; padding: 0 1px; vertical-align: middle; height: 5.2mm; }
+    .vac-table th, .vac-table td { border: 1px solid #000; padding: 0.3mm 0.8mm; vertical-align: middle; }
     .vac-table th { font-weight: normal; text-align: center; }
     .vac-vmid { vertical-align: middle !important; text-align: center; }
-    .vac-name input { font-size: inherit; }
-    .vac-group input { font-weight: normal; }
-    .vac-calc { color: #000; }
-    /* ช่องที่ต้องกรอกเอง แรเงาฟ้าอ่อนแบบเดียวกับต้นฉบับ (ที่เหลือเป็นช่องคำนวณอัตโนมัติ) */
+    .vac-name { font-size: 0.95em; }
+    .vac-calc { text-align: center; }
+    /* ช่องที่ต้องกรอกเอง แรเงาฟ้าอ่อนแบบต้นฉบับ ที่เหลือเป็นช่องคำนวณอัตโนมัติ */
     .vac-fill { background: #dce6f1; }
-    .vac-sheet .vac-input { font-family: inherit; font-size: inherit; line-height: inherit; }
+    .vac-cell-input, .vac-cell-print { text-align: center; }
 
-    .vac-sign { margin-top: 5mm; display: flex; flex-direction: column; align-items: center; gap: 1mm; }
-    .vac-note { margin-top: 4mm; font-size: 13px; }
+    /* คำลงท้ายและลายเซ็นเยื้องขวาตามหนังสือราชการ */
+    .vac-sign { margin-top: 5mm; margin-left: 52%; width: 46%; display: flex; flex-direction: column; align-items: center; gap: 0.8mm; }
+    .vac-signpos { justify-content: center; }
+    .vac-note { margin-top: 5mm; }
 
     @media print {
       .vac-sheet { width: 190mm !important; font-size: 13.5pt; padding: 0; page-break-inside: avoid; break-inside: avoid; }
+      .vac-print { display: block; }
+      .vac-cell-print { display: block; }
       .vac-table { margin-top: 1.5mm; }
-      /* ขอบบางตามต้นฉบับ */
-      .vac-table th, .vac-table td { border: 0.4pt solid #000 !important; height: 4.9mm; padding: 0 0.6mm !important; font-size: 13pt; }
+      .vac-table th, .vac-table td { border: 0.4pt solid #000 !important; padding: 0.2mm 0.7mm !important; font-size: 12.5pt; }
+      .vac-name { font-size: 11.5pt; }
       .vac-fill { background: #dce6f1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .vac-garuda { height: 18mm; }
-      .vac-note { font-size: 12.5pt; }
-      .vac-input { border: none !important; background: transparent !important; box-shadow: none !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .vac-sheet .vac-input::placeholder { color: #000 !important; opacity: 1; }
+      .vac-garuda { height: 17mm; }
+      .vac-note { font-size: 11pt; }
     }
-    .vac-input::placeholder { color: #cbd5e1; }
 
     .loader { border: 4px solid #f3f3f3; border-top: 4px solid #0d9488; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -270,12 +288,13 @@
       { id:'v22', group_id:'g5', group_name:'หญิงตั้งครรภ์', no:'22', name:'20. Influenza (1 dose)', drug_id:'07407', calc:{ factor:1.01, divisor:1, dose:1 } },
       { id:'v23', group_id:'g5', group_name:'หญิงตั้งครรภ์', no:'23', name:'21. aP (1 dose)', drug_id:'17211', calc:{ factor:1.01, divisor:1, dose:1 } },
       { id:'v24', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'24', name:'22. dT (10 doses)', drug_id:'17206', calc:{ factor:1.33, divisor:10, dose:10 } },
-      { id:'v25', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'25', name:'23. MR (นศ.ทางการแพทย์และสาธารณสุข) (10 doses)', drug_id:'17302', calc:{ factor:1.01, divisor:1, dose:10 } },
-      { id:'v26', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'26', name:'24. HB (บุคลากรทางการแพทย์และสาธารณสุข) (1 dose)', drug_id:'17206', calc:{ factor:1.01, divisor:1, dose:1 } }
+      { id:'v25', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'25', name:'23. MR (นศ.ทางการแพทย์และสาธารณสุข) (10 doses)', drug_id:'17302', calc:{ factor:1.01, divisor:10, dose:10 } },
+      { id:'v26', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'26', name:'24. HB (บุคลากรทางการแพทย์และสาธารณสุข) (1 dose)', drug_id:'17301', calc:{ factor:1.01, divisor:1, dose:1 } }
     ];
 
     const VACCINE_LABELS_DEFAULT = {
-      formTitle: 'แบบฟอร์ม ว.3/1 (ปี 2567)',
+      formTitle: 'แบบฟอร์ม ว.3/1',
+      formYear: '(ปี 2567)',
       docNoLabel: 'ที่',
       unitLabel: 'หน่วยบริการ (รพ.สต./ฝ่าย)',
       dateLabel: 'วันที่............เดือน.......................................พ.ศ........................',
@@ -366,7 +385,7 @@
     // ===================== END ระบบวัคซีน =====================
 
     const APP_SCHEMA_VERSION = 18;
-    const APP_VERSION = '5.3.0-vaccine-w31';
+    const APP_VERSION = '5.3.2-vaccine-w31-print';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -967,7 +986,7 @@
       }, [onClose]);
       const bgColor = type === 'error' ? 'bg-red-500' : 'bg-emerald-500';
       return (
-        <div className={`fixed top-6 right-6 ${bgColor} text-white px-6 py-4 rounded-xl shadow-2xl flex items-center z-[250] animate-fade-in font-medium`}>
+        <div className={`no-print fixed top-6 right-6 ${bgColor} text-white px-6 py-4 rounded-xl shadow-2xl flex items-center z-[250] animate-fade-in font-medium`}>
           <i className={`fa-solid ${type === 'error' ? 'fa-circle-exclamation' : 'fa-circle-check'} mr-3 text-xl`}></i>
           {message}
         </div>
@@ -3526,7 +3545,9 @@ const CreateReqView = ({ ctx }) => {
         const matchInactive = showInactive ? true : !inactive;
         return matchSearch && matchType && matchInactive;
       });
-      const workingGroupedItems = filteredItems.reduce((acc, item) => {
+      // วัคซีนถูกซ่อนจากตารางและใบพิมพ์ของ รบ.301 แต่ข้อมูลยังถูกเก็บครบ (ผู้ดูแลระบบยังเห็นบนจอ)
+      const canSeeVaccineRows = normalizeUserRole(ctx.currentUser?.role) === 'admin';
+      const workingGroupedItems = filteredItems.filter(it => canSeeVaccineRows || String(it.type) !== '6').reduce((acc, item) => {
         const key = safeText(item.type, '1') || '1';
         (acc[key] ||= []).push(item);
         return acc;
@@ -4988,7 +5009,10 @@ const ViewReqView = ({ ctx }) => {
       const hiddenItemCount = editableItems.filter(isHiddenReqItem).length;
       const itemsToDisplay = (isAdmin && showHiddenItems) ? editableItems : editableItems.filter(it => !isHiddenReqItem(it));
 
-      itemsToDisplay.forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
+      // วัคซีนถูกซ่อนจากตารางและใบพิมพ์ แต่ยังคงอยู่ใน editableItems และถูกบันทึกตามปกติ
+      const canSeeVaccineRows = isAdmin;
+      itemsToDisplay.filter(it => canSeeVaccineRows || String(it.type) !== '6')
+        .forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
       
       let grandTotalItems = 0;
       let grandTotalPrice = 0;
@@ -6657,24 +6681,49 @@ const MapDashboardView = ({ ctx }) => {
       </div>
     );
 
-    // ช่องข้อความแก้ไขได้ ตอนพิมพ์จะกลายเป็นข้อความธรรมดาไม่มีกรอบ
-    const VacText = ({ value, onChange, className = '', placeholder = '', align = 'left', bold, dotted = true }) => (
-      <input
-        type="text"
-        value={value ?? ''}
-        placeholder={placeholder}
-        onChange={e => onChange(e.target.value)}
-        className={`vac-input bg-transparent outline-none ${dotted ? 'border-b border-dotted border-slate-300 focus:border-emerald-500' : 'border-none'} px-0.5 ${bold ? 'font-bold' : ''} ${className}`}
-        style={{ textAlign: align }}
-      />
+    // ช่องข้อความ: บนจอเป็น input แก้ไขได้ / ตอนพิมพ์สลับเป็นข้อความจริงที่ตัดบรรทัดเองได้
+    // input ตัดคำไม่ได้ ข้อความยาวจึงโดนตัดหายตอนพิมพ์ — การแยกสองชั้นแก้ปัญหานี้ทั้งหมด
+    const VacField = ({ value, onChange, width, align = 'left', italic, bold, small, placeholder = '', dotted = true, grow }) => (
+      <span className={`vac-field ${grow ? 'vac-grow' : ''}`} style={width ? { width } : undefined}>
+        <input
+          type="text"
+          value={value ?? ''}
+          placeholder={placeholder}
+          title={value ?? ''}
+          onChange={e => onChange(e.target.value)}
+          className={`vac-input no-print ${dotted ? 'vac-dot' : ''} ${italic ? 'italic' : ''} ${bold ? 'font-bold' : ''} ${small ? 'vac-small' : ''}`}
+          style={{ textAlign: align }}
+        />
+        <span className={`vac-print ${italic ? 'italic' : ''} ${bold ? 'font-bold' : ''} ${small ? 'vac-small' : ''}`} style={{ textAlign: align }}>
+          {(value ?? '') === '' ? placeholder : value}
+        </span>
+      </span>
     );
+
+    // ช่องตัวเลขในตาราง: ว่าง = แสดง "-" พอคลิกเข้าไปกรอก "-" จะหายไปเอง
+    const VacNumCell = ({ value, onChange }) => {
+      const [focused, setFocused] = useState(false);
+      const raw = value ?? '';
+      return (
+        <>
+          <input
+            type="text"
+            value={focused ? raw : (raw === '' ? '-' : raw)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            onChange={e => onChange(e.target.value)}
+            className="vac-input no-print vac-cell-input"
+          />
+          <span className="vac-print vac-cell-print">{raw === '' ? '-' : raw}</span>
+        </>
+      );
+    };
 
     const VaccineReqView = ({ ctx }) => {
       const isAdmin = normalizeUserRole(ctx.currentUser?.role) === 'admin';
-      const isHospital = normalizeUserRole(ctx.currentUser?.role) === 'hospital';
 
       const today = new Date();
-      // เบิกช่วงวันที่ 20 เป็นต้นไป = เบิกเพื่อเดือนถัดไป (เบิก ก.ย. -> รอบ ต.ค. -> ครั้งที่ 1 ของปีงบใหม่)
+      // เบิกตั้งแต่วันที่ 20 = เบิกเพื่อเดือนถัดไป (เบิก ก.ย. -> รอบ ต.ค. -> ครั้งที่ 1 ของปีงบใหม่)
       const roundPeriod = today.getDate() >= 20
         ? getNextCalendarPeriod(today.getMonth() + 1, today.getFullYear())
         : { month: today.getMonth() + 1, year: today.getFullYear() };
@@ -6708,7 +6757,6 @@ const MapDashboardView = ({ ctx }) => {
           doc_no: '',
           unit_name: hospital?.hospital_name || '',
           date_text: '',
-          // หัวตารางเติมเดือนอัตโนมัติ: ข้อมูลการเบิก = เดือนของรอบนี้, ผลการให้วัคซีน = เดือนก่อนหน้า (เดือนที่กรอก)
           req_month_text: `${THAI_MONTHS[Number(month) - 1]} ${Number(year) + 543}`,
           prev_month_text: `${THAI_MONTHS[prevPeriod.month - 1]} ${prevPeriod.year + 543}`,
           labels: { ...VACCINE_LABELS_DEFAULT, signName: ctx.currentUser?.name || '', signPosition: ctx.currentUser?.position || '' },
@@ -6718,13 +6766,11 @@ const MapDashboardView = ({ ctx }) => {
         if (existing) {
           const savedRows = Array.isArray(existing.rows) ? existing.rows : [];
           setDoc({
-            ...base,
-            ...existing,
+            ...base, ...existing,
             labels: { ...VACCINE_LABELS_DEFAULT, ...(existing.labels || {}) },
-            // รวมกับ template เสมอ เพื่อให้ใบเก่ายังเปิดได้แม้ template เปลี่ยน
             rows: buildVaccineRows().map(t => {
               const saved = savedRows.find(r => r.id === t.id);
-              return saved ? { ...t, ...saved, calc: t.calc, group_name: saved.group_name ?? t.group_name } : t;
+              return saved ? { ...t, ...saved, calc: t.calc } : t;
             }),
             isNew: false
           });
@@ -6763,20 +6809,17 @@ const MapDashboardView = ({ ctx }) => {
           const payload = {
             hospitalId: hospId,
             hospital_name: hospital?.hospital_name || '',
-            month: Number(month),
-            year: Number(year),
+            month: Number(month), year: Number(year),
             fiscal_year: Number(doc.fiscal_year),
             term: Math.max(1, toNonNegativeInt(doc.term, 1)),
             term_manual: !!doc.term_manual,
-            filled_month: prevPeriod.month,
-            filled_year: prevPeriod.year,
-            doc_no: safeText(doc.doc_no),
+            filled_month: prevPeriod.month, filled_year: prevPeriod.year,
+            doc_no: safeText(doc.doc_no),            // เลขที่หนังสือ เก็บลงฐานข้อมูลทุกใบ
             unit_name: safeText(doc.unit_name),
             date_text: safeText(doc.date_text),
             req_month_text: safeText(doc.req_month_text),
             prev_month_text: safeText(doc.prev_month_text),
             labels: doc.labels,
-            // เก็บทุกช่องที่กรอก + ทุกค่าที่คำนวณ เพื่อตรวจสอบย้อนหลังได้ครบ
             rows: snap.rows.map(r => ({
               id: r.id, no: r.no, name: r.name, group_id: r.group_id, group_name: r.group_name,
               drug_id: r.drug_id, drug_name: r.drug_name, dose_per_vial: r.calc.dose,
@@ -6788,8 +6831,7 @@ const MapDashboardView = ({ ctx }) => {
             totals: snap.totals,
             total_requested_vials: snap.totals.requested_vials,
             total_value: snap.totals.total_value,
-            form_kind: 'vaccine_w31',
-            form_version: 'w31-2567',
+            form_kind: 'vaccine_w31', form_version: 'w31-2567',
             updated_by_uid: ctx.currentUser?.uid || '',
             updated_by_name: ctx.currentUser?.name || '',
             updated_at: firebase.firestore.FieldValue.serverTimestamp(),
@@ -6801,21 +6843,20 @@ const MapDashboardView = ({ ctx }) => {
             payload.created_at = firebase.firestore.FieldValue.serverTimestamp();
           }
           await db.collection('vaccine_requisitions').doc(doc.id).set(payload, { merge: true });
-          await writeAuditLog(ctx.currentUser, doc.isNew ? 'VACCINE_FORM_CREATE' : 'VACCINE_FORM_UPDATE', 'vaccine_requisitions', doc.id, { month, year, term: payload.term, value: payload.total_value });
+          await writeAuditLog(ctx.currentUser, doc.isNew ? 'VACCINE_FORM_CREATE' : 'VACCINE_FORM_UPDATE', 'vaccine_requisitions', doc.id, { month, year, term: payload.term, doc_no: payload.doc_no, value: payload.total_value });
           setIsDirty(false);
           setDoc(d => ({ ...d, isNew: false }));
           await ctx.refreshData();
-          ctx.showToast('บันทึกแบบฟอร์มวัคซีนแล้ว — ใช้สำหรับพิมพ์และดูย้อนหลังเท่านั้น');
+          ctx.showToast('บันทึกแบบฟอร์มวัคซีนแล้ว');
         } catch (e) {
           ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error');
-        } finally {
-          setIsSaving(false);
-        }
+        } finally { setIsSaving(false); }
       };
 
+      // รอให้ toast หายก่อนเรียก print เสมอ ไม่งั้นกล่องแจ้งเตือนจะติดไปบนกระดาษ
       const handlePrint = () => {
         if (isDirty) return ctx.showToast('ยังมีการแก้ไขที่ยังไม่ได้บันทึก กรุณากดบันทึกก่อนพิมพ์', 'error');
-        window.print();
+        setTimeout(() => window.print(), 120);
       };
 
       const myHistory = useMemo(() => allVaccineReqs
@@ -6827,15 +6868,8 @@ const MapDashboardView = ({ ctx }) => {
       }
 
       const L = doc.labels;
-      const inputCell = (r, key) => (
-        <td className="vac-fill">
-          <input type="text" value={r[key] ?? ''} onChange={e => setRow(r.id, key, e.target.value)}
-                 className="vac-input w-full bg-transparent outline-none text-center focus:bg-emerald-100" />
-        </td>
-      );
-      const calcCell = (text) => <td className="vac-calc text-center">{text}</td>;
+      const dash = (v) => (v === '' || v === null || v === undefined) ? '-' : v;
 
-      // จัดกลุ่มเพื่อทำ rowSpan ของคอลัมน์กลุ่มเป้าหมาย
       const groupSpans = [];
       computed.rows.forEach((r, i) => {
         const last = groupSpans[groupSpans.length - 1];
@@ -6878,10 +6912,10 @@ const MapDashboardView = ({ ctx }) => {
               </div>
               {duplicateTerm && (
                 <span className="text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  <i className="fa-solid fa-triangle-exclamation mr-1"></i> เลขครั้งที่ {doc.term}/{doc.fiscal_year} ซ้ำกับใบเดือน {THAI_MONTHS[Number(duplicateTerm.month) - 1]} {Number(duplicateTerm.year) + 543}
+                  <i className="fa-solid fa-triangle-exclamation mr-1"></i> ครั้งที่ {doc.term}/{doc.fiscal_year} ซ้ำกับใบเดือน {THAI_MONTHS[Number(duplicateTerm.month) - 1]} {Number(duplicateTerm.year) + 543}
                 </span>
               )}
-              {existing && <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i> มีใบของเดือนนี้แล้ว — กำลังแก้ไขใบเดิม</span>}
+              {existing && <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i> กำลังแก้ไขใบเดิมของเดือนนี้</span>}
               {isDirty && <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">มีการแก้ไขที่ยังไม่ได้บันทึก</span>}
             </div>
 
@@ -6900,47 +6934,46 @@ const MapDashboardView = ({ ctx }) => {
             <VaccineNotice compact />
           </div>
 
-          {/* ===== แบบฟอร์ม ว.3/1 สำหรับพิมพ์ (ล็อกความกว้าง A4) ===== */}
+          {/* ===== แบบฟอร์ม ว.3/1 (ล็อกความกว้าง A4) ===== */}
           <div className="w-full overflow-x-auto">
           <div className="print-area vac-sheet bg-white border border-slate-200 shadow-sm print:border-none print:shadow-none mx-auto">
 
-            <div className="vac-head">
-              <div className="vac-head-title">
-                <VacText value={L.formTitle} onChange={v => setLabel('formTitle', v)} align="right" bold dotted={false} className="w-56" />
+            <div className="vac-topline">
+              <span className="vac-formcode">
+                <VacField value={L.formTitle} onChange={v => setLabel('formTitle', v)} width="30mm" align="right" dotted={false} />
+                <VacField value={L.formYear} onChange={v => setLabel('formYear', v)} width="20mm" align="left" dotted={false} italic />
+              </span>
+            </div>
+            <div className="vac-garuda-wrap"><img src={GARUDA_DATA_URI} alt="ตราครุฑ" className="vac-garuda" /></div>
+
+            <div className="vac-headgrid">
+              <div className="vac-headleft">
+                <VacField value={L.docNoLabel} onChange={v => setLabel('docNoLabel', v)} width="8mm" dotted={false} />
+                <VacField value={doc.doc_no} onChange={v => setField('doc_no', v)} width="38mm" placeholder="………………………………" />
               </div>
-              <img src={GARUDA_DATA_URI} alt="ตราครุฑ" className="vac-garuda" />
+              <div className="vac-headright">
+                <div className="vac-line">
+                  <VacField value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} width="42mm" dotted={false} />
+                  <VacField value={doc.unit_name} onChange={v => setField('unit_name', v)} grow placeholder="......................................................" />
+                </div>
+                <div className="vac-line">
+                  <VacField value={L.dateLabel} onChange={v => setLabel('dateLabel', v)} grow dotted={false} />
+                </div>
+              </div>
             </div>
 
-            <div className="vac-line vac-row-between">
-              <span className="vac-left">
-                <VacText value={L.docNoLabel} onChange={v => setLabel('docNoLabel', v)} dotted={false} className="w-6" />
-                <VacText value={doc.doc_no} onChange={v => setField('doc_no', v)} className="w-32" />
-              </span>
-              <span className="vac-right">
-                <VacText value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} dotted={false} className="w-40" />
-                <VacText value={doc.unit_name} onChange={v => setField('unit_name', v)} className="w-64" />
-              </span>
+            <div className="vac-line vac-mt">
+              <VacField value={L.subjectLabel} onChange={v => setLabel('subjectLabel', v)} width="12mm" dotted={false} />
+              <VacField value={L.subjectText} onChange={v => setLabel('subjectText', v)} grow dotted={false} />
             </div>
-
-            <div className="vac-line vac-align-right">
-              <VacText value={L.dateLabel} onChange={v => setLabel('dateLabel', v)} dotted={false} className="w-40" align="right" />
-              <VacText value={doc.date_text} onChange={v => setField('date_text', v)} className="w-64" />
-            </div>
-
             <div className="vac-line">
-              <VacText value={L.subjectLabel} onChange={v => setLabel('subjectLabel', v)} dotted={false} className="w-10" />
-              <VacText value={L.subjectText} onChange={v => setLabel('subjectText', v)} dotted={false} className="w-96" />
+              <VacField value={L.toLabel} onChange={v => setLabel('toLabel', v)} width="12mm" dotted={false} />
+              <VacField value={L.toText} onChange={v => setLabel('toText', v)} grow />
             </div>
-
-            <div className="vac-line">
-              <VacText value={L.toLabel} onChange={v => setLabel('toLabel', v)} dotted={false} className="w-10" />
-              <VacText value={L.toText} onChange={v => setLabel('toText', v)} className="w-96" />
-            </div>
-
-            <div className="vac-line" style={{ paddingLeft: '10mm' }}>
-              <VacText value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} dotted={false} className="w-40" />
-              <VacText value={doc.unit_name} onChange={v => setField('unit_name', v)} className="w-52" />
-              <VacText value={L.introText} onChange={v => setLabel('introText', v)} dotted={false} className="w-44" />
+            <div className="vac-line vac-indent">
+              <VacField value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} width="42mm" dotted={false} />
+              <VacField value={doc.unit_name} onChange={v => setField('unit_name', v)} width="52mm" placeholder="……..........................................." />
+              <VacField value={L.introText} onChange={v => setLabel('introText', v)} width="42mm" dotted={false} />
             </div>
 
             <table className="vac-table">
@@ -6953,33 +6986,33 @@ const MapDashboardView = ({ ctx }) => {
               </colgroup>
               <thead>
                 <tr>
-                  <th rowSpan="3" className="vac-vmid"><VacText value={L.colGroup} onChange={v => setLabel('colGroup', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th rowSpan="3" className="vac-vmid"><VacText value={L.colVaccine} onChange={v => setLabel('colVaccine', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th colSpan="4">
+                  <th rowSpan="3" className="vac-vmid"><VacField value={L.colGroup} onChange={v => setLabel('colGroup', v)} grow align="center" dotted={false} /></th>
+                  <th rowSpan="3" className="vac-vmid"><VacField value={L.colVaccine} onChange={v => setLabel('colVaccine', v)} grow align="center" dotted={false} /></th>
+                  <th colSpan="4" className="vac-vmid">
                     <span className="vac-inline">
-                      <VacText value={L.colReqHead} onChange={v => setLabel('colReqHead', v)} align="right" dotted={false} className="w-40" />
-                      <VacText value={doc.req_month_text} onChange={v => setField('req_month_text', v)} align="left" className="w-28" />
+                      <VacField value={L.colReqHead} onChange={v => setLabel('colReqHead', v)} width="34mm" align="right" dotted={false} />
+                      <VacField value={doc.req_month_text} onChange={v => setField('req_month_text', v)} width="26mm" align="left" />
                     </span>
                   </th>
-                  <th colSpan="3">
+                  <th colSpan="3" className="vac-vmid">
                     <span className="vac-inline">
-                      <VacText value={L.colPrevHead} onChange={v => setLabel('colPrevHead', v)} align="right" dotted={false} className="w-32" />
-                      <VacText value={doc.prev_month_text} onChange={v => setField('prev_month_text', v)} align="center" className="w-24" />
-                      <VacText value={L.colPrevHeadTail} onChange={v => setLabel('colPrevHeadTail', v)} align="left" dotted={false} className="w-16" />
+                      <VacField value={L.colPrevHead} onChange={v => setLabel('colPrevHead', v)} width="28mm" align="right" dotted={false} />
+                      <VacField value={doc.prev_month_text} onChange={v => setField('prev_month_text', v)} width="22mm" align="center" />
+                      <VacField value={L.colPrevHeadTail} onChange={v => setLabel('colPrevHeadTail', v)} width="14mm" align="left" dotted={false} />
                     </span>
                   </th>
                 </tr>
                 <tr>
-                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colTarget} onChange={v => setLabel('colTarget', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th colSpan="3"><VacText value={L.colVialHead} onChange={v => setLabel('colVialHead', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colServed} onChange={v => setLabel('colServed', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colOpened} onChange={v => setLabel('colOpened', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colWastage} onChange={v => setLabel('colWastage', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th rowSpan="2" className="vac-vmid"><VacField value={L.colTarget} onChange={v => setLabel('colTarget', v)} grow align="center" dotted={false} /></th>
+                  <th colSpan="3" className="vac-vmid"><VacField value={L.colVialHead} onChange={v => setLabel('colVialHead', v)} grow align="center" dotted={false} /></th>
+                  <th rowSpan="2" className="vac-vmid"><VacField value={L.colServed} onChange={v => setLabel('colServed', v)} grow align="center" dotted={false} /></th>
+                  <th rowSpan="2" className="vac-vmid"><VacField value={L.colOpened} onChange={v => setLabel('colOpened', v)} grow align="center" dotted={false} /></th>
+                  <th rowSpan="2" className="vac-vmid"><VacField value={L.colWastage} onChange={v => setLabel('colWastage', v)} grow align="center" dotted={false} /></th>
                 </tr>
                 <tr>
-                  <th><VacText value={L.colNeed} onChange={v => setLabel('colNeed', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th><VacText value={L.colCarry} onChange={v => setLabel('colCarry', v)} align="center" dotted={false} className="w-full" /></th>
-                  <th><VacText value={L.colRequest} onChange={v => setLabel('colRequest', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th className="vac-vmid"><VacField value={L.colNeed} onChange={v => setLabel('colNeed', v)} grow align="center" dotted={false} /></th>
+                  <th className="vac-vmid"><VacField value={L.colCarry} onChange={v => setLabel('colCarry', v)} grow align="center" dotted={false} /></th>
+                  <th className="vac-vmid"><VacField value={L.colRequest} onChange={v => setLabel('colRequest', v)} grow align="center" dotted={false} /></th>
                 </tr>
               </thead>
               <tbody>
@@ -6987,41 +7020,36 @@ const MapDashboardView = ({ ctx }) => {
                   <tr key={r.id}>
                     {spanStartAt[i] && (
                       <td rowSpan={spanStartAt[i].span} className="vac-vmid vac-group">
-                        <input type="text" value={r.group_name ?? ''} onChange={e => {
-                          const gid = r.group_id;
-                          setDoc(d => ({ ...d, rows: d.rows.map(x => x.group_id === gid ? { ...x, group_name: e.target.value } : x) }));
-                          setIsDirty(true);
-                        }} className="vac-input w-full bg-transparent outline-none text-center" />
+                        <VacField value={r.group_name} grow align="center" dotted={false}
+                          onChange={v => { const gid = r.group_id; setDoc(d => ({ ...d, rows: d.rows.map(x => x.group_id === gid ? { ...x, group_name: v } : x) })); setIsDirty(true); }} />
                       </td>
                     )}
                     <td className="vac-name">
-                      <input type="text" value={r.name ?? ''} onChange={e => setRow(r.id, 'name', e.target.value)}
-                             className="vac-input w-full bg-transparent outline-none" />
+                      <VacField value={r.name} onChange={v => setRow(r.id, 'name', v)} grow dotted={false} small />
                     </td>
-                    {inputCell(r, 'target')}
-                    {calcCell(r.need)}
-                    {inputCell(r, 'carry')}
-                    {calcCell(r.request)}
-                    {inputCell(r, 'served')}
-                    {inputCell(r, 'opened')}
-                    {calcCell(r.wastageText)}
+                    <td className="vac-fill"><VacNumCell value={r.target} onChange={v => setRow(r.id, 'target', v)} /></td>
+                    <td className="vac-calc">{dash(toNonNegativeNumber(r.target) > 0 ? r.need : '')}</td>
+                    <td className="vac-fill"><VacNumCell value={r.carry} onChange={v => setRow(r.id, 'carry', v)} /></td>
+                    <td className="vac-calc">{dash(toNonNegativeNumber(r.target) > 0 ? r.request : '')}</td>
+                    <td className="vac-fill"><VacNumCell value={r.served} onChange={v => setRow(r.id, 'served', v)} /></td>
+                    <td className="vac-fill"><VacNumCell value={r.opened} onChange={v => setRow(r.id, 'opened', v)} /></td>
+                    <td className="vac-calc">{dash(r.wastageText)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
 
             <div className="vac-sign">
-              <VacText value={L.closing} onChange={v => setLabel('closing', v)} align="center" dotted={false} className="w-48" />
-              <VacText value={L.signName} onChange={v => setLabel('signName', v)} align="center" className="w-72" placeholder="(………………………….…………..…....)" />
-              <span className="vac-inline">
-                <VacText value={L.positionLabel} onChange={v => setLabel('positionLabel', v)} align="right" dotted={false} className="w-16" />
-                <VacText value={L.signPosition} onChange={v => setLabel('signPosition', v)} align="left" className="w-72" />
+              <VacField value={L.closing} onChange={v => setLabel('closing', v)} grow align="center" dotted={false} />
+              <VacField value={L.signName} onChange={v => setLabel('signName', v)} grow align="center" placeholder="(……………………….……………..…....)" />
+              <span className="vac-inline vac-signpos">
+                <VacField value={L.positionLabel} onChange={v => setLabel('positionLabel', v)} width="16mm" align="right" dotted={false} />
+                <VacField value={L.signPosition} onChange={v => setLabel('signPosition', v)} grow align="left" placeholder="………………………………………….…………………....." />
               </span>
             </div>
 
             <div className="vac-note">
-              <input type="text" value={L.note ?? ''} onChange={e => setLabel('note', e.target.value)}
-                     className="vac-input w-full bg-transparent outline-none" />
+              <VacField value={L.note} onChange={v => setLabel('note', v)} grow dotted={false} italic small />
             </div>
           </div>
           </div>
@@ -7073,7 +7101,7 @@ const MapDashboardView = ({ ctx }) => {
                   <div>
                     <div className="font-bold text-slate-800">{THAI_MONTHS[Number(r.month) - 1]} {Number(r.year) + 543}</div>
                     <div className="text-xs text-slate-500">
-                      ครั้งที่ {r.term}/{r.fiscal_year} • ขอเบิก {toNonNegativeNumber(r.total_requested_vials).toLocaleString()} ขวด
+                      ครั้งที่ {r.term}/{r.fiscal_year}{r.doc_no ? ` • เลขที่ ${r.doc_no}` : ''} • ขอเบิก {toNonNegativeNumber(r.total_requested_vials).toLocaleString()} ขวด
                       {isAdmin && ` • ${toNonNegativeNumber(r.total_value).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`}
                     </div>
                   </div>
@@ -7999,7 +8027,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.3.0</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.3.2</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

@@ -89,65 +89,78 @@
       }
     }
     
-    /* ================= แบบฟอร์มวัคซีน ว.3/1 : พอดี A4 พอร์ตเทรต 1 หน้า =================
+    /* ================= แบบฟอร์มวัคซีน ว.3/1 : บังคับจบใน A4 หน้าเดียว =================
        ฟอนต์: TH SarabunPSK ที่ติดตั้งในเครื่อง (มาตรฐานหนังสือราชการไทย) ถ้าไม่มีจึงถอยไป Sarabun ของ Google
-       หลักการพิมพ์: บนจอใช้ <input> แก้ไขได้ / ตอนพิมพ์สลับเป็น <span> ที่ตัดบรรทัดได้เอง
-       เพราะ input ตัดคำไม่เป็น ข้อความยาวจะโดนตัดหายตอนพิมพ์ */
+       บนจอใช้ <input> แก้ไขได้ / ตอนพิมพ์สลับเป็น <span> ที่ตัดบรรทัดเองได้ เพราะ input ตัดคำไม่เป็น
+       ป้ายกำกับทุกตัวเป็น vac-label = กว้างตามเนื้อหา ห้ามตัดบรรทัด ไม่ใช้ความกว้างตายตัวอีก */
     .vac-sheet {
       font-family: 'TH SarabunPSK', 'TH Sarabun New', 'THSarabunNew', 'Sarabun', sans-serif;
-      width: 190mm; max-width: 100%; padding: 3mm 0 0 0; color: #000; background: #fff;
-      font-size: 15px; line-height: 1.3;
+      width: 190mm; max-width: 100%; padding: 2mm 0 0 0; color: #000; background: #fff;
+      font-size: 14px; line-height: 1.18;
     }
-    .vac-field { display: inline-block; vertical-align: bottom; }
-    .vac-grow { flex: 1 1 auto; min-width: 0; }
+    .vac-field { display: inline-block; vertical-align: bottom; min-width: 0; }
+    .vac-grow { flex: 1 1 auto; min-width: 8mm; }
+    .vac-label { flex: 0 0 auto; width: auto; white-space: nowrap; }
+    .vac-label .vac-input { width: auto; }
+    .vac-label .vac-print { width: auto; display: inline-block; white-space: nowrap; }
     .vac-sheet .vac-input {
       width: 100%; font-family: inherit; font-size: inherit; line-height: inherit;
       background: transparent; outline: none; border: none; padding: 0 1px; color: #000;
     }
+    .vac-label .vac-input { field-sizing: content; min-width: 6ch; }
     .vac-sheet .vac-dot { border-bottom: 1px dotted #94a3b8; }
     .vac-sheet .vac-input:focus { background: #ecfdf5; border-bottom-color: #10b981; }
     .vac-print { display: none; white-space: normal; overflow-wrap: anywhere; width: 100%; }
     .vac-small { font-size: 0.92em; }
 
-    .vac-topline { position: relative; height: 6mm; display: flex; justify-content: flex-end; }
-    .vac-formcode { display: inline-flex; align-items: flex-end; }
-    .vac-garuda-wrap { text-align: center; margin-top: -2mm; }
-    .vac-garuda { height: 18mm; width: auto; display: inline-block; }
+    /* ครุฑกลางหน้า ชื่อแบบฟอร์มมุมขวาระดับเดียวกัน */
+    .vac-masthead { position: relative; text-align: center; height: 20mm; }
+    .vac-garuda { height: 19mm; width: auto; display: inline-block; }
+    .vac-formcode { position: absolute; right: 0; top: 1mm; display: inline-flex; align-items: flex-end; gap: 2px; white-space: nowrap; }
 
-    /* ตามรูปแบบหนังสือราชการ: เลขที่หนังสืออยู่ซ้าย หน่วยบริการและวันที่อยู่ขวา ใต้ตราครุฑ */
-    .vac-headgrid { display: flex; align-items: flex-start; gap: 4mm; margin-top: 1mm; }
-    .vac-headleft { width: 48%; display: flex; align-items: flex-end; gap: 2px; }
-    .vac-headright { width: 52%; }
-    .vac-line { display: flex; align-items: flex-end; gap: 2px; margin-bottom: 0.8mm; }
-    .vac-mt { margin-top: 1.5mm; }
+    /* เลขที่หนังสือชิดซ้าย หน่วยบริการ + วันที่ อยู่ครึ่งขวาใต้ครุฑ ตามหนังสือราชการ */
+    .vac-headgrid { display: flex; align-items: flex-start; gap: 3mm; margin-top: 0.5mm; }
+    .vac-headleft { width: 46%; display: flex; align-items: flex-end; gap: 2px; }
+    .vac-headright { width: 54%; }
+    .vac-line { display: flex; align-items: flex-end; gap: 2px; margin-bottom: 0.5mm; }
+    .vac-mt { margin-top: 1.2mm; }
     .vac-indent { padding-left: 12mm; }
-    .vac-inline { display: inline-flex; align-items: flex-end; justify-content: center; gap: 2px; width: 100%; }
+    .vac-inline { display: inline-flex; align-items: flex-end; justify-content: center; gap: 2px; width: 100%; flex-wrap: nowrap; }
 
-    .vac-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 2mm; }
-    .vac-table th, .vac-table td { border: 1px solid #000; padding: 0.3mm 0.8mm; vertical-align: middle; }
-    .vac-table th { font-weight: normal; text-align: center; }
+    .vac-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 1.5mm; }
+    .vac-table th, .vac-table td { border: 1px solid #000; padding: 0.2mm 0.6mm; vertical-align: middle; }
+    .vac-table th { font-weight: normal; text-align: center; font-size: 0.82em; line-height: 1.1; }
     .vac-vmid { vertical-align: middle !important; text-align: center; }
-    .vac-name { font-size: 0.95em; }
+    .vac-name { font-size: 0.84em; }
+    .vac-group { font-size: 0.82em; }
     .vac-calc { text-align: center; }
     /* ช่องที่ต้องกรอกเอง แรเงาฟ้าอ่อนแบบต้นฉบับ ที่เหลือเป็นช่องคำนวณอัตโนมัติ */
     .vac-fill { background: #dce6f1; }
     .vac-cell-input, .vac-cell-print { text-align: center; }
 
     /* คำลงท้ายและลายเซ็นเยื้องขวาตามหนังสือราชการ */
-    .vac-sign { margin-top: 5mm; margin-left: 52%; width: 46%; display: flex; flex-direction: column; align-items: center; gap: 0.8mm; }
-    .vac-signpos { justify-content: center; }
-    .vac-note { margin-top: 5mm; }
+    .vac-sign { margin-top: 4mm; margin-left: 50%; width: 48%; display: flex; flex-direction: column; align-items: center; gap: 0.5mm; }
+    .vac-signpos { justify-content: center; white-space: nowrap; }
+    .vac-note { margin-top: 3.5mm; }
 
     @media print {
-      .vac-sheet { width: 190mm !important; font-size: 13.5pt; padding: 0; page-break-inside: avoid; break-inside: avoid; }
+      /* ทั้งใบต้องอยู่หน้าเดียว ห้ามหัวตารางไปโผล่หน้าสอง */
+      .vac-sheet { width: 190mm !important; font-size: 13pt; padding: 0; page-break-inside: avoid; break-inside: avoid; page-break-after: avoid; }
       .vac-print { display: block; }
+      .vac-label .vac-print { display: inline-block; }
       .vac-cell-print { display: block; }
-      .vac-table { margin-top: 1.5mm; }
-      .vac-table th, .vac-table td { border: 0.4pt solid #000 !important; padding: 0.2mm 0.7mm !important; font-size: 12.5pt; }
-      .vac-name { font-size: 11.5pt; }
+      .vac-table { margin-top: 1.2mm; page-break-inside: avoid; break-inside: avoid; }
+      .vac-table thead { display: table-row-group; }  /* ไม่ทำซ้ำหัวตารางเมื่อขึ้นหน้าใหม่ */
+      .vac-table tr { page-break-inside: avoid; }
+      .vac-table th, .vac-table td { border: 0.4pt solid #000 !important; padding: 0.15mm 0.6mm !important; }
+      .vac-table th { font-size: 9pt; }
+      .vac-table td { font-size: 10pt; height: 4.3mm; }
+      .vac-name { font-size: 9pt; }
+      .vac-group { font-size: 9pt; }
       .vac-fill { background: #dce6f1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .vac-garuda { height: 17mm; }
-      .vac-note { font-size: 11pt; }
+      .vac-garuda { height: 18mm; }
+      .vac-note { font-size: 10pt; }
+      .vac-sign { margin-top: 3.5mm; }
     }
 
     .loader { border: 4px solid #f3f3f3; border-top: 4px solid #0d9488; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
@@ -323,6 +336,14 @@
       note: 'หมายเหตุ หน่วยบริการประมาณการกลุ่มเป้าหมายในการเบิกวัคซีนตามชนิดและขนาดบรรจุของวัคซีนตามที่คลังวัคซีนโรงพยาบาลได้รับการจัดสรร'
     };
 
+    // ใบที่บันทึกด้วยรุ่นก่อนเก็บชื่อฟอร์มรวมปีไว้ในช่องเดียว ต้องแยกออกไม่ให้พิมพ์ปีซ้ำสองครั้ง
+    const migrateVaccineLabels = (saved) => {
+      const merged = { ...VACCINE_LABELS_DEFAULT, ...(saved || {}) };
+      const m = String(merged.formTitle || '').match(/^(.*?)\s*(\(.*\))\s*$/);
+      if (m) { merged.formTitle = m[1].trim(); merged.formYear = (saved && saved.formYear) ? saved.formYear : m[2]; }
+      return merged;
+    };
+
     // 1 ใบต่อ รพ.สต. ต่อเดือน — บังคับด้วย document id ไม่ให้เกิดใบซ้ำ
     const vaccineDocId = (hospitalId, month, year) =>
       `VAC-${safeText(hospitalId)}-${year}-${String(month).padStart(2,'0')}`;
@@ -385,7 +406,7 @@
     // ===================== END ระบบวัคซีน =====================
 
     const APP_SCHEMA_VERSION = 18;
-    const APP_VERSION = '5.3.2-vaccine-w31-print';
+    const APP_VERSION = '5.3.3-vaccine-w31-a4';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
     const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
 
@@ -6683,8 +6704,8 @@ const MapDashboardView = ({ ctx }) => {
 
     // ช่องข้อความ: บนจอเป็น input แก้ไขได้ / ตอนพิมพ์สลับเป็นข้อความจริงที่ตัดบรรทัดเองได้
     // input ตัดคำไม่ได้ ข้อความยาวจึงโดนตัดหายตอนพิมพ์ — การแยกสองชั้นแก้ปัญหานี้ทั้งหมด
-    const VacField = ({ value, onChange, width, align = 'left', italic, bold, small, placeholder = '', dotted = true, grow }) => (
-      <span className={`vac-field ${grow ? 'vac-grow' : ''}`} style={width ? { width } : undefined}>
+    const VacField = ({ value, onChange, width, align = 'left', italic, bold, small, placeholder = '', dotted = true, grow, label }) => (
+      <span className={`vac-field ${grow ? 'vac-grow' : ''} ${label ? 'vac-label' : ''}`} style={width ? { width } : undefined}>
         <input
           type="text"
           value={value ?? ''}
@@ -6767,7 +6788,7 @@ const MapDashboardView = ({ ctx }) => {
           const savedRows = Array.isArray(existing.rows) ? existing.rows : [];
           setDoc({
             ...base, ...existing,
-            labels: { ...VACCINE_LABELS_DEFAULT, ...(existing.labels || {}) },
+            labels: migrateVaccineLabels(existing.labels),
             rows: buildVaccineRows().map(t => {
               const saved = savedRows.find(r => r.id === t.id);
               return saved ? { ...t, ...saved, calc: t.calc } : t;
@@ -6938,42 +6959,42 @@ const MapDashboardView = ({ ctx }) => {
           <div className="w-full overflow-x-auto">
           <div className="print-area vac-sheet bg-white border border-slate-200 shadow-sm print:border-none print:shadow-none mx-auto">
 
-            <div className="vac-topline">
+            <div className="vac-masthead">
+              <img src={GARUDA_DATA_URI} alt="ตราครุฑ" className="vac-garuda" />
               <span className="vac-formcode">
-                <VacField value={L.formTitle} onChange={v => setLabel('formTitle', v)} width="30mm" align="right" dotted={false} />
-                <VacField value={L.formYear} onChange={v => setLabel('formYear', v)} width="20mm" align="left" dotted={false} italic />
+                <VacField value={L.formTitle} onChange={v => setLabel('formTitle', v)} label dotted={false} />
+                <VacField value={L.formYear} onChange={v => setLabel('formYear', v)} label dotted={false} italic />
               </span>
             </div>
-            <div className="vac-garuda-wrap"><img src={GARUDA_DATA_URI} alt="ตราครุฑ" className="vac-garuda" /></div>
 
             <div className="vac-headgrid">
               <div className="vac-headleft">
-                <VacField value={L.docNoLabel} onChange={v => setLabel('docNoLabel', v)} width="8mm" dotted={false} />
-                <VacField value={doc.doc_no} onChange={v => setField('doc_no', v)} width="38mm" placeholder="………………………………" />
+                <VacField value={L.docNoLabel} onChange={v => setLabel('docNoLabel', v)} label dotted={false} />
+                <VacField value={doc.doc_no} onChange={v => setField('doc_no', v)} grow placeholder="……………………………….." />
               </div>
               <div className="vac-headright">
                 <div className="vac-line">
-                  <VacField value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} width="42mm" dotted={false} />
+                  <VacField value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} label dotted={false} />
                   <VacField value={doc.unit_name} onChange={v => setField('unit_name', v)} grow placeholder="......................................................" />
                 </div>
                 <div className="vac-line">
-                  <VacField value={L.dateLabel} onChange={v => setLabel('dateLabel', v)} grow dotted={false} />
+                  <VacField value={L.dateLabel} onChange={v => setLabel('dateLabel', v)} label dotted={false} />
                 </div>
               </div>
             </div>
 
             <div className="vac-line vac-mt">
-              <VacField value={L.subjectLabel} onChange={v => setLabel('subjectLabel', v)} width="12mm" dotted={false} />
-              <VacField value={L.subjectText} onChange={v => setLabel('subjectText', v)} grow dotted={false} />
+              <VacField value={L.subjectLabel} onChange={v => setLabel('subjectLabel', v)} label dotted={false} />
+              <VacField value={L.subjectText} onChange={v => setLabel('subjectText', v)} label dotted={false} />
             </div>
             <div className="vac-line">
-              <VacField value={L.toLabel} onChange={v => setLabel('toLabel', v)} width="12mm" dotted={false} />
-              <VacField value={L.toText} onChange={v => setLabel('toText', v)} grow />
+              <VacField value={L.toLabel} onChange={v => setLabel('toLabel', v)} label dotted={false} />
+              <VacField value={L.toText} onChange={v => setLabel('toText', v)} grow placeholder="……..........................................." />
             </div>
             <div className="vac-line vac-indent">
-              <VacField value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} width="42mm" dotted={false} />
-              <VacField value={doc.unit_name} onChange={v => setField('unit_name', v)} width="52mm" placeholder="……..........................................." />
-              <VacField value={L.introText} onChange={v => setLabel('introText', v)} width="42mm" dotted={false} />
+              <VacField value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} label dotted={false} />
+              <VacField value={doc.unit_name} onChange={v => setField('unit_name', v)} width="46mm" placeholder="……..........................................." />
+              <VacField value={L.introText} onChange={v => setLabel('introText', v)} label dotted={false} />
             </div>
 
             <table className="vac-table">
@@ -6990,15 +7011,15 @@ const MapDashboardView = ({ ctx }) => {
                   <th rowSpan="3" className="vac-vmid"><VacField value={L.colVaccine} onChange={v => setLabel('colVaccine', v)} grow align="center" dotted={false} /></th>
                   <th colSpan="4" className="vac-vmid">
                     <span className="vac-inline">
-                      <VacField value={L.colReqHead} onChange={v => setLabel('colReqHead', v)} width="34mm" align="right" dotted={false} />
-                      <VacField value={doc.req_month_text} onChange={v => setField('req_month_text', v)} width="26mm" align="left" />
+                      <VacField value={L.colReqHead} onChange={v => setLabel('colReqHead', v)} label align="right" dotted={false} />
+                      <VacField value={doc.req_month_text} onChange={v => setField('req_month_text', v)} label align="left" />
                     </span>
                   </th>
                   <th colSpan="3" className="vac-vmid">
                     <span className="vac-inline">
-                      <VacField value={L.colPrevHead} onChange={v => setLabel('colPrevHead', v)} width="28mm" align="right" dotted={false} />
-                      <VacField value={doc.prev_month_text} onChange={v => setField('prev_month_text', v)} width="22mm" align="center" />
-                      <VacField value={L.colPrevHeadTail} onChange={v => setLabel('colPrevHeadTail', v)} width="14mm" align="left" dotted={false} />
+                      <VacField value={L.colPrevHead} onChange={v => setLabel('colPrevHead', v)} label align="right" dotted={false} />
+                      <VacField value={doc.prev_month_text} onChange={v => setField('prev_month_text', v)} label align="center" />
+                      <VacField value={L.colPrevHeadTail} onChange={v => setLabel('colPrevHeadTail', v)} label align="left" dotted={false} />
                     </span>
                   </th>
                 </tr>
@@ -7043,7 +7064,7 @@ const MapDashboardView = ({ ctx }) => {
               <VacField value={L.closing} onChange={v => setLabel('closing', v)} grow align="center" dotted={false} />
               <VacField value={L.signName} onChange={v => setLabel('signName', v)} grow align="center" placeholder="(……………………….……………..…....)" />
               <span className="vac-inline vac-signpos">
-                <VacField value={L.positionLabel} onChange={v => setLabel('positionLabel', v)} width="16mm" align="right" dotted={false} />
+                <VacField value={L.positionLabel} onChange={v => setLabel('positionLabel', v)} label align="right" dotted={false} />
                 <VacField value={L.signPosition} onChange={v => setLabel('signPosition', v)} grow align="left" placeholder="………………………………………….…………………....." />
               </span>
             </div>
@@ -8027,7 +8048,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.3.2</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.3.3</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

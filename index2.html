@@ -89,11 +89,46 @@
       }
     }
     
-    /* ฟอร์มวัคซีน: ช่องกรอกต้องพิมพ์ออกมาเป็นข้อความธรรมดา ไม่มีกรอบ ไม่มีพื้นหลัง */
+    /* ================= แบบฟอร์มวัคซีน ว.3/1 : ล็อกให้พอดี A4 พอร์ตเทรต 1 หน้า =================
+       ฟอนต์: ใช้ TH SarabunPSK ที่ติดตั้งในเครื่อง (มาตรฐานราชการไทย) ถ้าไม่มีจึงถอยไป Sarabun ของ Google */
+    .vac-sheet {
+      font-family: 'TH SarabunPSK', 'TH Sarabun New', 'THSarabunNew', 'Sarabun', sans-serif;
+      width: 190mm; max-width: 100%; padding: 4mm 0 0 0; color: #000; background: #fff;
+      font-size: 14px; line-height: 1.25;
+    }
+    .vac-head { position: relative; height: 22mm; }
+    .vac-garuda { position: absolute; left: 50%; top: 0; transform: translateX(-50%); height: 20mm; width: auto; }
+    .vac-head-title { position: absolute; right: 0; top: 4mm; text-align: right; }
+    .vac-line { display: flex; align-items: flex-end; gap: 2px; margin-bottom: 0.6mm; }
+    .vac-row-between { justify-content: space-between; }
+    .vac-align-right { justify-content: flex-end; }
+    .vac-left, .vac-right { display: flex; align-items: flex-end; gap: 2px; }
+    .vac-inline { display: inline-flex; align-items: flex-end; justify-content: center; gap: 2px; width: 100%; }
+
+    .vac-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 2mm; }
+    .vac-table th, .vac-table td { border: 1px solid #000; padding: 0 1px; vertical-align: middle; height: 5.2mm; }
+    .vac-table th { font-weight: normal; text-align: center; }
+    .vac-vmid { vertical-align: middle !important; text-align: center; }
+    .vac-name input { font-size: inherit; }
+    .vac-group input { font-weight: normal; }
+    .vac-calc { color: #000; }
+    /* ช่องที่ต้องกรอกเอง แรเงาฟ้าอ่อนแบบเดียวกับต้นฉบับ (ที่เหลือเป็นช่องคำนวณอัตโนมัติ) */
+    .vac-fill { background: #dce6f1; }
+    .vac-sheet .vac-input { font-family: inherit; font-size: inherit; line-height: inherit; }
+
+    .vac-sign { margin-top: 5mm; display: flex; flex-direction: column; align-items: center; gap: 1mm; }
+    .vac-note { margin-top: 4mm; font-size: 13px; }
+
     @media print {
-      .vac-input { border: none !important; background: transparent !important; box-shadow: none !important;
-                   -webkit-print-color-adjust: exact; print-color-adjust: exact; resize: none !important; overflow: hidden !important; }
-      textarea.vac-input { height: auto !important; }
+      .vac-sheet { width: 190mm !important; font-size: 13.5pt; padding: 0; page-break-inside: avoid; break-inside: avoid; }
+      .vac-table { margin-top: 1.5mm; }
+      /* ขอบบางตามต้นฉบับ */
+      .vac-table th, .vac-table td { border: 0.4pt solid #000 !important; height: 4.9mm; padding: 0 0.6mm !important; font-size: 13pt; }
+      .vac-fill { background: #dce6f1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .vac-garuda { height: 18mm; }
+      .vac-note { font-size: 12.5pt; }
+      .vac-input { border: none !important; background: transparent !important; box-shadow: none !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .vac-sheet .vac-input::placeholder { color: #000 !important; opacity: 1; }
     }
     .vac-input::placeholder { color: #cbd5e1; }
 
@@ -198,63 +233,58 @@
     };
 
     // ===================== ระบบวัคซีน ว.3/1 =====================
-    // ระบบนี้เป็น "ฟอร์มช่วยพิมพ์ + ประวัติย้อนหลัง" เท่านั้น ไม่ผูกกับยอดใช้ ไม่ตัดสต็อก ไม่ส่ง INVS
+    // ฟอร์มช่วยพิมพ์ + ประวัติย้อนหลัง ไม่ผูกยอดใช้ ไม่ตัดสต็อก ไม่ส่ง INVS
+    // ยอดใช้วัคซีนจาก รบ.301 ยังบันทึกไว้ในใบเบิกปกติ แต่จ่าย 0 และมูลค่า 0 (isNonBillableInRequisition)
+    // มูลค่าวัคซีนของแต่ละเดือนมาจากยอด "ที่ขอเบิก" ในใบ ว.3/1 ใบนี้เท่านั้น
     const VACCINE_DISCLAIMER = 'ระบบวัคซีน เป็นแค่ฟอร์มตัวช่วยในการพิมพ์ และดูประวัติการเบิกย้อนหลังเท่านั้น สำหรับการเบิกยังใช้เอกสารปกติและติดต่อกับเจ้าหน้าที่วัคซีนประจำคลังยา คนเดิม';
 
-    // โครงฟอร์มตั้งต้น ชื่อทุกบรรทัดแก้ไขได้ตอนกรอก (เก็บชื่อที่แก้แล้วลงในเอกสารแต่ละใบ)
-    // match = คำที่ใช้จับคู่ราคากับ master_drugs หมวดวัคซีน (type 6) สำหรับเก็บมูลค่าเท่านั้น
-    const VACCINE_FORM_TEMPLATE = [
-      { id:'g1', name:'เด็กแรกเกิด ถึง 5 ปี', rows:[
-        { id:'v01', name:'1. BCG (10 doses)', match:['bcg'] },
-        { id:'v02', name:'2. HB (2 doses)', match:['hb'] },
-        { id:'v03', name:'3.1 DTP-HB-Hib (10 doses)', match:['dtphbhib'] },
-        { id:'v04', name:'3.2 DTP-HB-Hib (1 dose)', match:['dtphbhib'] },
-        { id:'v05', name:'4. OPV (20 doses)', match:['opv'] },
-        { id:'v06', name:'5. IPV (1 dose)', match:['ipv'] },
-        { id:'v07', name:'6. MMR (1 dose)', match:['mmr'] },
-        { id:'v08', name:'7. DTP (10 doses)', match:['dtp'] },
-        { id:'v09', name:'8.1 LAJE (1 dose)', match:['laje','je'] },
-        { id:'v10', name:'8.2 JE เชื้อตาย (1 dose)', match:['je'] },
-        { id:'v11', name:'9. Rota (1 dose)', match:['rota'] }
-      ]},
-      { id:'g2', name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', rows:[
-        { id:'v12', name:'10. MMR (1 dose)', match:['mmr'] },
-        { id:'v13', name:'11. BCG (10 doses)', match:['bcg'] },
-        { id:'v14', name:'12. OPV (20 doses)', match:['opv'] },
-        { id:'v15', name:'13. dT (10 doses)', match:['dt'] },
-        { id:'v16', name:'14. HB (2 doses)', match:['hb'] },
-        { id:'v17', name:'15. LAJE (1 dose)', match:['laje','je'] },
-        { id:'v18', name:'16. IPV (1 dose)', match:['ipv'] }
-      ]},
-      { id:'g3', name:'นักเรียนหญิง ป.5', rows:[
-        { id:'v19', name:'17. HPV (1 dose)', match:['hpv'] }
-      ]},
-      { id:'g4', name:'นักเรียน ป.6', rows:[
-        { id:'v20', name:'18. dT (10 doses)', match:['dt'] }
-      ]},
-      { id:'g5', name:'หญิงตั้งครรภ์', rows:[
-        { id:'v21', name:'19. dT (10 doses)', match:['dt'] },
-        { id:'v22', name:'20. Influenza (1 dose)', match:['influenza','flu'] },
-        { id:'v23', name:'21. aP (1 dose)', match:['ap','tdap'] }
-      ]},
-      { id:'g6', name:'คลินิกวัคซีนผู้ใหญ่', rows:[
-        { id:'v24', name:'22. dT (10 doses)', match:['dt'] },
-        { id:'v25', name:'23. MR (นศ.ทางการแพทย์ และสาธารณสุข) (10 doses)', match:['mr'] },
-        { id:'v26', name:'24. HB (บุคลากรทางการแพทย์และสาธารณสุข) (1 dose)', match:['hb'] }
-      ]}
+    // ตราครุฑ ดึงจาก PDF ต้นฉบับ ว.3/1 ฝังเป็น data URI จึงไม่ต้องพึ่งไฟล์ภายนอก
+    const GARUDA_DATA_URI = 'data:image/png;base64,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';
+
+    // โครงฟอร์ม 26 บรรทัด ตรงตาม ว.3/1 (ปี 2567)
+    // drug_id = รหัสยาใน master_drugs (ผูกตายตัว ไม่ใช้การเดาจากชื่อ)
+    // calc.factor / calc.divisor = สูตรช่อง "ที่ต้องการใช้" = ROUNDUP(เป้าหมาย x factor / divisor)
+    // calc.dose = ขนาดบรรจุต่อขวด ใช้ในสูตรอัตราสูญเสีย
+    const VACCINE_ROW_TEMPLATE = [
+      { id:'v01', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'01', name:'1. BCG (10 doses)', drug_id:'17201', calc:{ factor:2, divisor:10, dose:10 } },
+      { id:'v02', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'02', name:'2. HB (2 doses)', drug_id:'17301', calc:{ factor:1.11, divisor:2, dose:2 } },
+      { id:'v03', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'03', name:'3.1 DTP-HB-Hib (10 doses)', drug_id:'17207', calc:{ factor:1.33, divisor:10, dose:10 } },
+      { id:'v04', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'04', name:'3.2 DTP-HB-Hib (1 dose)', drug_id:'17207', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v05', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'05', name:'4. OPV (20 doses)', drug_id:'17205', calc:{ factor:1.33, divisor:20, dose:20 } },
+      { id:'v06', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'06', name:'5. IPV (1 dose)', drug_id:'17208', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v07', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'07', name:'6. MMR  (1 dose)', drug_id:'17302', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v08', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'08', name:'7. DTP (10 doses)', drug_id:'17202', calc:{ factor:1.33, divisor:10, dose:10 } },
+      { id:'v09', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'09', name:'8.1 LAJE (1 dose)', drug_id:'17209', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v10', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'10', name:'8.2 JE เชื้อตาย (1 dose)', drug_id:'17209', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v11', group_id:'g1', group_name:'เด็กแรกเกิด ถึง 5 ปี', no:'11', name:'9. Rota (1 dose)', drug_id:'17210', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v12', group_id:'g2', group_name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', no:'12', name:'10. MMR  (1 dose)', drug_id:'17302', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v13', group_id:'g2', group_name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', no:'13', name:'11. BCG (10 doses)', drug_id:'17201', calc:{ factor:1.11, divisor:10, dose:10 } },
+      { id:'v14', group_id:'g2', group_name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', no:'14', name:'12. OPV (20 doses)', drug_id:'17205', calc:{ factor:1.11, divisor:20, dose:20 } },
+      { id:'v15', group_id:'g2', group_name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', no:'15', name:'13. dT (10 doses)', drug_id:'17206', calc:{ factor:1.11, divisor:10, dose:10 } },
+      { id:'v16', group_id:'g2', group_name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', no:'16', name:'14. HB (2 doses)', drug_id:'17301', calc:{ factor:1.11, divisor:2, dose:2 } },
+      { id:'v17', group_id:'g2', group_name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', no:'17', name:'15. LAJE (1 dose)', drug_id:'17209', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v18', group_id:'g2', group_name:'นักเรียน ป.1 (เก็บตก ในรายที่ได้ ไม่ครบถ้วน)', no:'18', name:'16. IPV (1 dose)', drug_id:'17208', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v19', group_id:'g3', group_name:'นักเรียนหญิง ป.5', no:'19', name:'17. HPV (1 dose)', drug_id:'17212', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v20', group_id:'g4', group_name:'นักเรียน ป.6', no:'20', name:'18. dT (10 doses)', drug_id:'17206', calc:{ factor:1.11, divisor:10, dose:10 } },
+      { id:'v21', group_id:'g5', group_name:'หญิงตั้งครรภ์', no:'21', name:'19. dT (10 doses)', drug_id:'17206', calc:{ factor:1.33, divisor:10, dose:10 } },
+      { id:'v22', group_id:'g5', group_name:'หญิงตั้งครรภ์', no:'22', name:'20. Influenza (1 dose)', drug_id:'07407', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v23', group_id:'g5', group_name:'หญิงตั้งครรภ์', no:'23', name:'21. aP (1 dose)', drug_id:'17211', calc:{ factor:1.01, divisor:1, dose:1 } },
+      { id:'v24', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'24', name:'22. dT (10 doses)', drug_id:'17206', calc:{ factor:1.33, divisor:10, dose:10 } },
+      { id:'v25', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'25', name:'23. MR (นศ.ทางการแพทย์และสาธารณสุข) (10 doses)', drug_id:'17302', calc:{ factor:1.01, divisor:1, dose:10 } },
+      { id:'v26', group_id:'g6', group_name:'คลินิก วัคซีนผู้ใหญ่', no:'26', name:'24. HB (บุคลากรทางการแพทย์และสาธารณสุข) (1 dose)', drug_id:'17206', calc:{ factor:1.01, divisor:1, dose:1 } }
     ];
 
     const VACCINE_LABELS_DEFAULT = {
       formTitle: 'แบบฟอร์ม ว.3/1 (ปี 2567)',
       docNoLabel: 'ที่',
       unitLabel: 'หน่วยบริการ (รพ.สต./ฝ่าย)',
-      dateLabel: 'วันที่',
+      dateLabel: 'วันที่............เดือน.......................................พ.ศ........................',
       subjectLabel: 'เรื่อง',
       subjectText: 'ขอเบิกวัคซีนในงานสร้างเสริมภูมิคุ้มกันโรค',
       toLabel: 'เรียน',
       toText: 'ผู้อำนวยการโรงพยาบาลสวี',
-      introText: 'ขอเบิกวัคซีนต่างๆ ดังนี้',
-      colGroup: 'กลุ่ม เป้าหมาย',
+      introText: 'ขอเบิกวัคซีนต่างๆ  ดังนี้',
+      colGroup: 'กลุ่มเป้าหมาย',
       colVaccine: 'วัคซีน',
       colReqHead: 'ข้อมูลการเบิกวัคซีน เดือน',
       colPrevHead: 'ผลการให้วัคซีนเดือน',
@@ -262,10 +292,10 @@
       colTarget: 'เป้าหมาย (คน)',
       colVialHead: 'จำนวนวัคซีน (ขวด)',
       colNeed: 'ที่ต้องการใช้',
-      colCarry: 'ยอดคงเหลือ ยกมา',
+      colCarry: 'ยอดคงเหลือยกมา',
       colRequest: 'ที่ขอเบิก',
       colServed: 'จำนวนผู้รับบริการ (คน)',
-      colOpened: 'จำนวนวัคซีน ที่เปิดใช้ (ขวด)',
+      colOpened: 'จำนวนวัคซีนที่เปิดใช้ (ขวด)',
       colWastage: 'อัตราสูญเสีย (ร้อยละ)',
       closing: 'ขอแสดงความนับถือ',
       signName: '',
@@ -274,52 +304,64 @@
       note: 'หมายเหตุ หน่วยบริการประมาณการกลุ่มเป้าหมายในการเบิกวัคซีนตามชนิดและขนาดบรรจุของวัคซีนตามที่คลังวัคซีนโรงพยาบาลได้รับการจัดสรร'
     };
 
-    const VACCINE_NUM_FIELDS = ['target','need','carry','request','served','opened','wastage'];
-
-    // 1 ใบต่อ รพ.สต. ต่อเดือน — บังคับด้วย document id ไม่ให้เกิดใบซ้ำในเดือนเดียวกัน
+    // 1 ใบต่อ รพ.สต. ต่อเดือน — บังคับด้วย document id ไม่ให้เกิดใบซ้ำ
     const vaccineDocId = (hospitalId, month, year) =>
       `VAC-${safeText(hospitalId)}-${year}-${String(month).padStart(2,'0')}`;
 
-    // ครั้งที่ของใบวัคซีน = ลำดับเดือนในปีงบ (ต.ค.=1 ... ก.ย.=12) เดือนไหนไม่ได้ทำก็ข้ามเลขไป
+    // ครั้งที่ = ลำดับเดือนในปีงบของรอบที่เบิก (ต.ค.=1 ... ก.ย.=12)
+    // เบิกเดือน ก.ย. = รอบ ต.ค. = ครั้งที่ 1 ของปีงบใหม่
     const getVaccineTerm = (month, year) => getFiscalInfo(Number(month), Number(year)).term;
 
-    const buildVaccineRows = () => VACCINE_FORM_TEMPLATE.map(g => ({
-      id: g.id,
-      name: g.name,
-      rows: g.rows.map(r => ({
-        id: r.id, name: r.name, match: r.match,
-        target:'', need:'', carry:'', request:'', served:'', opened:'', wastage:''
-      }))
+    const buildVaccineRows = () => VACCINE_ROW_TEMPLATE.map(r => ({
+      ...r, calc: { ...r.calc },
+      target:'', carry:'', served:'', opened:''
     }));
 
-    // จับคู่ราคาจาก master_drugs หมวดวัคซีน (type 6) เพื่อเก็บมูลค่าไว้เบื้องหลัง
-    // ไม่แสดงให้ฝั่ง รพ.สต. เห็น และไม่พิมพ์ลงแบบฟอร์ม
-    const findVaccineDrug = (row, drugs) => {
-      const vaccines = (drugs || []).filter(d => String(d.type) === '6');
-      if (!vaccines.length) return null;
-      const keys = (row?.match || []).map(normalizeForMatch).filter(Boolean)
-        .sort((a,b) => b.length - a.length);
-      for (const k of keys) {
-        const hit = vaccines.find(d => normalizeForMatch(d.drug_name).includes(k));
-        if (hit) return hit;
-      }
-      return null;
+    // สูตรตามไฟล์ ว.3/1 ต้นฉบับ (แต่ละบรรทัดใช้ตัวคูณ/ตัวหารไม่เท่ากัน)
+    //   ที่ต้องการใช้  E = ROUNDUP(เป้าหมาย x factor / divisor, 0)
+    //   ที่ขอเบิก      G = IF(คงเหลือ - E >= 0, 0, E - คงเหลือ)
+    //   อัตราสูญเสีย   J = IF(เปิดใช้ = 0, "", ((เปิดใช้ x dose - ผู้รับบริการ) / (เปิดใช้ x dose)) x 100)
+    const calcVaccineRow = (row) => {
+      const c = row?.calc || { factor:1, divisor:1, dose:1 };
+      const target = toNonNegativeNumber(row?.target);
+      const carry = toNonNegativeNumber(row?.carry);
+      const served = toNonNegativeNumber(row?.served);
+      const opened = toNonNegativeNumber(row?.opened);
+      const need = target > 0 ? Math.ceil((target * c.factor) / Math.max(1, c.divisor)) : 0;
+      const request = (carry - need) >= 0 ? 0 : (need - carry);
+      const denom = opened * Math.max(1, c.dose);
+      const hasWastage = opened > 0 && denom > 0;
+      const wastage = hasWastage ? ((denom - served) / denom) * 100 : null;
+      return {
+        need, request, wastage,
+        wastageText: wastage === null ? '' : wastage.toFixed(2)
+      };
     };
 
-    const computeVaccineValue = (groups, drugs) => {
-      let total = 0;
-      const priced = (groups || []).map(g => ({
-        ...g,
-        rows: (g.rows || []).map(r => {
-          const drug = findVaccineDrug(r, drugs);
-          const unitPrice = drug ? toNonNegativeNumber(drug.price) : 0;
-          const qty = toNonNegativeNumber(r.request);
-          const value = unitPrice * qty;
-          total += value;
-          return { ...r, drug_id: drug ? safeText(drug.drug_id) : '', unit_price: unitPrice, value };
-        })
-      }));
-      return { groups: priced, total };
+    const computeVaccineSheet = (rows, drugs) => {
+      const byId = new Map();
+      (drugs || []).forEach(d => byId.set(String(d.drug_id), d));
+      const totals = { target_people:0, need_vials:0, carry_vials:0, requested_vials:0, served_people:0, opened_vials:0, total_value:0 };
+      const out = (rows || []).map(r => {
+        const calc = calcVaccineRow(r);
+        const drug = byId.get(String(r.drug_id));
+        const unit_price = drug ? toNonNegativeNumber(drug.price) : 0;
+        const value = unit_price * calc.request;
+        totals.target_people += toNonNegativeNumber(r.target);
+        totals.need_vials += calc.need;
+        totals.carry_vials += toNonNegativeNumber(r.carry);
+        totals.requested_vials += calc.request;
+        totals.served_people += toNonNegativeNumber(r.served);
+        totals.opened_vials += toNonNegativeNumber(r.opened);
+        totals.total_value += value;
+        return {
+          ...r, ...calc,
+          matched: !!drug,
+          drug_name: drug ? safeText(drug.drug_name) : '',
+          unit_price, value
+        };
+      });
+      return { rows: out, totals };
     };
     // ===================== END ระบบวัคซีน =====================
 
@@ -6615,24 +6657,15 @@ const MapDashboardView = ({ ctx }) => {
       </div>
     );
 
-    // ช่องกรอกแบบไร้กรอบ ตอนพิมพ์จะเห็นเป็นข้อความธรรมดา
-    const VacText = ({ value, onChange, className = '', placeholder = '', align = 'left', bold }) => (
+    // ช่องข้อความแก้ไขได้ ตอนพิมพ์จะกลายเป็นข้อความธรรมดาไม่มีกรอบ
+    const VacText = ({ value, onChange, className = '', placeholder = '', align = 'left', bold, dotted = true }) => (
       <input
         type="text"
         value={value ?? ''}
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
-        className={`vac-input w-full bg-transparent outline-none border-b border-dotted border-slate-300 focus:border-emerald-500 px-1 ${bold ? 'font-bold' : ''} ${className}`}
+        className={`vac-input bg-transparent outline-none ${dotted ? 'border-b border-dotted border-slate-300 focus:border-emerald-500' : 'border-none'} px-0.5 ${bold ? 'font-bold' : ''} ${className}`}
         style={{ textAlign: align }}
-      />
-    );
-
-    const VacArea = ({ value, onChange, rows = 2, className = '' }) => (
-      <textarea
-        value={value ?? ''}
-        rows={rows}
-        onChange={e => onChange(e.target.value)}
-        className={`vac-input w-full bg-transparent outline-none border border-dotted border-slate-300 focus:border-emerald-500 rounded px-2 py-1 resize-none ${className}`}
       />
     );
 
@@ -6641,6 +6674,7 @@ const MapDashboardView = ({ ctx }) => {
       const isHospital = normalizeUserRole(ctx.currentUser?.role) === 'hospital';
 
       const today = new Date();
+      // เบิกช่วงวันที่ 20 เป็นต้นไป = เบิกเพื่อเดือนถัดไป (เบิก ก.ย. -> รอบ ต.ค. -> ครั้งที่ 1 ของปีงบใหม่)
       const roundPeriod = today.getDate() >= 20
         ? getNextCalendarPeriod(today.getMonth() + 1, today.getFullYear())
         : { month: today.getMonth() + 1, year: today.getFullYear() };
@@ -6652,64 +6686,63 @@ const MapDashboardView = ({ ctx }) => {
       const [isSaving, setIsSaving] = useState(false);
       const [isDirty, setIsDirty] = useState(false);
       const [showHistory, setShowHistory] = useState(false);
+      const [showMapping, setShowMapping] = useState(false);
 
       const allVaccineReqs = ctx.appDb.vaccineReqs || [];
       const hospital = ctx.findHospital(hospId);
       const docId = vaccineDocId(hospId, month, year);
       const existing = allVaccineReqs.find(r => String(r.id) === docId);
       const fiscal = getFiscalInfo(Number(month), Number(year));
+      const prevPeriod = getPreviousCalendarPeriod(month, year);
 
-      // สร้าง/โหลดเอกสารของเดือนที่เลือก
       useEffect(() => {
         if (!hospId) { setDoc(null); return; }
+        const base = {
+          id: docId,
+          hospitalId: hospId,
+          month: Number(month),
+          year: Number(year),
+          fiscal_year: fiscal.fiscalYear,
+          term: getVaccineTerm(month, year),
+          term_manual: false,
+          doc_no: '',
+          unit_name: hospital?.hospital_name || '',
+          date_text: '',
+          // หัวตารางเติมเดือนอัตโนมัติ: ข้อมูลการเบิก = เดือนของรอบนี้, ผลการให้วัคซีน = เดือนก่อนหน้า (เดือนที่กรอก)
+          req_month_text: `${THAI_MONTHS[Number(month) - 1]} ${Number(year) + 543}`,
+          prev_month_text: `${THAI_MONTHS[prevPeriod.month - 1]} ${prevPeriod.year + 543}`,
+          labels: { ...VACCINE_LABELS_DEFAULT, signName: ctx.currentUser?.name || '', signPosition: ctx.currentUser?.position || '' },
+          rows: buildVaccineRows(),
+          isNew: true
+        };
         if (existing) {
+          const savedRows = Array.isArray(existing.rows) ? existing.rows : [];
           setDoc({
+            ...base,
             ...existing,
             labels: { ...VACCINE_LABELS_DEFAULT, ...(existing.labels || {}) },
-            groups: Array.isArray(existing.groups) && existing.groups.length ? existing.groups : buildVaccineRows()
+            // รวมกับ template เสมอ เพื่อให้ใบเก่ายังเปิดได้แม้ template เปลี่ยน
+            rows: buildVaccineRows().map(t => {
+              const saved = savedRows.find(r => r.id === t.id);
+              return saved ? { ...t, ...saved, calc: t.calc, group_name: saved.group_name ?? t.group_name } : t;
+            }),
+            isNew: false
           });
         } else {
-          setDoc({
-            id: docId,
-            hospitalId: hospId,
-            month: Number(month),
-            year: Number(year),
-            fiscal_year: fiscal.fiscalYear,
-            term: getVaccineTerm(month, year),
-            term_manual: false,
-            doc_no: '',
-            unit_name: hospital?.hospital_name || '',
-            date_text: '',
-            req_month_text: `${THAI_MONTHS[Number(month) - 1]} ${Number(year) + 543}`,
-            prev_month_text: (() => { const p = getPreviousCalendarPeriod(month, year); return `${THAI_MONTHS[p.month - 1]} ${p.year + 543}`; })(),
-            labels: { ...VACCINE_LABELS_DEFAULT, signName: ctx.currentUser?.name || '', signPosition: ctx.currentUser?.position || '' },
-            groups: buildVaccineRows(),
-            isNew: true
-          });
+          setDoc(base);
         }
         setIsDirty(false);
       }, [hospId, month, year, existing?.updated_at]);
 
       const setLabel = (key, value) => { setDoc(d => ({ ...d, labels: { ...d.labels, [key]: value } })); setIsDirty(true); };
       const setField = (key, value) => { setDoc(d => ({ ...d, [key]: value })); setIsDirty(true); };
-
-      const setGroupName = (gid, value) => {
-        setDoc(d => ({ ...d, groups: d.groups.map(g => g.id === gid ? { ...g, name: value } : g) }));
+      const setRow = (rid, key, value) => {
+        setDoc(d => ({ ...d, rows: d.rows.map(r => r.id === rid ? { ...r, [key]: value } : r) }));
         setIsDirty(true);
       };
 
-      const setRowValue = (gid, rid, key, value) => {
-        setDoc(d => ({
-          ...d,
-          groups: d.groups.map(g => g.id !== gid ? g : {
-            ...g,
-            rows: g.rows.map(r => r.id === rid ? { ...r, [key]: value } : r)
-          })
-        }));
-        setIsDirty(true);
-      };
+      const computed = useMemo(() => doc ? computeVaccineSheet(doc.rows, ctx.appDb.drugs) : { rows: [], totals: {} }, [doc, ctx.appDb.drugs]);
 
-      // เตือนเลขครั้งที่ซ้ำกับใบวัคซีนใบอื่นในปีงบเดียวกันของ รพ.สต. เดียวกัน
       const duplicateTerm = useMemo(() => {
         if (!doc) return null;
         return allVaccineReqs.find(r =>
@@ -6720,18 +6753,13 @@ const MapDashboardView = ({ ctx }) => {
         ) || null;
       }, [allVaccineReqs, doc?.term, doc?.fiscal_year, doc?.id, hospId]);
 
-      const valueSummary = useMemo(() => doc ? computeVaccineValue(doc.groups, ctx.appDb.drugs) : { groups: [], total: 0 }, [doc, ctx.appDb.drugs]);
-
-      const totalRequestedVials = useMemo(() => {
-        if (!doc) return 0;
-        return doc.groups.reduce((sum, g) => sum + g.rows.reduce((s, r) => s + toNonNegativeNumber(r.request), 0), 0);
-      }, [doc]);
+      const unmatched = useMemo(() => computed.rows.filter(r => !r.matched), [computed]);
 
       const handleSave = async () => {
         if (!doc || !hospId) return;
         setIsSaving(true);
         try {
-          const priced = computeVaccineValue(doc.groups, ctx.appDb.drugs);
+          const snap = computeVaccineSheet(doc.rows, ctx.appDb.drugs);
           const payload = {
             hospitalId: hospId,
             hospital_name: hospital?.hospital_name || '',
@@ -6740,16 +6768,28 @@ const MapDashboardView = ({ ctx }) => {
             fiscal_year: Number(doc.fiscal_year),
             term: Math.max(1, toNonNegativeInt(doc.term, 1)),
             term_manual: !!doc.term_manual,
+            filled_month: prevPeriod.month,
+            filled_year: prevPeriod.year,
             doc_no: safeText(doc.doc_no),
             unit_name: safeText(doc.unit_name),
             date_text: safeText(doc.date_text),
             req_month_text: safeText(doc.req_month_text),
             prev_month_text: safeText(doc.prev_month_text),
             labels: doc.labels,
-            groups: priced.groups,
-            total_requested_vials: totalRequestedVials,
-            total_value: priced.total,
+            // เก็บทุกช่องที่กรอก + ทุกค่าที่คำนวณ เพื่อตรวจสอบย้อนหลังได้ครบ
+            rows: snap.rows.map(r => ({
+              id: r.id, no: r.no, name: r.name, group_id: r.group_id, group_name: r.group_name,
+              drug_id: r.drug_id, drug_name: r.drug_name, dose_per_vial: r.calc.dose,
+              need_factor: r.calc.factor, need_divisor: r.calc.divisor,
+              target: r.target, carry: r.carry, served: r.served, opened: r.opened,
+              need: r.need, request: r.request, wastage: r.wastage,
+              unit_price: r.unit_price, value: r.value, matched: r.matched
+            })),
+            totals: snap.totals,
+            total_requested_vials: snap.totals.requested_vials,
+            total_value: snap.totals.total_value,
             form_kind: 'vaccine_w31',
+            form_version: 'w31-2567',
             updated_by_uid: ctx.currentUser?.uid || '',
             updated_by_name: ctx.currentUser?.name || '',
             updated_at: firebase.firestore.FieldValue.serverTimestamp(),
@@ -6761,7 +6801,7 @@ const MapDashboardView = ({ ctx }) => {
             payload.created_at = firebase.firestore.FieldValue.serverTimestamp();
           }
           await db.collection('vaccine_requisitions').doc(doc.id).set(payload, { merge: true });
-          await writeAuditLog(ctx.currentUser, doc.isNew ? 'VACCINE_FORM_CREATE' : 'VACCINE_FORM_UPDATE', 'vaccine_requisitions', doc.id, { month, year, term: payload.term });
+          await writeAuditLog(ctx.currentUser, doc.isNew ? 'VACCINE_FORM_CREATE' : 'VACCINE_FORM_UPDATE', 'vaccine_requisitions', doc.id, { month, year, term: payload.term, value: payload.total_value });
           setIsDirty(false);
           setDoc(d => ({ ...d, isNew: false }));
           await ctx.refreshData();
@@ -6783,25 +6823,27 @@ const MapDashboardView = ({ ctx }) => {
         .sort((a, b) => (Number(b.year) * 100 + Number(b.month)) - (Number(a.year) * 100 + Number(a.month))), [allVaccineReqs, hospId]);
 
       if (!doc) {
-        return (
-          <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 space-y-4">
-            <VaccineNotice />
-            <p className="text-slate-500">ยังไม่ได้เลือกหน่วยบริการ</p>
-          </div>
-        );
+        return <div className="bg-white rounded-2xl shadow-sm p-8 border border-slate-100 space-y-4"><VaccineNotice /><p className="text-slate-500">ยังไม่ได้เลือกหน่วยบริการ</p></div>;
       }
 
       const L = doc.labels;
-      const numCell = (g, r, key) => (
-        <td className="border border-black p-0">
-          <input
-            type="text"
-            value={r[key] ?? ''}
-            onChange={e => setRowValue(g.id, r.id, key, e.target.value)}
-            className="vac-input w-full bg-transparent outline-none text-center px-1 py-1 focus:bg-emerald-50"
-          />
+      const inputCell = (r, key) => (
+        <td className="vac-fill">
+          <input type="text" value={r[key] ?? ''} onChange={e => setRow(r.id, key, e.target.value)}
+                 className="vac-input w-full bg-transparent outline-none text-center focus:bg-emerald-100" />
         </td>
       );
+      const calcCell = (text) => <td className="vac-calc text-center">{text}</td>;
+
+      // จัดกลุ่มเพื่อทำ rowSpan ของคอลัมน์กลุ่มเป้าหมาย
+      const groupSpans = [];
+      computed.rows.forEach((r, i) => {
+        const last = groupSpans[groupSpans.length - 1];
+        if (last && last.group_id === r.group_id) last.span += 1;
+        else groupSpans.push({ group_id: r.group_id, group_name: r.group_name, startIndex: i, span: 1 });
+      });
+      const spanStartAt = {};
+      groupSpans.forEach(g => { spanStartAt[g.startIndex] = g; });
 
       return (
         <div className="space-y-4 animate-fade-in w-full">
@@ -6819,152 +6861,169 @@ const MapDashboardView = ({ ctx }) => {
                     {HospitalOptions({ hospitals: ctx.appDb.hospitals })}
                   </select>
                 )}
-                <select value={month} onChange={e => setMonth(Number(e.target.value))} className="border border-slate-300 rounded-lg p-2 font-bold text-violet-700 bg-violet-50 outline-none">
-                  {MonthOptions()}
-                </select>
-                <select value={year} onChange={e => setYear(Number(e.target.value))} className="border border-slate-300 rounded-lg p-2 font-bold text-violet-700 bg-violet-50 outline-none">
-                  {YearOptions()}
-                </select>
-                <button onClick={() => setShowHistory(true)} className="bg-slate-100 border border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-bold hover:bg-slate-200">
-                  <i className="fa-solid fa-clock-rotate-left mr-2"></i> ประวัติย้อนหลัง
-                </button>
+                <select value={month} onChange={e => setMonth(Number(e.target.value))} className="border border-slate-300 rounded-lg p-2 font-bold text-violet-700 bg-violet-50 outline-none">{MonthOptions()}</select>
+                <select value={year} onChange={e => setYear(Number(e.target.value))} className="border border-slate-300 rounded-lg p-2 font-bold text-violet-700 bg-violet-50 outline-none">{YearOptions()}</select>
+                <button onClick={() => setShowHistory(true)} className="bg-slate-100 border border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-bold hover:bg-slate-200"><i className="fa-solid fa-clock-rotate-left mr-2"></i> ประวัติย้อนหลัง</button>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 border-t pt-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-slate-600">ครั้งที่</span>
-                <input
-                  type="number" min="1"
-                  value={doc.term}
+                <input type="number" min="1" value={doc.term}
                   onChange={e => { setDoc(d => ({ ...d, term: e.target.value, term_manual: true })); setIsDirty(true); }}
-                  className="w-20 border-2 border-slate-300 rounded-lg p-2 text-center font-bold outline-none focus:border-violet-500"
-                />
+                  className="w-20 border-2 border-slate-300 rounded-lg p-2 text-center font-bold outline-none focus:border-violet-500" />
                 <span className="text-sm font-bold text-slate-600">/ {doc.fiscal_year}</span>
-                <span className="text-[11px] text-slate-400">นับตามเดือนงบ (ต.ค.=1) เดือนที่ไม่ได้ทำจะข้ามเลขไป</span>
+                <span className="text-[11px] text-slate-400">เบิก {THAI_MONTHS[prevPeriod.month - 1]} เพื่อใช้ {THAI_MONTHS[Number(month) - 1]} • เดือนที่ไม่ได้ทำจะข้ามเลขไป</span>
               </div>
               {duplicateTerm && (
                 <span className="text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  <i className="fa-solid fa-triangle-exclamation mr-1"></i>
-                  เลขครั้งที่ {doc.term}/{doc.fiscal_year} ซ้ำกับใบเดือน {THAI_MONTHS[Number(duplicateTerm.month) - 1]} {Number(duplicateTerm.year) + 543}
+                  <i className="fa-solid fa-triangle-exclamation mr-1"></i> เลขครั้งที่ {doc.term}/{doc.fiscal_year} ซ้ำกับใบเดือน {THAI_MONTHS[Number(duplicateTerm.month) - 1]} {Number(duplicateTerm.year) + 543}
                 </span>
               )}
               {existing && <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2"><i className="fa-solid fa-circle-check mr-1"></i> มีใบของเดือนนี้แล้ว — กำลังแก้ไขใบเดิม</span>}
               {isDirty && <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">มีการแก้ไขที่ยังไม่ได้บันทึก</span>}
             </div>
 
-            {isAdmin && (
-              <div className="border-t pt-3 text-xs text-slate-500">
-                <span className="font-bold text-slate-700">มูลค่าประมาณการ (เฉพาะผู้ดูแลระบบ):</span>{' '}
-                {valueSummary.total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
-                <span className="ml-2 text-slate-400">• รวมที่ขอเบิก {totalRequestedVials.toLocaleString()} ขวด • คิดจากราคาใน master_drugs หมวดวัคซีน ไม่แสดงในแบบฟอร์มที่พิมพ์</span>
-              </div>
-            )}
+            <div className="border-t pt-3 flex flex-wrap items-center gap-4 text-xs">
+              <button onClick={() => setShowMapping(true)} className="text-violet-700 font-bold underline"><i className="fa-solid fa-link mr-1"></i> ตรวจการจับคู่รหัสยา ({computed.rows.length - unmatched.length}/{computed.rows.length})</button>
+              {unmatched.length > 0 && <span className="font-bold text-red-600"><i className="fa-solid fa-triangle-exclamation mr-1"></i> ไม่พบรหัสยา {unmatched.length} รายการใน master_drugs</span>}
+              {isAdmin && (
+                <span className="text-slate-500">
+                  <span className="font-bold text-slate-700">มูลค่าประมาณการ (เฉพาะผู้ดูแลระบบ):</span>{' '}
+                  {toNonNegativeNumber(computed.totals.total_value).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+                  <span className="ml-2 text-slate-400">• ที่ขอเบิกรวม {toNonNegativeNumber(computed.totals.requested_vials).toLocaleString()} ขวด • ไม่พิมพ์ลงแบบฟอร์ม</span>
+                </span>
+              )}
+            </div>
 
             <VaccineNotice compact />
           </div>
 
-          {/* ===== แบบฟอร์มที่จะพิมพ์ ===== */}
-          <div className="print-area font-sarabun w-full bg-white border border-slate-200 shadow-sm print:border-none print:shadow-none p-4 lg:p-6">
-            <div className="text-center mb-3">
-              <div className="inline-block w-[420px] max-w-full">
-                <VacText value={L.formTitle} onChange={v => setLabel('formTitle', v)} align="center" bold className="text-[15px]" />
+          {/* ===== แบบฟอร์ม ว.3/1 สำหรับพิมพ์ (ล็อกความกว้าง A4) ===== */}
+          <div className="w-full overflow-x-auto">
+          <div className="print-area vac-sheet bg-white border border-slate-200 shadow-sm print:border-none print:shadow-none mx-auto">
+
+            <div className="vac-head">
+              <div className="vac-head-title">
+                <VacText value={L.formTitle} onChange={v => setLabel('formTitle', v)} align="right" bold dotted={false} className="w-56" />
               </div>
+              <img src={GARUDA_DATA_URI} alt="ตราครุฑ" className="vac-garuda" />
             </div>
 
-            <div className="text-[14px] leading-relaxed space-y-1">
-              <div className="flex flex-wrap gap-x-6 gap-y-1">
-                <div className="flex items-end gap-1 min-w-[220px]">
-                  <VacText value={L.docNoLabel} onChange={v => setLabel('docNoLabel', v)} className="w-10" />
-                  <VacText value={doc.doc_no} onChange={v => setField('doc_no', v)} className="w-40" />
-                </div>
-                <div className="flex items-end gap-1 flex-1 min-w-[300px]">
-                  <VacText value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} className="w-56" />
-                  <VacText value={doc.unit_name} onChange={v => setField('unit_name', v)} className="flex-1" bold />
-                </div>
-              </div>
-              <div className="flex items-end gap-1 justify-end">
-                <VacText value={L.dateLabel} onChange={v => setLabel('dateLabel', v)} className="w-16" align="right" />
-                <VacText value={doc.date_text} onChange={v => setField('date_text', v)} className="w-72" />
-              </div>
-              <div className="flex items-end gap-1">
-                <VacText value={L.subjectLabel} onChange={v => setLabel('subjectLabel', v)} className="w-12" />
-                <VacText value={L.subjectText} onChange={v => setLabel('subjectText', v)} className="flex-1" />
-              </div>
-              <div className="flex items-end gap-1">
-                <VacText value={L.toLabel} onChange={v => setLabel('toLabel', v)} className="w-12" />
-                <VacText value={L.toText} onChange={v => setLabel('toText', v)} className="flex-1" />
-              </div>
-              <div className="flex items-end gap-1 pl-8">
-                <VacText value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} className="w-56" />
-                <VacText value={doc.unit_name} onChange={v => setField('unit_name', v)} className="w-64" bold />
-                <VacText value={L.introText} onChange={v => setLabel('introText', v)} className="flex-1" />
-              </div>
+            <div className="vac-line vac-row-between">
+              <span className="vac-left">
+                <VacText value={L.docNoLabel} onChange={v => setLabel('docNoLabel', v)} dotted={false} className="w-6" />
+                <VacText value={doc.doc_no} onChange={v => setField('doc_no', v)} className="w-32" />
+              </span>
+              <span className="vac-right">
+                <VacText value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} dotted={false} className="w-40" />
+                <VacText value={doc.unit_name} onChange={v => setField('unit_name', v)} className="w-64" />
+              </span>
             </div>
 
-            <div className="overflow-x-auto mt-3">
-              <table className="official-table w-full text-[11px] border-collapse border border-black min-w-[1000px]">
-                <thead>
-                  <tr className="bg-gray-200">
-                    <th rowSpan="3" style={{ width: '13%' }} className="border border-black p-1"><VacText value={L.colGroup} onChange={v => setLabel('colGroup', v)} align="center" /></th>
-                    <th rowSpan="3" style={{ width: '24%' }} className="border border-black p-1"><VacText value={L.colVaccine} onChange={v => setLabel('colVaccine', v)} align="center" /></th>
-                    <th colSpan="4" className="border border-black p-1">
-                      <div className="flex items-center justify-center gap-1">
-                        <VacText value={L.colReqHead} onChange={v => setLabel('colReqHead', v)} align="right" className="w-48" />
-                        <VacText value={doc.req_month_text} onChange={v => setField('req_month_text', v)} align="left" className="w-40" bold />
-                      </div>
-                    </th>
-                    <th colSpan="3" className="border border-black p-1">
-                      <div className="flex items-center justify-center gap-1">
-                        <VacText value={L.colPrevHead} onChange={v => setLabel('colPrevHead', v)} align="right" className="w-36" />
-                        <VacText value={doc.prev_month_text} onChange={v => setField('prev_month_text', v)} align="center" className="w-32" bold />
-                        <VacText value={L.colPrevHeadTail} onChange={v => setLabel('colPrevHeadTail', v)} align="left" className="w-20" />
-                      </div>
-                    </th>
-                  </tr>
-                  <tr className="bg-gray-200">
-                    <th rowSpan="2" style={{ width: '9%' }} className="border border-black p-1"><VacText value={L.colTarget} onChange={v => setLabel('colTarget', v)} align="center" /></th>
-                    <th colSpan="3" className="border border-black p-1"><VacText value={L.colVialHead} onChange={v => setLabel('colVialHead', v)} align="center" /></th>
-                    <th rowSpan="2" style={{ width: '10%' }} className="border border-black p-1"><VacText value={L.colServed} onChange={v => setLabel('colServed', v)} align="center" /></th>
-                    <th rowSpan="2" style={{ width: '10%' }} className="border border-black p-1"><VacText value={L.colOpened} onChange={v => setLabel('colOpened', v)} align="center" /></th>
-                    <th rowSpan="2" style={{ width: '9%' }} className="border border-black p-1"><VacText value={L.colWastage} onChange={v => setLabel('colWastage', v)} align="center" /></th>
-                  </tr>
-                  <tr className="bg-gray-200">
-                    <th style={{ width: '8%' }} className="border border-black p-1"><VacText value={L.colNeed} onChange={v => setLabel('colNeed', v)} align="center" /></th>
-                    <th style={{ width: '9%' }} className="border border-black p-1"><VacText value={L.colCarry} onChange={v => setLabel('colCarry', v)} align="center" /></th>
-                    <th style={{ width: '8%' }} className="border border-black p-1"><VacText value={L.colRequest} onChange={v => setLabel('colRequest', v)} align="center" /></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {doc.groups.map(g => g.rows.map((r, idx) => (
-                    <tr key={g.id + r.id}>
-                      {idx === 0 && (
-                        <td rowSpan={g.rows.length} className="border border-black p-1 align-top">
-                          <VacArea value={g.name} onChange={v => setGroupName(g.id, v)} rows={2} className="text-[11px] border-none" />
-                        </td>
-                      )}
-                      <td className="border border-black p-0">
-                        <VacText value={r.name} onChange={v => setRowValue(g.id, r.id, 'name', v)} className="border-none text-[11px]" />
+            <div className="vac-line vac-align-right">
+              <VacText value={L.dateLabel} onChange={v => setLabel('dateLabel', v)} dotted={false} className="w-40" align="right" />
+              <VacText value={doc.date_text} onChange={v => setField('date_text', v)} className="w-64" />
+            </div>
+
+            <div className="vac-line">
+              <VacText value={L.subjectLabel} onChange={v => setLabel('subjectLabel', v)} dotted={false} className="w-10" />
+              <VacText value={L.subjectText} onChange={v => setLabel('subjectText', v)} dotted={false} className="w-96" />
+            </div>
+
+            <div className="vac-line">
+              <VacText value={L.toLabel} onChange={v => setLabel('toLabel', v)} dotted={false} className="w-10" />
+              <VacText value={L.toText} onChange={v => setLabel('toText', v)} className="w-96" />
+            </div>
+
+            <div className="vac-line" style={{ paddingLeft: '10mm' }}>
+              <VacText value={L.unitLabel} onChange={v => setLabel('unitLabel', v)} dotted={false} className="w-40" />
+              <VacText value={doc.unit_name} onChange={v => setField('unit_name', v)} className="w-52" />
+              <VacText value={L.introText} onChange={v => setLabel('introText', v)} dotted={false} className="w-44" />
+            </div>
+
+            <table className="vac-table">
+              <colgroup>
+                <col style={{ width: '10.2%' }} /><col style={{ width: '20.6%' }} />
+                <col style={{ width: '8.7%' }} /><col style={{ width: '8.9%' }} />
+                <col style={{ width: '9.0%' }} /><col style={{ width: '8.7%' }} />
+                <col style={{ width: '11.6%' }} /><col style={{ width: '11.4%' }} />
+                <col style={{ width: '10.9%' }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th rowSpan="3" className="vac-vmid"><VacText value={L.colGroup} onChange={v => setLabel('colGroup', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th rowSpan="3" className="vac-vmid"><VacText value={L.colVaccine} onChange={v => setLabel('colVaccine', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th colSpan="4">
+                    <span className="vac-inline">
+                      <VacText value={L.colReqHead} onChange={v => setLabel('colReqHead', v)} align="right" dotted={false} className="w-40" />
+                      <VacText value={doc.req_month_text} onChange={v => setField('req_month_text', v)} align="left" className="w-28" />
+                    </span>
+                  </th>
+                  <th colSpan="3">
+                    <span className="vac-inline">
+                      <VacText value={L.colPrevHead} onChange={v => setLabel('colPrevHead', v)} align="right" dotted={false} className="w-32" />
+                      <VacText value={doc.prev_month_text} onChange={v => setField('prev_month_text', v)} align="center" className="w-24" />
+                      <VacText value={L.colPrevHeadTail} onChange={v => setLabel('colPrevHeadTail', v)} align="left" dotted={false} className="w-16" />
+                    </span>
+                  </th>
+                </tr>
+                <tr>
+                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colTarget} onChange={v => setLabel('colTarget', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th colSpan="3"><VacText value={L.colVialHead} onChange={v => setLabel('colVialHead', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colServed} onChange={v => setLabel('colServed', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colOpened} onChange={v => setLabel('colOpened', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th rowSpan="2" className="vac-vmid"><VacText value={L.colWastage} onChange={v => setLabel('colWastage', v)} align="center" dotted={false} className="w-full" /></th>
+                </tr>
+                <tr>
+                  <th><VacText value={L.colNeed} onChange={v => setLabel('colNeed', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th><VacText value={L.colCarry} onChange={v => setLabel('colCarry', v)} align="center" dotted={false} className="w-full" /></th>
+                  <th><VacText value={L.colRequest} onChange={v => setLabel('colRequest', v)} align="center" dotted={false} className="w-full" /></th>
+                </tr>
+              </thead>
+              <tbody>
+                {computed.rows.map((r, i) => (
+                  <tr key={r.id}>
+                    {spanStartAt[i] && (
+                      <td rowSpan={spanStartAt[i].span} className="vac-vmid vac-group">
+                        <input type="text" value={r.group_name ?? ''} onChange={e => {
+                          const gid = r.group_id;
+                          setDoc(d => ({ ...d, rows: d.rows.map(x => x.group_id === gid ? { ...x, group_name: e.target.value } : x) }));
+                          setIsDirty(true);
+                        }} className="vac-input w-full bg-transparent outline-none text-center" />
                       </td>
-                      {VACCINE_NUM_FIELDS.map(f => numCell(g, r, f))}
-                    </tr>
-                  )))}
-                </tbody>
-              </table>
-            </div>
+                    )}
+                    <td className="vac-name">
+                      <input type="text" value={r.name ?? ''} onChange={e => setRow(r.id, 'name', e.target.value)}
+                             className="vac-input w-full bg-transparent outline-none" />
+                    </td>
+                    {inputCell(r, 'target')}
+                    {calcCell(r.need)}
+                    {inputCell(r, 'carry')}
+                    {calcCell(r.request)}
+                    {inputCell(r, 'served')}
+                    {inputCell(r, 'opened')}
+                    {calcCell(r.wastageText)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
-            <div className="mt-6 text-[14px] flex flex-col items-center gap-1">
-              <VacText value={L.closing} onChange={v => setLabel('closing', v)} align="center" className="w-64" />
+            <div className="vac-sign">
+              <VacText value={L.closing} onChange={v => setLabel('closing', v)} align="center" dotted={false} className="w-48" />
               <VacText value={L.signName} onChange={v => setLabel('signName', v)} align="center" className="w-72" placeholder="(………………………….…………..…....)" />
-              <div className="flex items-end gap-1 w-full max-w-lg justify-center">
-                <VacText value={L.positionLabel} onChange={v => setLabel('positionLabel', v)} align="right" className="w-20" />
+              <span className="vac-inline">
+                <VacText value={L.positionLabel} onChange={v => setLabel('positionLabel', v)} align="right" dotted={false} className="w-16" />
                 <VacText value={L.signPosition} onChange={v => setLabel('signPosition', v)} align="left" className="w-72" />
-              </div>
+              </span>
             </div>
 
-            <div className="mt-4 text-[12px]">
-              <VacArea value={L.note} onChange={v => setLabel('note', v)} rows={2} className="text-[12px] border-none" />
+            <div className="vac-note">
+              <input type="text" value={L.note ?? ''} onChange={e => setLabel('note', e.target.value)}
+                     className="vac-input w-full bg-transparent outline-none" />
             </div>
+          </div>
           </div>
 
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 no-print space-y-3">
@@ -6979,24 +7038,50 @@ const MapDashboardView = ({ ctx }) => {
             </div>
           </div>
 
-          {showHistory && (
-            <Modal isOpen={true} title="ประวัติแบบฟอร์มวัคซีนย้อนหลัง" onClose={() => setShowHistory(false)} maxWidth="max-w-3xl">
-              <div className="space-y-3">
-                <VaccineNotice compact />
-                {myHistory.length === 0 && <p className="text-center text-slate-400 py-8">ยังไม่มีแบบฟอร์มที่บันทึกไว้</p>}
-                {myHistory.map(r => (
-                  <button key={r.id} onClick={() => { setMonth(Number(r.month)); setYear(Number(r.year)); setShowHistory(false); }}
-                    className="w-full text-left border border-slate-200 rounded-xl p-3 hover:bg-violet-50 hover:border-violet-300 transition flex justify-between items-center">
-                    <div>
-                      <div className="font-bold text-slate-800">{THAI_MONTHS[Number(r.month) - 1]} {Number(r.year) + 543}</div>
-                      <div className="text-xs text-slate-500">ครั้งที่ {r.term}/{r.fiscal_year} • รวมที่ขอเบิก {toNonNegativeNumber(r.total_requested_vials).toLocaleString()} ขวด</div>
+          <Modal isOpen={showMapping} title="การจับคู่รายการวัคซีนกับรหัสยา" onClose={() => setShowMapping(false)} maxWidth="max-w-3xl">
+            <div className="space-y-3">
+              <VaccineNotice compact />
+              <table className="w-full text-xs border-collapse">
+                <thead className="bg-slate-50"><tr>
+                  <th className="p-2 text-left border-b">รายการ</th><th className="p-2 border-b">รหัสยา</th>
+                  <th className="p-2 text-left border-b">ชื่อใน master_drugs</th><th className="p-2 border-b">ราคา/ขวด</th>
+                  <th className="p-2 border-b">สูตรที่ต้องการใช้</th><th className="p-2 border-b">dose/ขวด</th>
+                </tr></thead>
+                <tbody>
+                  {computed.rows.map(r => (
+                    <tr key={r.id} className={`border-b ${r.matched ? '' : 'bg-red-50'}`}>
+                      <td className="p-2">{r.name}</td>
+                      <td className="p-2 text-center font-mono font-bold">{r.drug_id}</td>
+                      <td className="p-2">{r.matched ? r.drug_name : <span className="text-red-600 font-bold">ไม่พบรหัสนี้ใน master_drugs</span>}</td>
+                      <td className="p-2 text-right">{r.matched ? toNonNegativeNumber(r.unit_price).toLocaleString('th-TH', { minimumFractionDigits: 2 }) : '-'}</td>
+                      <td className="p-2 text-center font-mono">×{r.calc.factor}{r.calc.divisor > 1 ? ` ÷${r.calc.divisor}` : ''}</td>
+                      <td className="p-2 text-center">{r.calc.dose}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Modal>
+
+          <Modal isOpen={showHistory} title="ประวัติแบบฟอร์มวัคซีนย้อนหลัง" onClose={() => setShowHistory(false)} maxWidth="max-w-3xl">
+            <div className="space-y-3">
+              <VaccineNotice compact />
+              {myHistory.length === 0 && <p className="text-center text-slate-400 py-8">ยังไม่มีแบบฟอร์มที่บันทึกไว้</p>}
+              {myHistory.map(r => (
+                <button key={r.id} onClick={() => { setMonth(Number(r.month)); setYear(Number(r.year)); setShowHistory(false); }}
+                  className="w-full text-left border border-slate-200 rounded-xl p-3 hover:bg-violet-50 hover:border-violet-300 transition flex justify-between items-center">
+                  <div>
+                    <div className="font-bold text-slate-800">{THAI_MONTHS[Number(r.month) - 1]} {Number(r.year) + 543}</div>
+                    <div className="text-xs text-slate-500">
+                      ครั้งที่ {r.term}/{r.fiscal_year} • ขอเบิก {toNonNegativeNumber(r.total_requested_vials).toLocaleString()} ขวด
+                      {isAdmin && ` • ${toNonNegativeNumber(r.total_value).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`}
                     </div>
-                    <i className="fa-solid fa-chevron-right text-slate-400"></i>
-                  </button>
-                ))}
-              </div>
-            </Modal>
-          )}
+                  </div>
+                  <i className="fa-solid fa-chevron-right text-slate-400"></i>
+                </button>
+              ))}
+            </div>
+          </Modal>
         </div>
       );
     };

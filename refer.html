@@ -434,6 +434,33 @@ tbody tr:hover{background:#FAFCFA}
       </div>
     </section>
 
+    <!-- รับข้อมูล NCDs Remission จาก ncdr_app มาคีย์ใน HOSxP -->
+    <section id="tab-intake" class="hidden">
+      <div class="panel">
+        <h2>รับข้อมูล NCDs Remission <span class="note">รายชื่อจาก ncdr_app ที่ต้องคีย์รหัสกิจกรรม (SPECIALPP) ในระบบ รพ.</span></h2>
+        <div id="intake-banner"></div>
+        <div class="bar">
+          <select id="intake-filter">
+            <option value="need">ต้องคีย์ (1I20) เท่านั้น</option>
+            <option value="all">ทั้งหมด (สาย Remission)</option>
+          </select>
+          <span id="intake-status" class="sub"></span>
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>ผู้ป่วย</th><th>รพ.สต.</th><th>สถานะ Remission</th>
+            <th>กิจกรรมที่ต้องคีย์</th><th>รับข้อมูลแล้ว</th><th></th></tr></thead>
+          <tbody id="tb-intake"></tbody>
+        </table></div>
+      </div>
+      <div class="panel" id="intake-unmatched-panel" style="display:none">
+        <h2>ยังจับคู่ รพ.สต. ไม่ได้ <span class="note">ncdr_app หาปลายทางให้ไม่ได้ — ไม่ถูกส่งไปหาใคร รอตรวจสอบ</span></h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>HN</th><th>ชื่อ</th><th>อายุ/เพศ</th><th>มาคลินิกล่าสุด</th></tr></thead>
+          <tbody id="tb-intake-unmatched"></tbody>
+        </table></div>
+      </div>
+    </section>
+
     <!-- บัญชียา รพ.สต. -->
     <section id="tab-drugcat" class="hidden">
       <div class="panel">
@@ -730,6 +757,7 @@ const TABS = [
   {id:'dash', label:'แดชบอร์ด',      seesAll:1},
   {id:'user', label:'จัดการผู้ใช้',   adminOnly:1},
   {id:'clinics', label:'คลินิกโรคเรื้อรัง', seesAll:1},
+  {id:'intake', label:'รับข้อมูล NCDs', hospOnly:1},
   {id:'adjreport', label:'รายงานปรับยา', seesAll:1},
   {id:'drugcat', label:'บัญชียา รพ.สต.', seesAll:1},
   {id:'drug', label:'วิธีใช้ยา',      seesAll:1},
@@ -737,7 +765,8 @@ const TABS = [
 ];
 function buildNav(){
   const vis = TABS.filter(t => t.all || (t.record&&canRecord())
-    || (t.seesAll&&seesAll()) || (t.adminOnly&&isAdmin()));
+    || (t.seesAll&&seesAll()) || (t.adminOnly&&isAdmin())
+    || (t.hospOnly&&(isAdmin()||isHospital())));
   $('nav').innerHTML = vis.map((t,i)=>
     `<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}</button>`).join('');
   $('nav').querySelectorAll('button').forEach(b=>
@@ -752,6 +781,7 @@ function openTab(id){
   if(id==='dash')  { renderDash(); audit('view_dashboard'); }
   if(id==='user')  { loadUsers(); loadPending(); }
   if(id==='clinics') renderClinicMenu();
+  if(id==='intake') renderIntake();
   if(id==='adjreport') renderAdjReport();
   if(id==='drugcat') renderDrugCat();
   if(id==='drug')  renderDrugMap();
@@ -2034,6 +2064,90 @@ function showClinicDetail(name){
     document.querySelector('[data-tab="list"]').click();
     setTimeout(()=>{ $('sel-clinic').value=name; renderList(); }, 50);
   });
+}
+
+/* ================= รับข้อมูล NCDs Remission (จนท.รพ. คีย์ SPECIALPP) ================= */
+let INTAKE_FILTER = 'need';
+$('intake-filter')?.addEventListener('change', ()=>{ INTAKE_FILTER=$('intake-filter').value; renderIntakeTable(); });
+
+async function renderIntake(){
+  $('intake-banner').innerHTML = '';
+  try{
+    const m = await getDoc(doc(db,'meta','sync'));
+    if(m.exists()){
+      const nc = m.data().ncdr || {};
+      if(nc.ok && !nc.cutover){
+        $('intake-banner').innerHTML = `<div class="msg info">ระบบยังอยู่ในโหมดเทียบตัวเลขกับ ncdr_app (ยังไม่ push ข้อมูลจริง) — รายการด้านล่างจะว่างจนกว่าจะเปิดใช้งานจริง</div>`;
+      } else if(nc.ok===false){
+        $('intake-banner').innerHTML = `<div class="msg err">ดึงข้อมูลจาก ncdr_app ไม่สำเร็จในรอบล่าสุด — รายชื่ออาจไม่ใช่ข้อมูลปัจจุบัน</div>`;
+      } else if(nc.resolver_ok===false || nc.counting_ok===false){
+        $('intake-banner').innerHTML = `<div class="msg info">ncdr_app แจ้งว่าข้อมูลต้นทางยังไม่พร้อมสมบูรณ์ ตัวเลขบางส่วนอาจยังไม่ครบ</div>`;
+      }
+      show('intake-unmatched-panel', !!nc.cutover && (nc.unmatched||0)>0);
+    }
+  }catch(e){ /* ไม่มี meta/sync ก็ไม่เป็นไร */ }
+  renderIntakeTable();
+  loadIntakeUnmatched();
+}
+
+function renderIntakeTable(){
+  let rows = LIST.filter(r=>r.case_type==='data_only');
+  if(INTAKE_FILTER==='need') rows = rows.filter(r=>r.ncdr?.action_required && (r.intake?.status||'pending')!=='done');
+  rows = rows.sort((a,b)=>String(a.hcode||'').localeCompare(String(b.hcode||'')));
+  $('intake-status').textContent = `${rows.length} รายการ`;
+  if(!rows.length){ $('tb-intake').innerHTML='<tr><td colspan="6" class="empty">ไม่พบรายการ</td></tr>'; return; }
+  $('tb-intake').innerHTML = rows.map(r=>{
+    const p=r.patient||{}, n=r.ncdr||{}, ik=r.intake||{};
+    const done = ik.status==='done', rejected = ik.status==='rejected';
+    return `<tr>
+      <td><div class="nm"><span class="masked">${maskName(p.full_name)||esc(r.hn)}</span>
+          ${eyeBtn(r.id,'full_name','ชื่อ')}</div>
+        <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี</div></td>
+      <td class="sub">${esc(r.hcode_name||r.hcode||'-')}</td>
+      <td>${esc(n.status_label||n.status_code||'-')}${n.status_cycle?` (ครั้งที่ ${esc(n.status_cycle)})`:''}</td>
+      <td>${n.action_required?`<span class="pill pill-warn">${esc(n.action_code||'ต้องคีย์')}</span>
+          <div class="sub">${esc(n.action_reason||'')}</div>` : '<span class="sub">ไม่ต้องคีย์เพิ่ม</span>'}</td>
+      <td>${done?`<span class="tag" style="background:#2e7d3220;color:#2e7d32">คีย์แล้ว</span>`
+          :rejected?`<span class="tag" style="background:#8886;color:#666">ไม่ใช่คนของเรา</span><div class="sub">${esc(ik.reason||'')}</div>`
+          :'<span class="sub">ยังไม่คีย์</span>'}</td>
+      <td class="right">
+        ${!done?`<button class="btn-sm" data-intake-done="${esc(r.id)}">คีย์แล้ว</button>`:''}
+        ${!rejected?`<button class="btn-sm grey" data-intake-reject="${esc(r.id)}">ไม่ใช่คนของเรา</button>`:''}
+      </td></tr>`;
+  }).join('');
+  $('tb-intake').querySelectorAll('[data-intake-done]').forEach(b=>
+    b.addEventListener('click', ()=>setIntakeStatus(b.dataset.intakeDone,'done')));
+  $('tb-intake').querySelectorAll('[data-intake-reject]').forEach(b=>
+    b.addEventListener('click', ()=>{
+      const reason = prompt('เหตุผลที่ไม่ใช่คนของเรา (ไม่บังคับ):','') || '';
+      setIntakeStatus(b.dataset.intakeReject,'rejected',reason);
+    }));
+}
+
+async function setIntakeStatus(id, status, reason){
+  const patch = {
+    'intake.status': status, 'intake.by': PROFILE.full_name||ME.email,
+    'intake.at': serverTimestamp(), 'intake.reason': reason||null,
+    'intake.queued': true,   // push.php รอบถัดไปจะยิงแจ้ง ncdr_app แล้วเคลียร์ flag นี้
+  };
+  await updateDoc(doc(db,'referrals',id), patch);
+  await audit(status==='done' ? 'ncdr_keyin_done' : 'ncdr_keyin_rejected', id, {reason});
+  const r = LIST.find(x=>x.id===id);
+  if(r){ r.intake = {...(r.intake||{}), status, by:PROFILE.full_name||ME.email, reason:reason||null, queued:true}; }
+  renderIntakeTable();
+}
+
+async function loadIntakeUnmatched(){
+  try{
+    const s = await getDocs(query(collection(db,'ncdr_unmatched'), limit(500)));
+    const rows = s.docs.map(d=>({id:d.id, ...d.data()}));
+    show('intake-unmatched-panel', rows.length>0);
+    $('tb-intake-unmatched').innerHTML = rows.length ? rows.map(r=>`<tr>
+      <td class="mono">${esc(r.hn)}</td>
+      <td><span class="masked">${maskName(r.full_name)||'-'}</span></td>
+      <td class="sub">${esc(r.sex||'')} ${esc(r.age_year??'')} ปี</td>
+      <td>${thDate(r.last_visit)}</td></tr>`).join('') : '';
+  }catch(e){ /* ยังไม่มี collection นี้ก็ไม่เป็นไร */ }
 }
 
 /* ================= รายงานปรับยา (ฝั่ง รพ.) ================= */

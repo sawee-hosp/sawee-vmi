@@ -424,9 +424,9 @@
     // ===================== END ระบบวัคซีน =====================
 
     const APP_SCHEMA_VERSION = 18;
-    const APP_VERSION = '5.5.0-landing-hosxp';
+    const APP_VERSION = '5.5.1-landing-redesign';
     // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
-    const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRxfillINVS/invs_api.php';
+    const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 
     const callInvsBridge = async (action, requisitionId) => {
       if (!auth.currentUser) throw new Error('กรุณา Login ใหม่ก่อนเชื่อม INVS');
@@ -440,7 +440,7 @@
           body: JSON.stringify({ action, requisition_id: requisitionId, firebase_id_token: idToken })
         });
       } catch (networkErr) {
-        const e = new Error('ติดต่อ INVS Bridge ไม่ได้ กรุณาเปิด XAMPP Apache และตรวจ http://127.0.0.1/SaweeRxfillINVS/invs_api.php?action=health');
+        const e = new Error('ติดต่อ INVS Bridge ไม่ได้ กรุณาเปิด XAMPP Apache และตรวจ http://127.0.0.1/SaweeRefill/invs_api.php?action=health');
         e.cause = networkErr;
         throw e;
       }
@@ -1178,101 +1178,132 @@
     // ===== หน้า Landing + Tab เลือกระบบ =====
     const LandingView = ({ ctx }) => {
       const [tab, setTab] = useState('refill');
-      return (
-        <div className="min-h-screen flex flex-col bg-slate-100">
-          {/* Top bar */}
-          <div className="bg-white border-b border-slate-200 py-3 px-4 flex items-center justify-center gap-3 shadow-sm no-print">
-            <div className="bg-gradient-main p-2 rounded-xl shadow"><i className="fa-solid fa-hospital text-white text-lg"></i></div>
-            <div>
-              <div className="text-base font-extrabold text-slate-800 leading-tight">โรงพยาบาลสวี</div>
-              <div className="text-[11px] text-slate-500">ระบบจัดการเวชภัณฑ์ • Sawee Hospital Drug Management</div>
-            </div>
-          </div>
 
-          {/* Tab selector */}
-          <div className="flex justify-center mt-6 mb-0 px-4 no-print">
-            <div className="inline-flex bg-white rounded-2xl p-1.5 shadow-lg border border-slate-100 gap-1">
+      const pageBg = tab === 'refill'
+        ? 'linear-gradient(160deg, #d1fae5 0%, #f0fdf4 45%, #ffffff 100%)'
+        : 'linear-gradient(160deg, #ffedd5 0%, #fff7ed 45%, #ffffff 100%)';
+
+      const tabGradRefill = 'linear-gradient(135deg, #064e3b 0%, #065f46 60%, #047857 100%)';
+      const tabGradRefer  = 'linear-gradient(135deg, #7c2d12 0%, #9a3412 60%, #c2410c 100%)';
+      const tabGradDimRefill = 'linear-gradient(135deg, #022c22 0%, #033322 100%)';
+      const tabGradDimRefer  = 'linear-gradient(135deg, #431407 0%, #560f06 100%)';
+
+      return (
+        <div style={{minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background: pageBg, transition:'background 0.4s ease', padding:'16px 16px'}}>
+          {/* Card */}
+          <div style={{width:'400px', maxWidth:'100%', borderRadius:'24px', overflow:'hidden', boxShadow:'0 30px 70px rgba(0,0,0,0.22)', display:'flex', flexDirection:'column'}}>
+
+            {/* Tab strip — top part of card */}
+            <div style={{display:'flex'}}>
               <button
                 onClick={() => setTab('refill')}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm transition-all duration-200 ${tab==='refill' ? 'bg-emerald-500 text-white shadow-md scale-105' : 'text-slate-500 hover:bg-slate-50'}`}
+                style={{
+                  flex:1, padding:'18px 0 16px', border:'none', cursor:'pointer',
+                  background: tab==='refill' ? tabGradRefill : tabGradDimRefill,
+                  transition:'background 0.3s',
+                  borderRadius:'24px 0 0 0',
+                }}
               >
-                <i className="fa-solid fa-pills"></i>
-                <span>Sawee Refill</span>
+                <span style={{fontFamily:'inherit', fontSize:'17px', fontWeight:'900', letterSpacing:'0.01em', textShadow:'0 2px 8px rgba(0,0,0,0.5)'}}>
+                  <span style={{color:'rgba(255,255,255,0.55)'}}>Sawee </span>
+                  <span style={{color:'#ffffff'}}>Refill</span>
+                </span>
               </button>
               <button
                 onClick={() => setTab('refer')}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm transition-all duration-200 ${tab==='refer' ? 'bg-orange-500 text-white shadow-md scale-105' : 'text-slate-500 hover:bg-slate-50'}`}
+                style={{
+                  flex:1, padding:'18px 0 16px', border:'none', cursor:'pointer',
+                  background: tab==='refer' ? tabGradRefer : tabGradDimRefer,
+                  transition:'background 0.3s',
+                  borderRadius:'0 24px 0 0',
+                }}
               >
-                <i className="fa-solid fa-ambulance"></i>
-                <span>Sawee Refer</span>
+                <span style={{fontFamily:'inherit', fontSize:'17px', fontWeight:'900', letterSpacing:'0.01em', textShadow:'0 2px 8px rgba(0,0,0,0.5)'}}>
+                  <span style={{color:'rgba(255,255,255,0.55)'}}>Sawee </span>
+                  <span style={{color:'#ffffff'}}>Refer</span>
+                </span>
               </button>
             </div>
-          </div>
 
-          {/* Tab content */}
-          {tab === 'refill' && (
-            <LoginView ctx={ctx} />
-          )}
+            {/* Card body with image background */}
+            <div style={{
+              position:'relative',
+              background: '#1a2a1a',
+              backgroundImage: tab==='refill'
+                ? 'url(https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/main/refill.png)'
+                : 'url(https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/main/refer.png)',
+              backgroundSize:'cover',
+              backgroundPosition:'center',
+              flex:1,
+            }}>
+              {/* Dark overlay for readability */}
+              <div style={{position:'absolute', inset:0, background:'rgba(0,0,0,0.52)'}}></div>
 
-          {tab === 'refer' && (
-            <div className="flex-1 flex items-center justify-center px-4 py-8">
-              <div className="w-full max-w-sm">
-                {/* Refer card */}
-                <div className="relative rounded-3xl overflow-hidden shadow-2xl border border-orange-100">
-                  {/* Background gradient */}
-                  <div className="absolute inset-0 bg-gradient-to-br from-orange-400 via-orange-500 to-amber-600"></div>
-                  {/* Pattern overlay */}
-                  <div className="absolute inset-0 opacity-10" style={{backgroundImage:'radial-gradient(circle at 20% 80%, white 1px, transparent 1px), radial-gradient(circle at 80% 20%, white 1px, transparent 1px), radial-gradient(circle at 50% 50%, white 0.5px, transparent 0.5px)', backgroundSize:'40px 40px, 30px 30px, 20px 20px'}}></div>
-                  <div className="relative p-8 flex flex-col items-center text-center text-white">
-                    <div className="bg-white/20 backdrop-blur-sm rounded-2xl p-4 mb-5 shadow-lg">
-                      <i className="fa-solid fa-ambulance text-4xl"></i>
-                    </div>
-                    <h2 className="text-3xl font-extrabold tracking-wide mb-1">Sawee Refer</h2>
-                    <p className="text-orange-100 text-sm mb-2">ระบบส่งต่อผู้ป่วยและนัดหมาย</p>
-                    <p className="text-orange-200 text-xs mb-6 opacity-80">Patient Referral & Appointment System</p>
-                    <div className="flex flex-col gap-3 w-full">
-                      <a
-                        href="/refer.html"
-                        className="w-full bg-white text-orange-600 font-extrabold py-3.5 px-6 rounded-2xl shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-150 flex items-center justify-center gap-2 text-base"
-                      >
-                        <i className="fa-solid fa-right-to-bracket"></i>
-                        เข้าสู่ Sawee Refer
-                      </a>
-                    </div>
-                    <div className="mt-5 text-orange-200 text-xs opacity-70 flex items-center gap-1">
-                      <i className="fa-solid fa-circle-info"></i>
-                      <span>ระบบนี้แยก Login จาก Sawee Refill</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Feature list */}
-                <div className="mt-5 bg-white rounded-2xl p-4 shadow border border-orange-50">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">ฟีเจอร์ใน Sawee Refer</p>
-                  <div className="space-y-2">
-                    {[
-                      {icon:'fa-calendar-check', text:'ตั้งตารางคลินิก รพ.สต.'},
-                      {icon:'fa-users', text:'บันทึกรอบนัดผู้ป่วย NCD'},
-                      {icon:'fa-file-medical', text:'ส่งข้อมูลความต้องการยาไปยัง Refill'},
-                      {icon:'fa-route', text:'ระบบส่งต่อผู้ป่วย'},
-                    ].map((f,i) => (
-                      <div key={i} className="flex items-center gap-3 text-sm text-slate-600">
-                        <div className="w-7 h-7 bg-orange-100 rounded-lg flex items-center justify-center shrink-0">
-                          <i className={`fa-solid ${f.icon} text-orange-500 text-xs`}></i>
-                        </div>
-                        {f.text}
-                      </div>
-                    ))}
-                  </div>
+              {/* Subtitle */}
+              <div style={{position:'relative', zIndex:1, padding:'20px 24px 12px', textAlign:'center'}}>
+                <div style={{
+                  display:'inline-block',
+                  background: tab==='refill' ? 'rgba(6,78,59,0.75)' : 'rgba(124,45,18,0.75)',
+                  backdropFilter:'blur(6px)',
+                  borderRadius:'40px',
+                  padding:'6px 20px',
+                  color:'#fff',
+                  fontSize:'13px',
+                  fontWeight:'700',
+                  letterSpacing:'0.02em',
+                }}>
+                  {tab==='refill' ? 'ระบบเติมยาและเวชภัณฑ์ VMI' : 'ระบบส่งต่อผู้ป่วย'}
                 </div>
               </div>
+
+              {/* Tab content inside card */}
+              {tab === 'refill' ? (
+                <div style={{position:'relative', zIndex:1, padding:'0 20px 20px'}}>
+                  {/* Inline login form styled for dark card */}
+                  <LoginView ctx={ctx} compact={true} />
+                </div>
+              ) : (
+                <div style={{position:'relative', zIndex:1, padding:'16px 28px 28px', display:'flex', flexDirection:'column', alignItems:'center', gap:'16px', minHeight:'360px', justifyContent:'center'}}>
+                  <a
+                    href="/refer.html"
+                    style={{
+                      display:'flex', alignItems:'center', justifyContent:'center', gap:'10px',
+                      width:'100%',
+                      background: 'rgba(255,255,255,0.95)',
+                      color: '#9a3412',
+                      fontWeight:'900',
+                      fontSize:'16px',
+                      padding:'14px 24px',
+                      borderRadius:'16px',
+                      textDecoration:'none',
+                      boxShadow:'0 6px 24px rgba(0,0,0,0.3)',
+                      transition:'transform 0.15s, box-shadow 0.15s',
+                    }}
+                    onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.03)'; e.currentTarget.style.boxShadow='0 10px 32px rgba(0,0,0,0.35)';}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)'; e.currentTarget.style.boxShadow='0 6px 24px rgba(0,0,0,0.3)';}}
+                  >
+                    <i className="fa-solid fa-right-to-bracket"></i>
+                    เข้าสู่ Sawee Refer
+                  </a>
+                </div>
+              )}
+
+              {/* Bottom note */}
+              <div style={{position:'relative', zIndex:1, padding:'0 20px 18px', textAlign:'center'}}>
+                <p style={{color:'rgba(255,255,255,0.65)', fontSize:'11px', lineHeight:'1.6', margin:0}}>
+                  <i className="fa-solid fa-circle-info" style={{marginRight:'5px'}}></i>
+                  ทั้ง 2 ระบบใช้ username และ password คนละชุดกัน
+                  <br />
+                  ลืมรหัสผ่าน สามารถ reset ใหม่ได้ทาง email
+                </p>
+              </div>
             </div>
-          )}
+          </div>
         </div>
       );
     };
 
-    const LoginView = ({ ctx }) => {
+    const LoginView = ({ ctx, compact }) => {
       const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
       const [rememberMe, setRememberMe] = useState(true); const [showForgot, setShowForgot] = useState(false);
       const [forgotEmail, setForgotEmail] = useState('');
@@ -1281,6 +1312,53 @@
         if(!forgotEmail) return ctx.showToast('กรุณากรอกอีเมล', 'error');
         try { await auth.sendPasswordResetEmail(forgotEmail); ctx.showToast('ส่งลิงก์ไปที่อีเมลแล้ว'); setShowForgot(false); } catch(e) { ctx.showToast(e.message, 'error'); }
       };
+
+      // Compact mode: rendered inside the landing card (dark bg overlay)
+      if (compact) {
+        return (
+          <div style={{display:'flex', flexDirection:'column', gap:'10px', padding:'4px 0 8px'}}>
+            <input type="email" autoComplete="email"
+              style={{width:'100%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.3)', borderRadius:'12px', padding:'12px 14px', color:'#fff', fontSize:'14px', outline:'none', boxSizing:'border-box'}}
+              placeholder="Email" value={email} onChange={e => setEmail(e.target.value)}
+            />
+            <input type="password" autoComplete="current-password"
+              style={{width:'100%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.3)', borderRadius:'12px', padding:'12px 14px', color:'#fff', fontSize:'14px', outline:'none', boxSizing:'border-box'}}
+              placeholder="Password" value={password} onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && ctx.handleLogin(email, password, rememberMe)}
+            />
+            <label style={{display:'flex', alignItems:'center', fontSize:'13px', color:'rgba(255,255,255,0.75)', cursor:'pointer', gap:'8px'}}>
+              <input type="checkbox" style={{width:'15px', height:'15px'}} checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
+              จดจำการเข้าสู่ระบบ
+            </label>
+            <button onClick={() => ctx.handleLogin(email, password, rememberMe)}
+              style={{width:'100%', background:'linear-gradient(135deg, #059669, #047857)', color:'#fff', borderRadius:'12px', padding:'13px', fontWeight:'900', fontSize:'15px', border:'none', cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.3)'}}>
+              เข้าสู่ระบบ
+            </button>
+            <div style={{display:'flex', justifyContent:'space-between', paddingTop:'2px'}}>
+              <button onClick={() => ctx.setCurrentView('register')}
+                style={{background:'none', border:'none', color:'rgba(110,231,183,0.9)', fontSize:'13px', fontWeight:'700', cursor:'pointer', textDecoration:'underline', padding:0}}>
+                ลงทะเบียนผู้ใช้ใหม่
+              </button>
+              <button onClick={() => setShowForgot(true)}
+                style={{background:'none', border:'none', color:'rgba(255,255,255,0.6)', fontSize:'13px', fontWeight:'600', cursor:'pointer', textDecoration:'underline', padding:0}}>
+                ลืมรหัสผ่าน?
+              </button>
+            </div>
+            {showForgot && (
+              <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+                <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+                  <h3 className="text-xl font-bold text-slate-800 mb-2">รีเซ็ตรหัสผ่าน</h3>
+                  <input type="email" className="w-full border p-3 mb-4 rounded-lg outline-none" placeholder="อีเมล" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)} />
+                  <div className="flex justify-end gap-3">
+                    <button onClick={() => setShowForgot(false)} className="px-4 py-2 bg-slate-100 rounded-lg">ยกเลิก</button>
+                    <button onClick={handleForgot} className="px-4 py-2 bg-emerald-600 text-white rounded-lg">ส่งลิงก์</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
 
       return (
         <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100 w-full">
@@ -7479,34 +7557,45 @@ const AdminConfigView = ({ ctx }) => {
         };
 
         const [isSyncingHosxp, setIsSyncingHosxp] = React.useState(false);
+        const [hosxpSyncDiff, setHosxpSyncDiff] = React.useState(null); // {toUpdate:[],noChange:[],unmatched:[]} or null
 
+        // STEP 1: fetch diff from bridge, show preview modal
         const handleSyncHosxpCodes = async () => {
           await runBusy(setIsSyncingHosxp, ctx.showToast, async () => {
-            // เรียก INVS Bridge action=sync_hosxp_codes
-            // Bridge จะดึงตาราง inv_has_his และส่งกลับเป็น [{invs_code, hosxp_code}]
             const data = await callInvsBridge('sync_hosxp_codes');
             const mappings = data.mappings || [];
             if (!mappings.length) { ctx.showToast('INVS ไม่พบข้อมูล inv_has_his', 'warn'); return; }
-            // จับคู่ด้วย drug_id (INVS code) → อัปเดต hosxp_code
-            const ops = [];
-            let matched = 0, skipped = 0;
+            const toUpdate = [], noChange = [], unmatched = [];
             mappings.forEach(({ invs_code, hosxp_code }) => {
               const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(invs_code));
-              if (drug && hosxp_code) {
-                if (String(drug.hosxp_code || '') !== String(hosxp_code)) {
-                  ops.push({ type: 'update', ref: db.collection('master_drugs').doc(String(drug.drug_id)), data: { hosxp_code: String(hosxp_code), hosxp_sync_at: firebase.firestore.FieldValue.serverTimestamp() } });
-                  matched++;
-                } else skipped++;
-              } else skipped++;
+              if (!drug || !hosxp_code) { unmatched.push({ invs_code, hosxp_code }); return; }
+              if (String(drug.hosxp_code || '') !== String(hosxp_code)) {
+                toUpdate.push({ drug, invs_code, hosxp_code, old_hosxp: drug.hosxp_code || '' });
+              } else {
+                noChange.push({ drug, invs_code, hosxp_code });
+              }
             });
-            if (ops.length) {
-              await executeBatchChunks(ops);
-              await writeAuditLog(ctx.currentUser, 'HOSXP_CODE_SYNC', 'master_drugs', 'BATCH', { matched, skipped, total: mappings.length });
-              await ctx.refreshData();
-              ctx.showToast(`Sync รหัส HOSxP สำเร็จ อัปเดต ${matched} รายการ (${skipped} ไม่เปลี่ยน)`);
-            } else {
-              ctx.showToast(`รหัส HOSxP อัปเดตแล้ว ไม่มีการเปลี่ยนแปลง (${skipped}/${mappings.length} รายการ)`);
-            }
+            setHosxpSyncDiff({ toUpdate, noChange, unmatched });
+          });
+        };
+
+        // STEP 2: apply after admin confirms
+        const handleSyncHosxpConfirm = async () => {
+          if (!hosxpSyncDiff || !hosxpSyncDiff.toUpdate.length) { setHosxpSyncDiff(null); return; }
+          const { toUpdate, noChange, unmatched } = hosxpSyncDiff;
+          setHosxpSyncDiff(null);
+          await runBusy(setIsSyncingHosxp, ctx.showToast, async () => {
+            const ops = toUpdate.map(({ drug, hosxp_code }) => ({
+              type: 'update',
+              ref: db.collection('master_drugs').doc(String(drug.drug_id)),
+              data: { hosxp_code: String(hosxp_code), hosxp_sync_at: firebase.firestore.FieldValue.serverTimestamp() }
+            }));
+            await executeBatchChunks(ops);
+            await writeAuditLog(ctx.currentUser, 'HOSXP_CODE_SYNC', 'master_drugs', 'BATCH', {
+              updated: toUpdate.length, no_change: noChange.length, unmatched: unmatched.length
+            });
+            await ctx.refreshData();
+            ctx.showToast(`Sync รหัส HOSxP สำเร็จ อัปเดต ${toUpdate.length} รายการ`);
           });
         };
 
@@ -7969,10 +8058,80 @@ const AdminConfigView = ({ ctx }) => {
               </form>
             </Modal>
           )}
+
+          {/* HOSxP Sync Diff Preview Modal */}
+          {hosxpSyncDiff && (
+            <Modal title="ยืนยัน Sync รหัส HOSxP" onClose={() => setHosxpSyncDiff(null)} size="lg">
+              <div className="space-y-4">
+                {/* Summary chips */}
+                <div className="flex flex-wrap gap-3">
+                  <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2">
+                    <i className="fa-solid fa-arrow-up text-emerald-600"></i>
+                    <span className="font-bold text-emerald-800">{hosxpSyncDiff.toUpdate.length}</span>
+                    <span className="text-emerald-700 text-sm">รายการจะอัปเดต</span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2">
+                    <i className="fa-solid fa-check text-slate-400"></i>
+                    <span className="font-bold text-slate-600">{hosxpSyncDiff.noChange.length}</span>
+                    <span className="text-slate-500 text-sm">ไม่เปลี่ยนแปลง</span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2">
+                    <i className="fa-solid fa-triangle-exclamation text-amber-500"></i>
+                    <span className="font-bold text-amber-700">{hosxpSyncDiff.unmatched.length}</span>
+                    <span className="text-amber-600 text-sm">ไม่พบในคลัง Rxfill</span>
+                  </div>
+                </div>
+
+                {/* Changes table */}
+                {hosxpSyncDiff.toUpdate.length > 0 ? (
+                  <div>
+                    <p className="text-sm font-bold text-slate-700 mb-2">รายการที่จะเปลี่ยนแปลง ({hosxpSyncDiff.toUpdate.length} รายการ)</p>
+                    <div className="max-h-64 overflow-y-auto border border-slate-200 rounded-xl">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-slate-600 font-bold">รหัส INVS</th>
+                            <th className="px-3 py-2 text-left text-slate-600 font-bold">ชื่อยา</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-bold">HOSxP เดิม</th>
+                            <th className="px-3 py-2 text-left text-emerald-700 font-bold">HOSxP ใหม่</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {hosxpSyncDiff.toUpdate.map((item, i) => (
+                            <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
+                              <td className="px-3 py-2 font-mono text-slate-500 text-xs">{item.invs_code}</td>
+                              <td className="px-3 py-2 text-slate-800">{item.drug.drug_name}</td>
+                              <td className="px-3 py-2 font-mono text-xs text-slate-400">{item.old_hosxp || <span className="italic">-</span>}</td>
+                              <td className="px-3 py-2 font-mono text-xs text-emerald-700 font-bold">{item.hosxp_code}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center text-slate-500">
+                    <i className="fa-solid fa-check-circle text-slate-400 text-2xl mb-2 block"></i>
+                    ไม่มีรายการที่ต้องอัปเดต รหัส HOSxP เป็นปัจจุบันแล้ว
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-2 border-t">
+                  <button onClick={() => setHosxpSyncDiff(null)} className="px-5 py-2.5 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition">ยกเลิก</button>
+                  {hosxpSyncDiff.toUpdate.length > 0 && (
+                    <button onClick={handleSyncHosxpConfirm} className="px-6 py-2.5 bg-purple-600 text-white rounded-xl font-bold shadow hover:bg-purple-700 transition flex items-center gap-2">
+                      <i className="fa-solid fa-link"></i>
+                      ยืนยัน Sync {hosxpSyncDiff.toUpdate.length} รายการ
+                    </button>
+                  )}
+                </div>
+              </div>
+            </Modal>
+          )}
         </div>
       );
     };
-    
+
 const App = () => {
       const [currentView, setCurrentView] = useState('login');
       const [toast, setToast] = useState(null);
@@ -8207,7 +8366,7 @@ useEffect(() => {
           <div className="w-64 bg-slate-900 text-white flex flex-col no-print shrink-0 shadow-2xl z-20 h-full">
             <div className="p-6 flex items-center border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="bg-gradient-main p-2 rounded-lg mr-3 shadow-lg"><i className="fa-solid fa-truck-medical text-white"></i></div>
-              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.5.0</div></div>
+              <div><h1 className="text-xl font-extrabold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-emerald-400">Sawee Rxfill</h1><div className="text-[9px] text-slate-500 font-mono mt-0.5">v5.5.1</div></div>
             </div>
             <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>

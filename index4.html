@@ -25,6 +25,40 @@
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    /* ===== Landing card 600×400 (ขนาดเท่ารูปพื้นหลัง) ===== */
+    .landing-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; transition: background .4s ease; }
+    .landing-card { width: 600px; max-width: 100%; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 50px rgba(15, 23, 42, .12); background: #fff; }
+    .landing-tabs { display: flex; }
+    .landing-tab { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 14px 0; border: 0; cursor: pointer; font-family: inherit; font-size: 16px; font-weight: 800; transition: background .25s, color .25s; }
+    .landing-tab:focus-visible, .landing-btn:focus-visible, .landing-input:focus-visible { outline: 3px solid rgba(14, 116, 144, .45); outline-offset: 2px; }
+    .landing-body { width: 600px; max-width: 100%; height: 400px; background-size: cover; background-position: center; background-repeat: no-repeat; display: flex; }
+    .landing-info { flex: 1; padding: 28px 20px 22px 28px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .landing-chip { align-self: flex-start; font-size: 11px; font-weight: 800; border: 1.5px solid; border-radius: 999px; padding: 3px 12px; background: rgba(255,255,255,.7); }
+    .landing-title { font-size: 40px; line-height: 1.02; font-weight: 900; margin: 4px 0 0; letter-spacing: -.01em; }
+    .landing-lines { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+    .landing-lines i { width: 18px; font-size: 11px; }
+    .landing-note { margin-top: auto; font-size: 11px; line-height: 1.5; opacity: .75; }
+    .landing-form { width: 270px; flex-shrink: 0; padding: 22px 22px 22px 0; display: flex; }
+    .landing-login, .landing-refer { flex: 1; background: rgba(255,255,255,.88); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.9); border-radius: 18px; padding: 20px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 6px 20px rgba(15,23,42,.06); }
+    .landing-refer { justify-content: center; gap: 14px; }
+    .landing-form-title { font-size: 17px; font-weight: 900; margin-bottom: 2px; }
+    .landing-input { width: 100%; box-sizing: border-box; background: #fff; border: 1px solid #cbd5e1; border-radius: 11px; padding: 10px 12px; font-size: 14px; color: #0f172a; font-family: inherit; }
+    .landing-input:focus { outline: none; border-color: #0e7490; box-shadow: 0 0 0 3px rgba(14,116,144,.15); }
+    .landing-remember { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #475569; cursor: pointer; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    .landing-btn { box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; border: 0; border-radius: 11px; padding: 11px; color: #fff; font-weight: 900; font-size: 15px; cursor: pointer; text-decoration: none; font-family: inherit; box-shadow: 0 4px 12px rgba(15,23,42,.15); transition: transform .15s; }
+    .landing-btn:hover { transform: translateY(-1px); }
+    .landing-links { display: flex; justify-content: space-between; margin-top: auto; }
+    .landing-links button { background: none; border: 0; padding: 0; font-size: 12.5px; font-weight: 700; color: #64748b; text-decoration: underline; cursor: pointer; font-family: inherit; }
+    .landing-refer-foot { font-size: 11.5px; font-weight: 700; text-align: center; }
+    @media (max-width: 620px) {
+      .landing-body { height: auto; min-height: 400px; flex-direction: column; }
+      .landing-info { padding: 22px 20px 8px; }
+      .landing-title { font-size: 32px; }
+      .landing-note { margin-top: 4px; }
+      .landing-form { width: auto; padding: 8px 16px 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .landing-page, .landing-tab, .landing-btn { transition: none; } }
   </style>
 </head>
 <body class="text-slate-800 flex flex-col min-h-screen">
@@ -76,123 +110,70 @@
     );
 
     // ===== Landing View =====
+    // ===== Landing: การ์ดแนวนอน 600×400 เท่ากันทั้ง 2 แท็บ (Refill เขียว / Refer ส้ม) =====
+    const LANDING_THEME = {
+      refill: {
+        img: 'https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/main/refill.png',
+        page: 'linear-gradient(160deg, #d1fae5 0%, #f0fdf4 50%, #ffffff 100%)',
+        tab: 'linear-gradient(135deg, #065f46 0%, #047857 100%)', tabDim: '#a7d7c5',
+        ink: '#064e3b', accent: '#047857', soft: '#ecfdf5', title: 'Refill', subtitle: 'ระบบเติมยาและเวชภัณฑ์ VMI',
+        lines: ['เบิกยา รพ.สต. ตามยอดใช้จริง', 'เบิกยาหน่วยงานและห้องยาใน รพ.', 'เชื่อมใบเบิกเข้า INVS']
+      },
+      refer: {
+        img: 'https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/main/refer.png',
+        page: 'linear-gradient(160deg, #ffedd5 0%, #fff7ed 50%, #ffffff 100%)',
+        tab: 'linear-gradient(135deg, #9a3412 0%, #c2410c 100%)', tabDim: '#f3c7a8',
+        ink: '#7c2d12', accent: '#c2410c', soft: '#fff7ed', title: 'Refer', subtitle: 'ระบบส่งต่อผู้ป่วย รพ.สวี – รพ.สต.',
+        lines: ['ส่งต่อผู้ป่วยระหว่างหน่วยบริการ', 'ติดตามสถานะการส่งต่อ', 'ใช้บัญชีแยกจาก Sawee Refill']
+      }
+    };
+
     const LandingView = ({ ctx }) => {
-      const [tab, setTab] = useState('refill');
-
-      const pageBg = tab === 'refill'
-        ? 'linear-gradient(160deg, #d1fae5 0%, #f0fdf4 45%, #ffffff 100%)'
-        : 'linear-gradient(160deg, #ffedd5 0%, #fff7ed 45%, #ffffff 100%)';
-
-      const tabGradRefill = 'linear-gradient(135deg, #064e3b 0%, #065f46 60%, #047857 100%)';
-      const tabGradRefer  = 'linear-gradient(135deg, #7c2d12 0%, #9a3412 60%, #c2410c 100%)';
-      const tabGradDimRefill = 'linear-gradient(135deg, #022c22 0%, #033322 100%)';
-      const tabGradDimRefer  = 'linear-gradient(135deg, #431407 0%, #560f06 100%)';
+      const [tab, setTab] = useState(() => { try { return localStorage.getItem('sawee_landing_tab') === 'refer' ? 'refer' : 'refill'; } catch (e) { return 'refill'; } });
+      const t = LANDING_THEME[tab];
+      const pick = (k) => { setTab(k); try { localStorage.setItem('sawee_landing_tab', k); } catch (e) { /* ignore */ } };
 
       return (
-        <div style={{minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background: pageBg, transition:'background 0.4s ease', padding:'16px 16px'}}>
-          <div style={{width:'400px', maxWidth:'100%', borderRadius:'24px', overflow:'hidden', boxShadow:'0 30px 70px rgba(0,0,0,0.22)', display:'flex', flexDirection:'column'}}>
-
-            {/* Tab strip */}
-            <div style={{display:'flex'}}>
-              <button
-                onClick={() => setTab('refill')}
-                style={{
-                  flex:1, padding:'18px 0 16px', border:'none', cursor:'pointer',
-                  background: tab==='refill' ? tabGradRefill : tabGradDimRefill,
-                  transition:'background 0.3s',
-                  borderRadius:'24px 0 0 0',
-                }}
-              >
-                <span style={{fontFamily:'inherit', fontSize:'17px', fontWeight:'900', letterSpacing:'0.01em', textShadow:'0 2px 8px rgba(0,0,0,0.5)'}}>
-                  <span style={{color:'rgba(255,255,255,0.55)'}}>Sawee </span>
-                  <span style={{color:'#ffffff'}}>Refill</span>
-                </span>
-              </button>
-              <button
-                onClick={() => setTab('refer')}
-                style={{
-                  flex:1, padding:'18px 0 16px', border:'none', cursor:'pointer',
-                  background: tab==='refer' ? tabGradRefer : tabGradDimRefer,
-                  transition:'background 0.3s',
-                  borderRadius:'0 24px 0 0',
-                }}
-              >
-                <span style={{fontFamily:'inherit', fontSize:'17px', fontWeight:'900', letterSpacing:'0.01em', textShadow:'0 2px 8px rgba(0,0,0,0.5)'}}>
-                  <span style={{color:'rgba(255,255,255,0.55)'}}>Sawee </span>
-                  <span style={{color:'#ffffff'}}>Refer</span>
-                </span>
-              </button>
+        <div className="landing-page" style={{ background: t.page }}>
+          <div className="landing-card">
+            <div className="landing-tabs" role="tablist" aria-label="เลือกระบบ">
+              {['refill', 'refer'].map(k => {
+                const th = LANDING_THEME[k]; const on = tab === k;
+                return (
+                  <button key={k} role="tab" aria-selected={on} onClick={() => pick(k)} className="landing-tab"
+                    style={{ background: on ? th.tab : th.tabDim, color: on ? '#fff' : th.ink }}>
+                    <i className={`fa-solid ${k === 'refill' ? 'fa-truck-medical' : 'fa-truck-arrow-right'}`}></i>
+                    <span><span style={{ opacity: .7, fontWeight: 600 }}>Sawee </span>{th.title}</span>
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Card body with image background */}
-            <div style={{
-              position:'relative',
-              background: '#1a2a1a',
-              backgroundImage: tab==='refill'
-                ? 'url(https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/main/refill.png)'
-                : 'url(https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/main/refer.png)',
-              backgroundSize:'cover',
-              backgroundPosition:'center',
-              flex:1,
-            }}>
-              <div style={{position:'absolute', inset:0, background:'rgba(0,0,0,0.52)'}}></div>
-
-              {/* Subtitle pill */}
-              <div style={{position:'relative', zIndex:1, padding:'20px 24px 12px', textAlign:'center'}}>
-                <div style={{
-                  display:'inline-block',
-                  background: tab==='refill' ? 'rgba(6,78,59,0.75)' : 'rgba(124,45,18,0.75)',
-                  backdropFilter:'blur(6px)',
-                  borderRadius:'40px',
-                  padding:'6px 20px',
-                  color:'#fff',
-                  fontSize:'13px',
-                  fontWeight:'700',
-                  letterSpacing:'0.02em',
-                }}>
-                  {tab==='refill' ? 'ระบบเติมยาและเวชภัณฑ์ VMI' : 'ระบบส่งต่อผู้ป่วย'}
+            <div className="landing-body" style={{ backgroundImage: `url(${t.img})`, backgroundColor: t.soft }} role="tabpanel">
+              <div className="landing-info">
+                <div className="landing-chip" style={{ color: t.accent, borderColor: t.accent }}>{t.subtitle}</div>
+                <h1 className="landing-title" style={{ color: t.ink }}>Sawee<br /><span style={{ color: t.accent }}>{t.title}</span></h1>
+                <ul className="landing-lines" style={{ color: t.ink }}>
+                  {t.lines.map(l => <li key={l}><i className="fa-solid fa-check" style={{ color: t.accent }}></i>{l}</li>)}
+                </ul>
+                <div className="landing-note" style={{ color: t.ink }}>
+                  <i className="fa-solid fa-circle-info"></i> Refill และ Refer ใช้บัญชีคนละชุด · ลืมรหัสผ่าน reset ทาง email ได้
                 </div>
               </div>
 
-              {/* Tab content */}
-              {tab === 'refill' ? (
-                <div style={{position:'relative', zIndex:1, padding:'0 20px 20px'}}>
-                  <LoginView ctx={ctx} compact={true} />
-                </div>
-              ) : (
-                <div style={{position:'relative', zIndex:1, padding:'16px 28px 28px', display:'flex', flexDirection:'column', alignItems:'center', gap:'16px', minHeight:'360px', justifyContent:'center'}}>
-                  <a
-                    href="/refer.html"
-                    style={{
-                      display:'flex', alignItems:'center', justifyContent:'center', gap:'10px',
-                      width:'100%',
-                      background: 'rgba(255,255,255,0.95)',
-                      color: '#9a3412',
-                      fontWeight:'900',
-                      fontSize:'16px',
-                      padding:'14px 24px',
-                      borderRadius:'16px',
-                      textDecoration:'none',
-                      boxShadow:'0 6px 24px rgba(0,0,0,0.3)',
-                      transition:'transform 0.15s, box-shadow 0.15s',
-                    }}
-                    onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.03)'; e.currentTarget.style.boxShadow='0 10px 32px rgba(0,0,0,0.35)';}}
-                    onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)'; e.currentTarget.style.boxShadow='0 6px 24px rgba(0,0,0,0.3)';}}
-                  >
-                    <i className="fa-solid fa-right-to-bracket"></i>
-                    เข้าสู่ Sawee Refer
-                  </a>
-                </div>
-              )}
-
-              {/* Bottom note */}
-              <div style={{position:'relative', zIndex:1, padding:'0 20px 18px', textAlign:'center'}}>
-                <p style={{color:'rgba(255,255,255,0.65)', fontSize:'11px', lineHeight:'1.6', margin:0}}>
-                  <i className="fa-solid fa-circle-info" style={{marginRight:'5px'}}></i>
-                  ทั้ง 2 ระบบใช้ username และ password คนละชุดกัน
-                  <br />
-                  ลืมรหัสผ่าน สามารถ reset ใหม่ได้ทาง email
-                </p>
+              <div className="landing-form">
+                {tab === 'refill' ? (
+                  <LoginView ctx={ctx} compact={true} theme={t} />
+                ) : (
+                  <div className="landing-refer">
+                    <div className="landing-form-title" style={{ color: t.ink }}>เข้าสู่ระบบส่งต่อผู้ป่วย</div>
+                    <p style={{ color: '#57534e', fontSize: 13, lineHeight: 1.6, margin: 0 }}>ระบบ Refer เปิดในหน้าแยก ใช้ username และ password ของระบบ Refer</p>
+                    <a href="/refer.html" className="landing-btn" style={{ background: t.tab }}>
+                      <i className="fa-solid fa-right-to-bracket"></i> เข้าสู่ Sawee Refer
+                    </a>
+                    <div className="landing-refer-foot" style={{ color: t.accent }}><i className="fa-solid fa-hospital"></i> รพ.สวี · เครือข่าย รพ.สต. 16 แห่ง</div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -200,8 +181,7 @@
       );
     };
 
-    // ===== Login View =====
-    const LoginView = ({ ctx, compact }) => {
+    const LoginView = ({ ctx, compact, theme }) => {
       const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
       const [rememberMe, setRememberMe] = useState(true); const [showForgot, setShowForgot] = useState(false);
       const [forgotEmail, setForgotEmail] = useState('');
@@ -211,36 +191,24 @@
         try { await auth.sendPasswordResetEmail(forgotEmail); ctx.showToast('ส่งลิงก์ไปที่อีเมลแล้ว'); setShowForgot(false); } catch(e) { ctx.showToast(e.message, 'error'); }
       };
 
-      // Compact mode: rendered inside the landing card (dark bg overlay)
+      // Compact mode: ฟอร์มในการ์ด landing (พื้นหลังสว่าง)
       if (compact) {
+        const th = theme || { ink: '#064e3b', accent: '#047857', tab: 'linear-gradient(135deg, #065f46 0%, #047857 100%)' };
         return (
-          <div style={{display:'flex', flexDirection:'column', gap:'10px', padding:'4px 0 8px'}}>
-            <input type="email" autoComplete="email"
-              style={{width:'100%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.3)', borderRadius:'12px', padding:'12px 14px', color:'#fff', fontSize:'14px', outline:'none', boxSizing:'border-box'}}
-              placeholder="Email" value={email} onChange={e => setEmail(e.target.value)}
-            />
-            <input type="password" autoComplete="current-password"
-              style={{width:'100%', background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.3)', borderRadius:'12px', padding:'12px 14px', color:'#fff', fontSize:'14px', outline:'none', boxSizing:'border-box'}}
-              placeholder="Password" value={password} onChange={e => setPassword(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && ctx.handleLogin(email, password, rememberMe)}
-            />
-            <label style={{display:'flex', alignItems:'center', fontSize:'13px', color:'rgba(255,255,255,0.75)', cursor:'pointer', gap:'8px'}}>
-              <input type="checkbox" style={{width:'15px', height:'15px'}} checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
-              จดจำการเข้าสู่ระบบ
+          <div className="landing-login">
+            <div className="landing-form-title" style={{ color: th.ink }}>เข้าสู่ระบบ</div>
+            <label className="sr-only" htmlFor="lg-email">อีเมล</label>
+            <input id="lg-email" type="email" autoComplete="email" className="landing-input" placeholder="อีเมล" value={email} onChange={e => setEmail(e.target.value)} />
+            <label className="sr-only" htmlFor="lg-pass">รหัสผ่าน</label>
+            <input id="lg-pass" type="password" autoComplete="current-password" className="landing-input" placeholder="รหัสผ่าน" value={password} onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && ctx.handleLogin(email, password, rememberMe)} />
+            <label className="landing-remember">
+              <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{ accentColor: th.accent }} /> จดจำการเข้าสู่ระบบ
             </label>
-            <button onClick={() => ctx.handleLogin(email, password, rememberMe)}
-              style={{width:'100%', background:'linear-gradient(135deg, #059669, #047857)', color:'#fff', borderRadius:'12px', padding:'13px', fontWeight:'900', fontSize:'15px', border:'none', cursor:'pointer', boxShadow:'0 4px 16px rgba(0,0,0,0.3)'}}>
-              เข้าสู่ระบบ
-            </button>
-            <div style={{display:'flex', justifyContent:'space-between', paddingTop:'2px'}}>
-              <button onClick={() => ctx.setCurrentView('register')}
-                style={{background:'none', border:'none', color:'rgba(110,231,183,0.9)', fontSize:'13px', fontWeight:'700', cursor:'pointer', textDecoration:'underline', padding:0}}>
-                ลงทะเบียนผู้ใช้ใหม่
-              </button>
-              <button onClick={() => setShowForgot(true)}
-                style={{background:'none', border:'none', color:'rgba(255,255,255,0.6)', fontSize:'13px', fontWeight:'600', cursor:'pointer', textDecoration:'underline', padding:0}}>
-                ลืมรหัสผ่าน?
-              </button>
+            <button onClick={() => ctx.handleLogin(email, password, rememberMe)} className="landing-btn" style={{ background: th.tab }}>เข้าสู่ระบบ</button>
+            <div className="landing-links">
+              <button onClick={() => ctx.setCurrentView('register')} style={{ color: th.accent }}>ลงทะเบียนผู้ใช้ใหม่</button>
+              <button onClick={() => setShowForgot(true)}>ลืมรหัสผ่าน?</button>
             </div>
             {showForgot && (
               <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 px-4">

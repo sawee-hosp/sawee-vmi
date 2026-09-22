@@ -7404,7 +7404,68 @@ const AdminConfigView = ({ ctx }) => {
         catch (e) { ctx.showToast('โหลดหน่วยงานไม่สำเร็จ: ' + e.message, 'error'); }
       };
       useEffect(() => { load(); }, []);
-      const userCount = (id) => (ctx.appDb.usersList || []).filter(u => String(u.dept_id || '') === String(id)).length;
+      const usersOf = (id) => (ctx.appDb.usersList || []).filter(u => String(u.dept_id || '') === String(id));
+      const userCount = (id) => usersOf(id).length;
+      const [invsPreview, setInvsPreview] = useState(null); // [{row, cls, include, kind, target, action, hospMatch}]
+      const [invsBusy, setInvsBusy] = useState(false);
+      const invsFileRef = useRef(null);
+
+      const buildInvsPreview = (rawRows) => {
+        const hospitals = ctx.appDb.hospitals || [];
+        const list = rawRows.map(normalizeInvsDeptRow).filter(r => r.dept_id).map(r => {
+          const cls = classifyInvsDept(r);
+          if (cls.kind === 'rpst') {
+            const key = normalizeRpstName(r.dept_name);
+            const hosp = hospitals.find(h => String(h.invs_dept_id || '') === r.dept_id) || hospitals.find(h => key && normalizeRpstName(h.hospital_name) === key);
+            const changed = hosp && String(hosp.invs_dept_id || '') !== r.dept_id;
+            return { row: r, cls, include: !!changed, kind: 'rpst', hosp, action: !hosp ? 'ไม่พบ รพ.สต. ชื่อตรงกันในระบบ' : changed ? `ตั้ง INVS Dept ของ ${hosp.hospital_name}: ${hosp.invs_dept_id || '-'} → ${r.dept_id}` : 'ตรงกันแล้ว' };
+          }
+          if (cls.kind === 'skip') return { row: r, cls, include: false, kind: 'skip', action: `ข้าม (${cls.reason})` };
+          const existing = rows.find(d => String(d.invs_dept_id || '') === r.dept_id) || rows.find(d => d.dept_id === r.dept_id);
+          const same = existing && existing.dept_name === r.dept_name && String(existing.invs_dept_id || '') === r.dept_id;
+          return { row: r, cls, include: !same, kind: existing?.kind || cls.kind, existing, action: !existing ? 'สร้างใหม่' : same ? 'ตรงกันแล้ว' : `อัปเดต (${existing.dept_name})` };
+        });
+        setInvsPreview(list);
+      };
+      const fetchInvsDepts = async () => {
+        setInvsBusy(true);
+        try { const data = await callInvsBridge('list_depts'); buildInvsPreview(data.rows || []); }
+        catch (e) { ctx.showToast((e?.message || e) + ' — ถ้าเครื่องนี้ไม่มี Bridge ให้ใช้ "นำเข้าไฟล์ dept_id" แทน', 'error'); }
+        finally { setInvsBusy(false); }
+      };
+      const importInvsFile = (file) => {
+        if (!file) return;
+        parseTabularFile(file, (data) => { try { buildInvsPreview(data); } catch (e) { ctx.showToast(e.message, 'error'); } if (invsFileRef.current) invsFileRef.current.value = ''; },
+          (e) => ctx.showToast('อ่านไฟล์ไม่สำเร็จ: ' + (e?.message || e), 'error'), { header: true });
+      };
+      const applyInvsPreview = async () => {
+        const chosen = (invsPreview || []).filter(p => p.include && p.kind !== 'skip');
+        if (!chosen.length) return ctx.showToast('ยังไม่ได้เลือกรายการ', 'error');
+        setInvsBusy(true);
+        try {
+          const ops = [];
+          chosen.forEach(p => {
+            const r = p.row;
+            if (p.kind === 'rpst') {
+              if (!p.hosp) return;
+              ops.push({ type: 'set', ref: db.collection('master_hospitals').doc(String(p.hosp.hospital_id)), data: { invs_dept_id: r.dept_id, invs_synced_at: firebase.firestore.FieldValue.serverTimestamp() }, options: { merge: true } });
+              return;
+            }
+            const docId = p.existing ? p.existing.dept_id : String(r.dept_id).replace(/[^A-Za-z0-9_-]/g, '');
+            ops.push({ type: 'set', ref: db.collection('master_depts').doc(docId), data: {
+              dept_id: docId, dept_name: r.dept_name, kind: p.kind === 'pharmacy' ? 'pharmacy' : 'dept', invs_dept_id: r.dept_id,
+              ...(p.existing ? {} : { active: true, cover_days: INTERNAL_DEFAULT_COVER_DAYS }),
+              invs_supply_officer: r.supply_officer || '', invs_inv_director: r.inv_director || '',
+              invs_synced_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp()
+            }, options: { merge: true } });
+          });
+          await executeBatchChunks(ops);
+          await writeAuditLog(ctx.currentUser, 'INVS_DEPT_SYNC', 'master_depts', 'BATCH', { count: ops.length });
+          ctx.showToast(`ซิงก์หน่วยงานจาก INVS แล้ว ${ops.length} รายการ`);
+          setInvsPreview(null); await load(); await ctx.refreshData();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); }
+        finally { setInvsBusy(false); }
+      };
       const save = async (e) => {
         e.preventDefault();
         const fd = Object.fromEntries(new FormData(e.target));
@@ -7437,11 +7498,16 @@ const AdminConfigView = ({ ctx }) => {
               <h3 className="font-bold text-lg">หน่วยงาน / ห้องยา ภายใน รพ.</h3>
               <p className="text-sm text-slate-500">ผู้ใช้เลือกหน่วยงานตอนลงทะเบียน · INVS Dept ID ใช้ตอนส่งใบเบิกเข้า INVS (เหมือน รพ.สต.)</p>
             </div>
-            <button onClick={() => setEdit({ isNew: true, kind: 'dept', active: true, cover_days: INTERNAL_DEFAULT_COVER_DAYS })} className="bg-emerald-600 text-white px-5 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-plus mr-1"></i> เพิ่มหน่วยงาน</button>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={fetchInvsDepts} disabled={invsBusy} className="bg-cyan-600 text-white px-4 py-2 rounded-xl font-bold shadow disabled:opacity-50"><i className={`fa-solid ${invsBusy ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i> ดึงหน่วยงานจาก INVS</button>
+              <button onClick={() => invsFileRef.current?.click()} className="bg-white border px-4 py-2 rounded-xl font-bold text-slate-700"><i className="fa-solid fa-file-excel mr-1"></i> นำเข้าไฟล์ dept_id</button>
+              <input ref={invsFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => importInvsFile(e.target.files?.[0])} />
+              <button onClick={() => setEdit({ isNew: true, kind: 'dept', active: true, cover_days: INTERNAL_DEFAULT_COVER_DAYS })} className="bg-emerald-600 text-white px-5 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-plus mr-1"></i> เพิ่มเอง</button>
+            </div>
           </div>
           <div className="overflow-x-auto border rounded-xl">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">รหัส</th><th className="p-3 text-left">ชื่อ</th><th className="p-3 text-left">ประเภท</th><th className="p-3 text-left">INVS Dept / Stock</th><th className="p-3 text-right">สำรอง (วัน)</th><th className="p-3 text-right">ผู้ใช้</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th></tr></thead>
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">รหัส</th><th className="p-3 text-left">ชื่อ</th><th className="p-3 text-left">ประเภท</th><th className="p-3 text-left">INVS Dept / Stock</th><th className="p-3 text-right">สำรอง (วัน)</th><th className="p-3 text-left">ผู้ใช้ที่ลงทะเบียน</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th></tr></thead>
               <tbody>
                 {!rows.length && <tr><td colSpan="8" className="p-8 text-center text-slate-400">ยังไม่มีหน่วยงาน — เพิ่ม "ห้องยา" อย่างน้อย 1 รายการเพื่อใช้หน้าเบิกยาห้องยา</td></tr>}
                 {rows.map(r => (
@@ -7451,7 +7517,7 @@ const AdminConfigView = ({ ctx }) => {
                     <td className="p-3"><span className={`text-xs font-bold px-2 py-1 rounded ${r.kind === 'pharmacy' ? 'bg-purple-100 text-purple-700' : 'bg-sky-100 text-sky-700'}`}>{INTERNAL_KIND_LABELS[r.kind] || 'หน่วยงาน'}</span></td>
                     <td className="p-3 font-mono text-xs">{r.invs_dept_id || <span className="text-red-500 font-sans font-bold">ยังไม่ตั้ง</span>} / {r.invs_stock_id || 'ค่าเริ่มต้น'}</td>
                     <td className="p-3 text-right">{r.kind === 'pharmacy' ? (r.cover_days || INTERNAL_DEFAULT_COVER_DAYS) : '-'}</td>
-                    <td className="p-3 text-right">{userCount(r.dept_id)}</td>
+                    <td className="p-3 text-xs text-slate-600">{usersOf(r.dept_id).length ? usersOf(r.dept_id).map(u => u.name).join(', ') : <span className="text-slate-300">-</span>}{r.invs_supply_officer ? <div className="text-[10px] text-slate-400">INVS: {r.invs_supply_officer}</div> : null}</td>
                     <td className="p-3">{r.active === false ? <span className="text-slate-400">ปิดใช้</span> : <span className="text-emerald-600 font-bold">ใช้งาน</span>}</td>
                     <td className="p-3 text-right whitespace-nowrap">
                       <button onClick={() => setEdit({ ...r, isNew: false })} className="text-indigo-600 font-bold mr-3">แก้ไข</button>
@@ -7462,6 +7528,42 @@ const AdminConfigView = ({ ctx }) => {
               </tbody>
             </table>
           </div>
+          <Modal isOpen={!!invsPreview} onClose={() => !invsBusy && setInvsPreview(null)} title="ซิงก์หน่วยงานจากตาราง dept_id ของ INVS" maxWidth="max-w-5xl">
+            {invsPreview && (
+              <div className="space-y-4">
+                <p className="text-sm text-slate-500">ระบบจัดประเภทให้อัตโนมัติ (ห้องยา / หน่วยงาน / รพ.สต. / ข้าม) — ติ๊กเฉพาะรายการที่ต้องการ แล้วกดบันทึก · เป็นการ <b>อ่าน</b> จาก INVS อย่างเดียว ไม่แก้ไขข้อมูลใน INVS</p>
+                <div className="overflow-auto max-h-[55vh] border rounded-xl">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-xs text-slate-500 sticky top-0"><tr><th className="p-2 w-10"></th><th className="p-2 text-left">DEPT_ID</th><th className="p-2 text-left">ชื่อใน INVS</th><th className="p-2 text-left">ประเภท</th><th className="p-2 text-left">สิ่งที่จะทำ</th></tr></thead>
+                    <tbody>
+                      {invsPreview.map((p, i) => (
+                        <tr key={p.row.dept_id} className={`border-t ${p.kind === 'skip' ? 'text-slate-400' : ''}`}>
+                          <td className="p-2 text-center"><input type="checkbox" aria-label={`เลือก ${p.row.dept_name}`} disabled={p.kind === 'skip' || (p.kind === 'rpst' && !p.hosp)} checked={!!p.include} onChange={e => setInvsPreview(prev => prev.map((x, j) => j === i ? { ...x, include: e.target.checked } : x))} /></td>
+                          <td className="p-2 font-mono">{p.row.dept_id}</td>
+                          <td className="p-2">{p.row.dept_name}</td>
+                          <td className="p-2">
+                            {(p.kind === 'dept' || p.kind === 'pharmacy') ? (
+                              <select value={p.kind} onChange={e => setInvsPreview(prev => prev.map((x, j) => j === i ? { ...x, kind: e.target.value } : x))} className="border rounded-lg p-1 text-xs">
+                                <option value="dept">หน่วยงาน</option><option value="pharmacy">ห้องยา</option>
+                              </select>
+                            ) : <span className="text-xs font-bold">{p.kind === 'rpst' ? 'รพ.สต.' : 'ข้าม'}</span>}
+                          </td>
+                          <td className="p-2 text-xs">{p.action}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-slate-500">เลือก {invsPreview.filter(p => p.include).length} รายการ</span>
+                  <div className="flex gap-2">
+                    <button onClick={() => setInvsPreview(null)} disabled={invsBusy} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                    <button onClick={applyInvsPreview} disabled={invsBusy} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-bold">{invsBusy ? 'กำลังบันทึก...' : 'บันทึกที่เลือก'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </Modal>
           <Modal isOpen={!!edit} onClose={() => setEdit(null)} title={edit?.isNew ? 'เพิ่มหน่วยงาน / ห้องยา' : `แก้ไข ${edit?.dept_name || ''}`} maxWidth="max-w-lg">
             {edit && (
               <form onSubmit={save} className="space-y-4">

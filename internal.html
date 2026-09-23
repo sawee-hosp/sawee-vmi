@@ -1498,6 +1498,10 @@ ORDER BY d.name`;
                   </>
                 )}
               </div>
+              <footer className="no-print max-w-[1500px] mx-auto mt-12 pt-5 border-t border-slate-200 text-center text-sm text-slate-500">
+                <i className="fa-solid fa-envelope mr-2 text-teal-600"></i>พบปัญหาการใช้งาน แจ้งแอดมินทาง e-mail{' '}
+                <a href={`mailto:sawee.appsheet@gmail.com?subject=${encodeURIComponent('แจ้งปัญหา Sawee Rxfill (เบิกยาภายใน) v' + APP_VERSION)}`} className="font-bold text-teal-700 hover:underline">sawee.appsheet@gmail.com</a>
+              </footer>
             </main>
           </div>
           <PrintSheet req={printReq} dept={dept} drugById={drugById} />

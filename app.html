@@ -7759,6 +7759,15 @@ const AdminConfigView = ({ ctx }) => {
     // --- เชื่อม Sawee Refer ตรงจากเบราว์เซอร์ (Firebase app ตัวที่สอง, อ่านอย่างเดียว) ---
     // ค่า web config ของ sawee-refer เก็บที่ config/refer_link (แอดมินวางได้ในหน้าต่าง NCDs) ไม่ต้องผ่าน XAMPP
     const referLink = { cfg: null, loaded: false, app: null, authNote: '' };
+    // ค่าเริ่มต้นของโปรเจกต์ sawee-refer (web config เป็นค่าสาธารณะ ไม่ใช่รหัสลับ) — แอดมินเปลี่ยนได้ที่ปุ่ม "การเชื่อม"
+    const DEFAULT_REFER_CONFIG = {
+      apiKey: 'AIzaSyCSi-vbZ1pLuv7UUOrxmHVtpfl_qz6KdVk',
+      authDomain: 'sawee-refer.firebaseapp.com',
+      projectId: 'sawee-refer',
+      storageBucket: 'sawee-refer.firebasestorage.app',
+      messagingSenderId: '755502284752',
+      appId: '1:755502284752:web:3a4e2f81e50affa04a03d5'
+    };
     const parseFirebaseConfigText = (text) => {
       const t = String(text || '');
       const pick = (k) => { const m = new RegExp(k + '\\s*["\']?\\s*:\\s*["\']([^"\']+)["\']').exec(t); return m ? m[1].trim() : ''; };
@@ -7771,8 +7780,8 @@ const AdminConfigView = ({ ctx }) => {
       try {
         const snap = await db.collection('config').doc('refer_link').get();
         const d = snap.exists ? snap.data() : null;
-        referLink.cfg = d && d.apiKey && d.projectId ? { apiKey: d.apiKey, authDomain: d.authDomain || (d.projectId + '.firebaseapp.com'), projectId: d.projectId, appId: d.appId || undefined } : null;
-      } catch (e) { referLink.cfg = null; }
+        referLink.cfg = d && d.apiKey && d.projectId ? { apiKey: d.apiKey, authDomain: d.authDomain || (d.projectId + '.firebaseapp.com'), projectId: d.projectId, appId: d.appId || undefined } : DEFAULT_REFER_CONFIG;
+      } catch (e) { referLink.cfg = DEFAULT_REFER_CONFIG; }
       referLink.loaded = true;
       return referLink.cfg;
     };
@@ -7821,6 +7830,27 @@ const AdminConfigView = ({ ctx }) => {
       return [...m.values()].sort((a, b) => String(a.round_date || '').localeCompare(String(b.round_date || '')));
     };
 
+    // ผูก hcode อัตโนมัติ: อ่านรายชื่อ hcode จาก sawee-refer แล้วจับคู่ชื่อ รพ.สต. (ข้าม "รพ.สต." และ "บ้าน")
+    const ncdsNormName = (x) => normalizeForMatch(String(x || '').replace(/โรงพยาบาลส่งเสริมสุขภาพตำบล|รพ\.?\s*สต\.?|บ้าน/g, ''));
+    const autoLinkHcodes = async (ctx) => {
+      const rdb = await getReferDb();
+      const snap = await rdb.collection('ncds_demand').limit(1000).get();
+      const mp = new Map();
+      snap.docs.forEach(d => { const x = d.data(); if (x.hcode && !mp.has(x.hcode)) mp.set(String(x.hcode), x.hcode_name || ''); });
+      const list = [...mp.entries()].map(([hcode, name]) => ({ hcode, name }));
+      let linked = 0;
+      for (const h of ctx.appDb.hospitals) {
+        if (safeText(h.hcode)) continue;
+        const hit = list.find(x => ncdsNormName(x.name) && ncdsNormName(x.name) === ncdsNormName(h.hospital_name));
+        if (!hit) continue;
+        await db.collection('master_hospitals').doc(String(h.hospital_id)).set({ hcode: hit.hcode, updated_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        linked++;
+      }
+      if (linked) { await writeAuditLog(ctx.currentUser, 'HCODE_AUTO_LINK', 'master_hospitals', 'BATCH', { linked }); await ctx.refreshData(); }
+      return { list, linked };
+    };
+    const ncdsAutoLinkTried = { done: false };
+
     // แอดมิน: ตั้งค่าการเชื่อม + ผูก hcode จากรายชื่อที่มีใน sawee-refer
     const ReferLinkPanel = ({ ctx, hosp, onChanged }) => {
       const [text, setText] = useState('');
@@ -7837,7 +7867,13 @@ const AdminConfigView = ({ ctx }) => {
         try {
           await db.collection('config').doc('refer_link').set({ ...c, updated_at: firebase.firestore.FieldValue.serverTimestamp(), updated_by: safeText(ctx.currentUser.name) });
           await writeAuditLog(ctx.currentUser, 'REFER_LINK_CONFIG', 'config', 'refer_link', { projectId: c.projectId });
-          setCfg(await loadReferLinkConfig(true)); setText(''); ctx.showToast(`เชื่อม ${c.projectId} แล้ว`); onChanged();
+          setCfg(await loadReferLinkConfig(true)); setText('');
+          try {
+            const r = await autoLinkHcodes(ctx);
+            setHcodes(r.list);
+            ctx.showToast(`เชื่อม ${c.projectId} แล้ว · ผูก hcode อัตโนมัติ ${r.linked} แห่ง` + (r.list.length ? '' : ' (ยังไม่มีเอกสาร ncds_demand)'));
+          } catch (e) { ctx.showToast(`บันทึกการเชื่อมแล้ว แต่อ่าน Sawee Refer ไม่ได้: ${referErrorText(e)}`, 'error'); }
+          onChanged();
         } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(''); }
       };
       const listHcodes = async () => {
@@ -7874,7 +7910,10 @@ const AdminConfigView = ({ ctx }) => {
         <div className="border border-cyan-200 bg-cyan-50/60 rounded-xl p-4 space-y-3 text-sm">
           <div className="font-bold text-cyan-900"><i className="fa-solid fa-link mr-2"></i>การเชื่อม Sawee Refer (แอดมิน)</div>
           {cfg ? <div className="text-slate-600">เชื่อมกับโปรเจกต์ <b className="font-mono">{cfg.projectId}</b> แล้ว {referLink.authNote && <span className="text-amber-700">· {referLink.authNote}</span>}</div>
-               : <div className="text-slate-600">ยังไม่ได้ตั้งค่า — วาง <code>firebaseConfig</code> ของ Sawee Refer (Firebase Console ของ sawee-refer › Project settings › Your apps › Config)</div>}
+               : <div className="text-slate-600 space-y-1">
+                   <div><b>ขั้นเดียวที่ต้องทำ:</b> บอกระบบว่าโปรเจกต์ Sawee Refer อยู่ที่ไหน (rules บอกแค่ "ใครอ่านได้" แต่ Refill ยังไม่รู้ "ที่อยู่" ของ Refer)</div>
+                   <div>เปิดไฟล์ <code>refer.html</code> ของ Sawee Refer (บน GitHub หรือ Notepad) › ค้นคำว่า <code>firebaseConfig</code> › คัดลอกตั้งแต่ <code>{'{'}</code> ถึง <code>{'}'}</code> มาวางด้านล่าง › กดบันทึก — ระบบจะผูก hcode ทุก รพ.สต. ให้อัตโนมัติ</div>
+                 </div>}
           <details open={!cfg}>
             <summary className="cursor-pointer font-bold text-cyan-800">{cfg ? 'เปลี่ยนค่าการเชื่อม' : 'วางค่า firebaseConfig'}</summary>
             <textarea value={text} onChange={e => setText(e.target.value)} rows="5" aria-label="firebaseConfig ของ Sawee Refer" placeholder={'const firebaseConfig = {\n  apiKey: "...",\n  authDomain: "sawee-refer.firebaseapp.com",\n  projectId: "sawee-refer",\n  appId: "..."\n};'} className="mt-2 w-full p-2 border rounded-lg font-mono text-xs bg-white" />
@@ -7950,6 +7989,10 @@ const AdminConfigView = ({ ctx }) => {
           const c = ctxRef.current;
           const rows = await loadNcdsRounds(c, hospitalId, d);
           setDiag(d);
+          if (isAdmin && d.referConfigured && !safeText(c.findHospital(hospitalId)?.hcode) && !ncdsAutoLinkTried.done) {
+            ncdsAutoLinkTried.done = true;
+            try { const r = await autoLinkHcodes(c); if (r.linked) { ctx.showToast(`ผูก hcode อัตโนมัติ ${r.linked} แห่ง`); return; } } catch (e) { d.referError = referErrorText(e); }
+          }
           if (isAdmin && (!d.referConfigured || !safeText(c.findHospital(hospitalId)?.hcode) || d.referError)) setShowLink(true);
           setRounds(rows);
           onLoaded && onLoaded(rows);
@@ -8112,6 +8155,15 @@ const AdminConfigView = ({ ctx }) => {
         </>
       );
     };
+
+    // ===== ส่วนท้ายเพจ: ช่องทางแจ้งปัญหา =====
+    const SUPPORT_EMAIL = 'sawee.appsheet@gmail.com';
+    const SupportFooter = () => (
+      <footer className="no-print mt-12 pt-5 border-t border-slate-200 text-center text-sm text-slate-500">
+        <i className="fa-solid fa-envelope mr-2 text-emerald-600"></i>พบปัญหาการใช้งาน แจ้งแอดมินทาง e-mail{' '}
+        <a href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('แจ้งปัญหา Sawee Rxfill v' + APP_VERSION)}`} className="font-bold text-emerald-700 hover:underline">{SUPPORT_EMAIL}</a>
+      </footer>
+    );
 
     // ===== App Component (app.html — requires auth, redirects to index.html if not logged in) =====
     const App = () => {
@@ -8360,6 +8412,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'drug_history' && <DrugHistoryView ctx={ctx} />}
               {currentView === 'vaccine_req' && <VaccineReqView ctx={ctx} />}
               {currentView === 'internal_queue' && currentUser?.role === 'admin' && <InternalQueueView ctx={{ ...ctx, refreshData }} />}
+              <SupportFooter />
             </div>
           </div>
           {(currentView === 'create_req' || currentView === 'view_req') && (

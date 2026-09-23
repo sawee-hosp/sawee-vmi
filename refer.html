@@ -196,6 +196,23 @@ tbody tr:hover{background:#FAFCFA}
 .reveal-warn{background:var(--warn-dim);color:var(--warn);padding:6px 12px;border-radius:6px;font-size:12px;margin:6px 0;display:inline-block}
 .scroll{max-height:300px;overflow-y:auto}
 @media(max-width:700px){.barrow .lbl{width:110px}#map{height:360px}}
+/* === แถบแจ้งเตือนผู้ป่วยรอดำเนินการ (ตัวใหญ่ เห็นชัด) === */
+#todo-alert{margin:14px 18px 0;padding:14px 16px;border-radius:14px;background:#fff;
+  border:2px solid var(--accent);box-shadow:0 4px 18px rgba(234,88,12,.15);
+  display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+#todo-alert.hidden{display:none}
+#todo-alert .ta-head{font-size:17px;font-weight:700;color:var(--accent-deep);margin-right:6px;display:flex;align-items:center;gap:8px}
+#todo-alert .ta-bell{font-size:24px;animation:taRing 1.8s ease-in-out infinite;transform-origin:50% 0}
+@keyframes taRing{0%,70%,100%{transform:rotate(0)}75%{transform:rotate(14deg)}85%{transform:rotate(-12deg)}92%{transform:rotate(6deg)}}
+#todo-alert .ta-tile{display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;cursor:pointer;
+  border:1px solid transparent;font-size:15px;font-weight:600;transition:transform .12s}
+#todo-alert .ta-tile:hover{transform:translateY(-1px)}
+#todo-alert .ta-tile .ta-n{font-size:30px;font-weight:800;line-height:1;min-width:34px;text-align:center}
+#todo-alert .ta-new{background:#fde8e8;color:#b91c1c;border-color:#fca5a5}
+#todo-alert .ta-wait{background:#fff4e0;color:#b45309;border-color:#fcd34d}
+#todo-alert .ta-late{background:#f3e8ff;color:#7e22ce;border-color:#d8b4fe}
+@media(prefers-reduced-motion:reduce){#todo-alert .ta-bell{animation:none}}
+#nav-badge-list{background:#dc2626}
 /* === ปฏิทินรอบนัด === */
 .mini-cal{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;font-size:13px}
 .mini-cal .mc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
@@ -306,6 +323,7 @@ tbody tr:hover{background:#FAFCFA}
   </header>
   <nav id="nav"></nav>
   <div id="pend-alert" class="msg amber hidden" style="margin:12px 18px 0"></div>
+  <div id="todo-alert" class="hidden"></div>
 
   <main>
     <!-- รายชื่อผู้ป่วย -->
@@ -315,12 +333,13 @@ tbody tr:hover{background:#FAFCFA}
         <select id="sel-clinic"><option value="">ทุกคลินิก</option></select>
         <button class="chip on" data-f="todo" id="c-todo">ที่ต้องดำเนินการ</button>
         <button class="chip" data-f="all" id="c-all">ทั้งหมด</button>
+        <button class="chip" data-f="new">ส่งต่อใหม่</button>
         <button class="chip" data-f="acknowledged">รับตัวแล้ว</button>
         <button class="chip" data-f="scheduled">นัดแล้ว</button>
         <button class="chip" data-f="visited">มารับยาแล้ว</button>
         <button class="chip" data-f="missed">ไม่มาตามนัด</button>
         <div style="flex:1"></div>
-        <input type="text" id="q" placeholder="ค้นหา HN หรือเลขบัตร 4 ตัวท้าย" style="width:220px">
+        <input type="text" id="q" placeholder="เลขบัตร ปชช. 4 ตัวท้าย (หรือ HN)" style="width:240px">
         <button class="btn-ghost" id="btn-reload">โหลดใหม่</button>
         <button class="btn-sm" id="btn-add-pt" style="margin-left:auto">+ ขอเพิ่มผู้ป่วย</button>
       </div>
@@ -729,6 +748,7 @@ const db   = getFirestore(app);
 
 let ME=null, PROFILE=null;
 let LIST=[], RPST=[], OUTREACH=[], DRUGMAP={}, USERS=[], LOGS=[];
+let SEARCH_MODE='';
 let FILTER='todo', VIEW_HCODE='', MAPMODE='tambon', CLINIC_FILTER='';
 let MAP=null, LAYER=null;
 const SELECTED = new Set();
@@ -737,6 +757,14 @@ const SELECTED = new Set();
 const $ = id => document.getElementById(id);
 /* ====== PDPA ====== */
 const SENSITIVE_FIELDS = ['full_name','fname','lname','pname','address_full','phone','cid_last4','birthday'];
+/* เลขอ้างอิงผู้ป่วยที่แสดงบนจอ
+   - เจ้าหน้าที่ รพ.สต. ใช้ "เลขบัตร ปชช. 4 ตัวท้าย" เป็นหลัก (ตรงกับบัตรที่คนไข้ถือมา) ถ้าไม่มีค่อยใช้ HN
+   - ฝั่ง รพ.สวี ใช้ HN เหมือนเดิม (ต้องใช้คีย์ HOSxP) */
+function refTag(r){
+  const l4 = String(r?.patient?.cid_last4||'').trim();
+  if(isRpst() && l4) return `<span class="mono" title="เลขบัตรประชาชน 4 ตัวท้าย">บัตร ••••${esc(l4)}</span>`;
+  return `HN ${esc(r?.hn||'-')}`;
+}
 function maskName(s){ return s ? '••• •••••' : '-'; }  // ไม่แสดงตัวอักษรใดของชื่อจริงเลย ต้องกดเปิดตาเท่านั้น
 function maskAddr(s){ return s ? 'หมู่ ...' : '-'; }
 function maskPhone(s){ return s ? s.slice(0,-4)+'****' : '-'; }
@@ -970,6 +998,7 @@ function buildNav(){
   $('nav').innerHTML = vis.map((t,i)=>
     `<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}` +
     (t.id==='user'?'<span class="nav-badge hidden" id="nav-badge-user"></span>':'') +
+    (t.id==='list'?'<span class="nav-badge hidden" id="nav-badge-list"></span>':'') +
     `</button>`).join('');
   $('nav').querySelectorAll('button').forEach(b=>
     b.addEventListener('click', ()=>openTab(b.dataset.tab)));
@@ -1082,22 +1111,49 @@ function buildClinicOptions(){
     arr.map(c=>`<option value="${esc(c)}"${c===cur?' selected':''}>${esc(c)}</option>`).join('');
 }
 function filtered(){
-  // ค้นหาด้วย HN หรือเลขบัตร ปชช. 4 ตัวท้ายเท่านั้น — ห้ามค้นด้วยชื่อ
+  // ค้นหาด้วยเลขบัตร ปชช. 4 ตัวท้ายก่อน ถ้าไม่เจอเลยค่อยค้นด้วย HN — ห้ามค้นด้วยชื่อ
   const q = $('q').value.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
+  let byL4 = false;
+  if(q) byL4 = LIST.some(r=>String(r.patient?.cid_last4||'').toLowerCase()===q);
+  SEARCH_MODE = !q ? '' : byL4 ? 'last4' : 'hn';
   return LIST.filter(r=>{
     const st = stOf(r);
     if(FILTER==='todo' && !TODO.includes(st)) return false;
     if(FILTER!=='todo' && FILTER!=='all' && st!==FILTER) return false;
     if(CLINIC_FILTER && !clinicListOf(r).includes(CLINIC_FILTER)) return false;
     if(q){
-      const hn = (r.hn||'').toLowerCase();
-      const last4 = (r.patient?.cid_last4||'').toLowerCase();
-      if(!hn.includes(q) && last4 !== q) return false;
+      if(byL4){ if(String(r.patient?.cid_last4||'').toLowerCase()!==q) return false; }
+      else if(!(r.hn||'').toLowerCase().includes(q)) return false;
     }
     return true;
   });
 }
+/* แจ้งเตือนตัวใหญ่ใต้เมนู: ส่งต่อใหม่ / รับตัวแล้วรอนัด / เลยวันนัดยังไม่บันทึก + badge บนแท็บรายชื่อ */
+function paintTodoAlert(){
+  const nNew  = LIST.filter(r=>stOf(r)==='new').length;
+  const nWait = LIST.filter(r=>stOf(r)==='acknowledged').length;
+  const nLate = LIST.filter(r=>stOf(r)==='scheduled' && r.workflow?.appoint_date && daysFrom(r.workflow.appoint_date)<0).length;
+  const total = nNew + nWait + nLate;
+  const b = $('nav-badge-list');
+  if(b){ b.textContent = total; show('nav-badge-list', total>0); }
+  const el = $('todo-alert');
+  if(!total){ el.classList.add('hidden'); el.innerHTML=''; return; }
+  const tile = (cls,n,label,f) => n ? `<div class="ta-tile ${cls}" data-taf="${f}" title="กดเพื่อดูรายชื่อ">
+      <span class="ta-n">${n}</span><span>${label}</span></div>` : '';
+  el.innerHTML = `<div class="ta-head"><span class="ta-bell">🔔</span>มีผู้ป่วยรอดำเนินการ</div>
+    ${tile('ta-new', nNew, 'ส่งต่อรายใหม่<br><small style="font-weight:400">ยังไม่กดรับตัว</small>', 'new')}
+    ${tile('ta-wait',nWait,'รับตัวแล้ว<br><small style="font-weight:400">ยังไม่ได้นัด</small>', 'acknowledged')}
+    ${tile('ta-late',nLate,'เลยวันนัด<br><small style="font-weight:400">ยังไม่บันทึกว่ามา/ไม่มา</small>', 'late')}`;
+  el.classList.remove('hidden');
+  el.querySelectorAll('[data-taf]').forEach(t=>t.addEventListener('click',()=>{
+    openTab('list');
+    FILTER = t.dataset.taf==='late' ? 'scheduled' : t.dataset.taf;
+    $('q').value=''; renderList();
+    $('tab-list').scrollIntoView({behavior:'smooth', block:'start'});
+  }));
+}
 function renderList(){
+  paintTodoAlert();
   const cnt={}; LIST.forEach(r=>{ const s=stOf(r); cnt[s]=(cnt[s]||0)+1; });
   const clinicPool = CLINIC_FILTER ? LIST.filter(r=>clinicListOf(r).includes(CLINIC_FILTER)) : LIST;
   const cCnt={}; clinicPool.forEach(r=>{ const s=stOf(r); cCnt[s]=(cCnt[s]||0)+1; });
@@ -1109,7 +1165,9 @@ function renderList(){
     c.classList.toggle('on', f===FILTER);
   });
   const rows = filtered();
-  if(!rows.length){ $('tb-list').innerHTML='<tr><td colspan="7" class="empty">ไม่พบรายการ</td></tr>';
+  if(!rows.length){ $('tb-list').innerHTML=`<tr><td colspan="7" class="empty">ไม่พบรายการ${
+      SEARCH_MODE==='hn'?' (ไม่พบเลขบัตร 4 ตัวท้ายนี้ และไม่พบ HN ที่ตรงกัน)':''}${
+      FILTER!=='all'&&SEARCH_MODE?' — ลองกดตัวกรอง "ทั้งหมด"':''}</td></tr>`;
     updateBatchBar(); return; }
   $('tb-list').innerHTML = rows.map(r=>{
     const st=stOf(r), col=SC[st]||'#888', p=r.patient||{};
@@ -1122,7 +1180,7 @@ function renderList(){
       <td><input type="checkbox" class="rowchk" data-id="${esc(r.id)}"${SELECTED.has(r.id)?' checked':''}></td>
       <td><div class="nm"><span class="masked">${maskName(p.full_name)||esc(r.hn)}</span>
           ${eyeBtn(r.id,'full_name','ชื่อ')}</div>
-        <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี
+        <div class="sub">${refTag(r)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี
           ${p.moo?` · หมู่ ${esc(p.moo)} ${esc(p.tambon||'')}`:''}
           ${r.case_type==='data_only'?'<span class="pill pill-rem">Remission</span>':''}
           ${r.hcode_conflict?'<span class="pill pill-warn">ปลายทางขัดแย้ง</span>':''}</div>
@@ -1203,7 +1261,7 @@ function openDetail(id){
     <h2 style="font-size:20px;font-weight:600"><span id="d-name">${esc(maskName(p.full_name)||r.hn)}</span>
       <button class="btn-eye" id="d-eye-name" title="เปิดดูชื่อเต็ม (มีบันทึก log)">👁</button></h2>
     <div class="reveal-warn">ข้อมูลบางส่วนถูกซ่อนเพื่อคุ้มครองความเป็นส่วนตัว การเปิดดูจะถูกบันทึก</div>
-    <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี · ${esc(p.pttype_name||'')}
+    <div class="sub">${refTag(r)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี · ${esc(p.pttype_name||'')}
       <span class="tag" style="background:${SC[st]}1a;color:${SC[st]};margin-left:6px">${STATUS[st]||st}</span></div>
     <div class="grid g2">
       <div class="sec"><div class="st">ข้อมูลทั่วไป</div><table class="kv">
@@ -1550,7 +1608,7 @@ function openRound(id){
       ${pool.length?`<div class="scroll">${pool.map(r=>
         `<label style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:13.5px">
           <input type="checkbox" class="poolchk" value="${esc(r.id)}">
-          <span>${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">HN ${esc(r.hn)} · ${esc(clinicText(r))}</span></span>
+          <span>${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">${refTag(r)} · ${esc(clinicText(r))}</span></span>
         </label>`).join('')}</div>
         <div style="margin-top:10px"><button class="btn-primary" id="r-add">นัดผู้ที่เลือกเข้ารอบนี้</button>
         <button class="btn-ghost" id="r-all">เลือกทั้งหมด</button></div>`
@@ -1563,7 +1621,7 @@ function openRound(id){
     $('r-n').textContent = list.length;
     $('r-people').innerHTML = list.length ? list.map(r=>
       `<div style="padding:3px 0;border-bottom:1px solid var(--line)">
-        ${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">HN ${esc(r.hn)}</span></div>`).join('')
+        ${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">${refTag(r)}</span></div>`).join('')
       : '<div class="sub">ยังไม่มีผู้ป่วยในรอบนี้</div>';
     const d = parseInt($('r-days').value)||0;
     $('r-drug').innerHTML = drugRows(computeDrugs(list, d,
@@ -1610,7 +1668,7 @@ function renderBatch(){
   $('b-count').textContent = sel.length;
   $('b-people').innerHTML = sel.map(r=>
     `<div style="padding:3px 0;border-bottom:1px solid var(--line)">${esc(maskName(r.patient?.full_name)||r.hn)}
-      <span class="sub">HN ${esc(r.hn)} · ${esc(r.hcode_name||r.hcode)}</span></div>`).join('');
+      <span class="sub">${refTag(r)} · ${esc(r.hcode_name||r.hcode)}</span></div>`).join('');
   recalcBatch();
 }
 function recalcBatch(){
@@ -1976,7 +2034,7 @@ function renderRecord(o){
     }
     return `<tr>
       <td><div class="nm"><span class="masked">${esc(maskName(r.patient?.full_name)||r.hn)}</span></div>
-        <div class="sub">HN ${esc(r.hn)} · ${esc(r.patient?.sex||'')} ${esc(r.patient?.age??'')} ปี</div>
+        <div class="sub">${refTag(r)} · ${esc(r.patient?.sex||'')} ${esc(r.patient?.age??'')} ปี</div>
         <div class="clin">${esc(clinicText(r))}</div></td>
       <td class="sub">${nMed} รายการ</td>
       <td>${st}</td>
@@ -2039,7 +2097,7 @@ function openVisit(refId, o){
 
   $('ov-body').innerHTML = `
     <h2 style="font-size:20px;font-weight:600">${esc(maskName(r.patient?.full_name)||r.hn)}</span></h2>
-    <div class="sub">HN ${esc(r.hn)} · รอบ ${thDate(o.date)} · ${esc(rpstName(o.hcode))}</div>
+    <div class="sub">${refTag(r)} · รอบ ${thDate(o.date)} · ${esc(rpstName(o.hcode))}</div>
     <div class="msg info" style="margin-top:12px">ไม่ต้องแตะรายการที่จ่ายต่อเหมือนเดิม
       แก้เฉพาะตัวที่แพทย์ปรับเท่านั้น${nx?` · รอบถัดไป ${thDate(nx.date)} ห่าง ${dayDiff(o.date,nx.date)} วัน`:''}</div>
 
@@ -2697,7 +2755,7 @@ function renderIntakeTable(){
     return `<tr>
       <td><div class="nm"><span class="masked">${maskName(p.full_name)||esc(r.hn)}</span>
           ${eyeBtn(r.id,'full_name','ชื่อ')}</div>
-        <div class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี</div></td>
+        <div class="sub">${refTag(r)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี</div></td>
       <td class="sub">${esc(r.hcode_name||r.hcode||'-')}</td>
       <td>${esc(n.status_label||n.status_code||'-')}${n.status_cycle?` (ครั้งที่ ${esc(n.status_cycle)})`:''}</td>
       <td>${n.action_required?`<span class="pill pill-warn">${esc(n.action_code||'ต้องคีย์')}</span>

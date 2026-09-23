@@ -7756,15 +7756,149 @@ const AdminConfigView = ({ ctx }) => {
       const short = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
       return Number(m[3]) + ' ' + short[Number(m[2]) - 1] + ' ' + String(Number(m[1]) + 543).slice(2);
     };
-    const loadNcdsRounds = async (ctx, hospitalId) => {
+    // --- เชื่อม Sawee Refer ตรงจากเบราว์เซอร์ (Firebase app ตัวที่สอง, อ่านอย่างเดียว) ---
+    // ค่า web config ของ sawee-refer เก็บที่ config/refer_link (แอดมินวางได้ในหน้าต่าง NCDs) ไม่ต้องผ่าน XAMPP
+    const referLink = { cfg: null, loaded: false, app: null, authNote: '' };
+    const parseFirebaseConfigText = (text) => {
+      const t = String(text || '');
+      const pick = (k) => { const m = new RegExp(k + '\\s*["\']?\\s*:\\s*["\']([^"\']+)["\']').exec(t); return m ? m[1].trim() : ''; };
+      const cfg = { apiKey: pick('apiKey'), authDomain: pick('authDomain'), projectId: pick('projectId'), appId: pick('appId'), storageBucket: pick('storageBucket'), messagingSenderId: pick('messagingSenderId') };
+      Object.keys(cfg).forEach(k => { if (!cfg[k]) delete cfg[k]; });
+      return cfg;
+    };
+    const loadReferLinkConfig = async (force) => {
+      if (referLink.loaded && !force) return referLink.cfg;
+      try {
+        const snap = await db.collection('config').doc('refer_link').get();
+        const d = snap.exists ? snap.data() : null;
+        referLink.cfg = d && d.apiKey && d.projectId ? { apiKey: d.apiKey, authDomain: d.authDomain || (d.projectId + '.firebaseapp.com'), projectId: d.projectId, appId: d.appId || undefined } : null;
+      } catch (e) { referLink.cfg = null; }
+      referLink.loaded = true;
+      return referLink.cfg;
+    };
+    const getReferDb = async () => {
+      const cfg = await loadReferLinkConfig();
+      if (!cfg) return null;
+      if (referLink.app && referLink.app.options.projectId !== cfg.projectId) { try { await referLink.app.delete(); } catch (e) { /* ignore */ } referLink.app = null; }
+      if (!referLink.app) referLink.app = firebase.apps.find(a => a.name === 'sawee-refer') || firebase.initializeApp(cfg, 'sawee-refer');
+      // ลงชื่อแบบ anonymous ใน sawee-refer (ไม่กระทบการ login ของ Refill เพราะเป็นคนละ app)
+      try {
+        const ra = referLink.app.auth();
+        if (!ra.currentUser) await ra.signInAnonymously();
+        referLink.authNote = '';
+      } catch (e) {
+        referLink.authNote = e?.code === 'auth/operation-not-allowed' || e?.code === 'auth/admin-restricted-operation'
+          ? 'sawee-refer ยังไม่เปิด Anonymous sign-in (Authentication › Sign-in method)'
+          : ('ลงชื่อ sawee-refer ไม่สำเร็จ: ' + (e?.message || e));
+      }
+      return referLink.app.firestore();
+    };
+    const referErrorText = (e) => {
+      const msg = String(e?.message || e);
+      if (e?.code === 'permission-denied' || /permission/i.test(msg)) return 'sawee-refer ไม่อนุญาตให้อ่าน ncds_demand — เพิ่ม rule อ่านใน Firestore ของ sawee-refer' + (referLink.authNote ? ' · ' + referLink.authNote : '');
+      return msg;
+    };
+
+    // โหลดรอบนัด: อ่านตรงจาก sawee-refer (ตาม hcode) + สำเนาใน ncds_demand_inbox (ถ้ามี จาก Bridge/CLI)
+    const loadNcdsRounds = async (ctx, hospitalId, diag) => {
       const hosp = ctx.findHospital(hospitalId);
-      const isAdmin = normalizeUserRole(ctx.currentUser?.role) === 'admin';
-      const tasks = [db.collection('ncds_demand_inbox').where('hospital_id', '==', String(hospitalId)).get()];
-      if (isAdmin && safeText(hosp?.hcode)) tasks.push(db.collection('ncds_demand_inbox').where('hcode', '==', safeText(hosp.hcode)).get());
-      const snaps = await Promise.all(tasks);
+      const hcode = safeText(hosp?.hcode);
       const m = new Map();
-      snaps.forEach(sn => sn.docs.forEach(d => m.set(d.id, { id: d.id, ...d.data() })));
+      const info = diag || {};
+      info.referConfigured = !!(await loadReferLinkConfig());
+      if (info.referConfigured && hcode) {
+        try {
+          const rdb = await getReferDb();
+          const snap = await rdb.collection('ncds_demand').where('hcode', '==', hcode).get();
+          snap.docs.forEach(d => m.set(d.id, { id: d.id, ...d.data(), _source: 'refer' }));
+          info.referCount = snap.size;
+        } catch (e) { info.referError = referErrorText(e); }
+      }
+      try {
+        const sn = await db.collection('ncds_demand_inbox').where('hospital_id', '==', String(hospitalId)).get();
+        sn.docs.forEach(d => { if (!m.has(d.id)) m.set(d.id, { id: d.id, ...d.data(), _source: 'inbox' }); });
+      } catch (e) { /* inbox เป็นทางสำรอง ไม่บังคับ */ }
       return [...m.values()].sort((a, b) => String(a.round_date || '').localeCompare(String(b.round_date || '')));
+    };
+
+    // แอดมิน: ตั้งค่าการเชื่อม + ผูก hcode จากรายชื่อที่มีใน sawee-refer
+    const ReferLinkPanel = ({ ctx, hosp, onChanged }) => {
+      const [text, setText] = useState('');
+      const [busy, setBusy] = useState('');
+      const [hcodes, setHcodes] = useState(null);
+      const [pick, setPick] = useState('');
+      const [cfg, setCfg] = useState(referLink.cfg);
+      useEffect(() => { loadReferLinkConfig().then(setCfg); }, []);
+      const norm = (x) => normalizeForMatch(String(x || '').replace(/โรงพยาบาลส่งเสริมสุขภาพตำบล|รพ\.?\s*สต\.?|บ้าน/g, ''));
+      const saveCfg = async () => {
+        const c = parseFirebaseConfigText(text);
+        if (!c.apiKey || !c.projectId) return ctx.showToast('ไม่พบ apiKey / projectId ในข้อความที่วาง', 'error');
+        setBusy('cfg');
+        try {
+          await db.collection('config').doc('refer_link').set({ ...c, updated_at: firebase.firestore.FieldValue.serverTimestamp(), updated_by: safeText(ctx.currentUser.name) });
+          await writeAuditLog(ctx.currentUser, 'REFER_LINK_CONFIG', 'config', 'refer_link', { projectId: c.projectId });
+          setCfg(await loadReferLinkConfig(true)); setText(''); ctx.showToast(`เชื่อม ${c.projectId} แล้ว`); onChanged();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(''); }
+      };
+      const listHcodes = async () => {
+        setBusy('list');
+        try {
+          const rdb = await getReferDb();
+          const snap = await rdb.collection('ncds_demand').limit(1000).get();
+          const mp = new Map();
+          snap.docs.forEach(d => { const x = d.data(); if (x.hcode && !mp.has(x.hcode)) mp.set(x.hcode, x.hcode_name || ''); });
+          const list = [...mp.entries()].map(([hcode, name]) => ({ hcode, name })).sort((a, b) => a.hcode.localeCompare(b.hcode));
+          setHcodes(list);
+          const guess = list.find(x => norm(x.name) && norm(x.name) === norm(hosp?.hospital_name));
+          setPick(guess ? guess.hcode : '');
+        } catch (e) { ctx.showToast(referErrorText(e), 'error'); } finally { setBusy(''); }
+      };
+      const saveHcode = async (hospitalId, hcode) => {
+        await db.collection('master_hospitals').doc(String(hospitalId)).set({ hcode, updated_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await writeAuditLog(ctx.currentUser, 'ADMIN_SAVE', 'master_hospitals', hospitalId, { hcode });
+      };
+      const autoAll = async () => {
+        if (!hcodes) return;
+        setBusy('auto');
+        try {
+          let n = 0;
+          for (const h of ctx.appDb.hospitals) {
+            if (safeText(h.hcode)) continue;
+            const hit = hcodes.find(x => norm(x.name) && norm(x.name) === norm(h.hospital_name));
+            if (hit) { await saveHcode(h.hospital_id, hit.hcode); n++; }
+          }
+          await ctx.refreshData(); ctx.showToast(`ผูก hcode อัตโนมัติ ${n} แห่ง`); onChanged();
+        } catch (e) { ctx.showToast(e.message, 'error'); } finally { setBusy(''); }
+      };
+      return (
+        <div className="border border-cyan-200 bg-cyan-50/60 rounded-xl p-4 space-y-3 text-sm">
+          <div className="font-bold text-cyan-900"><i className="fa-solid fa-link mr-2"></i>การเชื่อม Sawee Refer (แอดมิน)</div>
+          {cfg ? <div className="text-slate-600">เชื่อมกับโปรเจกต์ <b className="font-mono">{cfg.projectId}</b> แล้ว {referLink.authNote && <span className="text-amber-700">· {referLink.authNote}</span>}</div>
+               : <div className="text-slate-600">ยังไม่ได้ตั้งค่า — วาง <code>firebaseConfig</code> ของ Sawee Refer (Firebase Console ของ sawee-refer › Project settings › Your apps › Config)</div>}
+          <details open={!cfg}>
+            <summary className="cursor-pointer font-bold text-cyan-800">{cfg ? 'เปลี่ยนค่าการเชื่อม' : 'วางค่า firebaseConfig'}</summary>
+            <textarea value={text} onChange={e => setText(e.target.value)} rows="5" aria-label="firebaseConfig ของ Sawee Refer" placeholder={'const firebaseConfig = {\n  apiKey: "...",\n  authDomain: "sawee-refer.firebaseapp.com",\n  projectId: "sawee-refer",\n  appId: "..."\n};'} className="mt-2 w-full p-2 border rounded-lg font-mono text-xs bg-white" />
+            <button onClick={saveCfg} disabled={!!busy || !text.trim()} className="mt-2 px-4 py-2 rounded-lg bg-cyan-700 text-white font-bold disabled:opacity-40">บันทึกการเชื่อม</button>
+          </details>
+          {cfg && (
+            <div className="space-y-2">
+              <button onClick={listHcodes} disabled={!!busy} className="px-3 py-1.5 rounded-lg bg-white border border-cyan-300 font-bold text-cyan-800"><i className={`fa-solid ${busy === 'list' ? 'fa-spinner fa-spin' : 'fa-list'} mr-1`}></i>ดูรายชื่อ hcode ที่ Sawee Refer ส่งมา</button>
+              {hcodes && (hcodes.length ? (
+                <div className="flex flex-wrap gap-2 items-center">
+                  {!safeText(hosp?.hcode) && <>
+                    <select value={pick} onChange={e => setPick(e.target.value)} aria-label="เลือก hcode" className="p-2 border rounded-lg bg-white">
+                      <option value="">— เลือก hcode ของ {hosp?.hospital_name} —</option>
+                      {hcodes.map(x => <option key={x.hcode} value={x.hcode}>{x.hcode} · {x.name}</option>)}
+                    </select>
+                    <button onClick={async () => { if (!pick) return; setBusy('save'); try { await saveHcode(hosp.hospital_id, pick); await ctx.refreshData(); ctx.showToast('บันทึก hcode แล้ว'); onChanged(); } catch (e) { ctx.showToast(e.message, 'error'); } finally { setBusy(''); } }} disabled={!pick || !!busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white font-bold disabled:opacity-40">ใช้ hcode นี้</button>
+                  </>}
+                  <button onClick={autoAll} disabled={!!busy} className="px-3 py-2 rounded-lg bg-white border font-bold text-slate-700">ผูก hcode ทุก รพ.สต. ที่ชื่อตรงกัน</button>
+                </div>
+              ) : <div className="text-slate-500">ยังไม่มีเอกสาร ncds_demand ใน Sawee Refer</div>)}
+            </div>
+          )}
+        </div>
+      );
     };
 
     const NcdsMapCell = ({ ctx, icode, onMapped }) => {
@@ -7801,6 +7935,10 @@ const AdminConfigView = ({ ctx }) => {
       const [selected, setSelected] = useState(new Set());
       const [busy, setBusy] = useState('');
       const [err, setErr] = useState('');
+      const [diag, setDiag] = useState({});
+      const [showLink, setShowLink] = useState(false);
+      const [reloadKey, setReloadKey] = useState(0);
+      const ctxRef = useRef(ctx); ctxRef.current = ctx;
       const isAdmin = normalizeUserRole(ctx.currentUser?.role) === 'admin';
       const hosp = ctx.findHospital(hospitalId);
       const today = ncdsToday();
@@ -7808,7 +7946,11 @@ const AdminConfigView = ({ ctx }) => {
       const load = async () => {
         setErr('');
         try {
-          const rows = await loadNcdsRounds(ctx, hospitalId);
+          const d = {};
+          const c = ctxRef.current;
+          const rows = await loadNcdsRounds(c, hospitalId, d);
+          setDiag(d);
+          if (isAdmin && (!d.referConfigured || !safeText(c.findHospital(hospitalId)?.hcode) || d.referError)) setShowLink(true);
           setRounds(rows);
           onLoaded && onLoaded(rows);
           setSelected(prev => {
@@ -7818,17 +7960,9 @@ const AdminConfigView = ({ ctx }) => {
           });
         } catch (e) { setErr(e.message || String(e)); setRounds([]); }
       };
-      useEffect(() => { load(); }, [hospitalId]);
-
-      const syncNow = async () => {
-        setBusy('sync');
-        try {
-          const r = await callInvsBridge('sync_ncds');
-          ctx.showToast(`ดึงยอดจาก Sawee Refer ${r.fetched} รอบ (บันทึก ${r.written})` + (Object.keys(r.unmapped || {}).length ? ` · ยังไม่ผูก hcode ${Object.keys(r.unmapped).join(', ')}` : ''), Object.keys(r.unmapped || {}).length ? 'warn' : 'success');
-          await load();
-        } catch (e) { ctx.showToast('ดึงยอดไม่สำเร็จ: ' + (e?.message || e) + ' — ปุ่มนี้ใช้ได้บนเครื่องที่มี Bridge', 'error'); }
-        finally { setBusy(''); }
-      };
+      // โหลดใหม่เมื่อเปลี่ยน รพ.สต. / กดรีเฟรช / ข้อมูล รพ.สต. เปลี่ยน (เช่น เพิ่งผูก hcode)
+      const hcodeNow = safeText(hosp?.hcode);
+      useEffect(() => { load(); }, [hospitalId, reloadKey, hcodeNow]);
 
       const hosxpIndex = useMemo(() => buildHosxpIndex(ctx.appDb.drugs), [ctx.appDb.drugs]);
       const merged = useMemo(() => {
@@ -7880,16 +8014,20 @@ const AdminConfigView = ({ ctx }) => {
         <Modal isOpen onClose={onClose} title={`ยา NCDs ตามนัด — ${hosp?.hospital_name || hospitalId}`} maxWidth="max-w-6xl">
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
-              <span>ยอดจาก <b>Sawee Refer</b> (คำนวณจากวิธีใช้ของผู้ป่วยที่นัดรอบออกหน่วย รวมส่วนเผื่อแล้ว) · ดูอย่างเดียว ยังไม่บวกเข้าใบเบิก</span>
+              <span>ยอดจาก <b>Sawee Refer</b> อ่านตรงแบบเรียลไทม์ (คำนวณจากวิธีใช้ของผู้ป่วยที่นัดรอบออกหน่วย รวมส่วนเผื่อแล้ว) · ดูอย่างเดียว ยังไม่บวกเข้าใบเบิก</span>
               <span className="ml-auto flex gap-2">
-                {isAdmin && <button onClick={syncNow} disabled={!!busy} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy === 'sync' ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>ดึงยอดใหม่</button>}
+                <button onClick={() => { setRounds(null); setReloadKey(k => k + 1); }} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-bold"><i className="fa-solid fa-rotate mr-1"></i>รีเฟรช</button>
+                {isAdmin && <button onClick={() => setShowLink(v => !v)} className="px-3 py-1.5 rounded-lg bg-white border border-cyan-300 text-cyan-800 font-bold"><i className="fa-solid fa-gear mr-1"></i>การเชื่อม</button>}
                 <button onClick={printList} disabled={!merged.length} className="px-3 py-1.5 rounded-lg bg-slate-800 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-print mr-1"></i>พิมพ์</button>
               </span>
             </div>
-            {!hosp?.hcode && isAdmin && <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm">รพ.สต. นี้ยังไม่ได้ตั้ง <b>hcode</b> (รหัสสถานบริการ 5 หลัก) — ตั้งได้ที่ จัดการฐานข้อมูล › รพ.สต. เพื่อให้ยอดจาก Sawee Refer ผูกได้แน่นอน</div>}
-            {err && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">โหลดไม่สำเร็จ: {err}{/permission/i.test(err) ? ' — ตรวจว่า deploy Firestore rules v5.9 แล้ว' : ''}</div>}
+            {isAdmin && showLink && <ReferLinkPanel ctx={ctx} hosp={hosp} onChanged={() => { setRounds(null); setReloadKey(k => k + 1); }} />}
+            {!hosp?.hcode && <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm">รพ.สต. นี้ยังไม่ได้ผูก <b>hcode</b> (รหัสสถานบริการ 5 หลัก) จึงยังดึงยอดจาก Sawee Refer ไม่ได้{isAdmin ? ' — กด "ดูรายชื่อ hcode ที่ Sawee Refer ส่งมา" ด้านบนเพื่อเลือก' : ' — แจ้งแอดมิน'}</div>}
+            {diag.referError && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm"><b>อ่านจาก Sawee Refer ไม่ได้:</b> {diag.referError}</div>}
+            {isAdmin && diag.referConfigured === false && !showLink && <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm">ยังไม่ได้ตั้งค่าการเชื่อม Sawee Refer — กดปุ่ม "การเชื่อม"</div>}
+            {err && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">โหลดไม่สำเร็จ: {err}</div>}
             {rounds === null ? <div className="py-10 flex justify-center"><div className="loader"></div></div> : !rounds.length ? (
-              <div className="py-10 text-center text-slate-400">ยังไม่มียอดยาตามนัดจาก Sawee Refer สำหรับ รพ.สต. นี้{isAdmin ? ' — กด "ดึงยอดใหม่" บนเครื่องที่มี Bridge' : ''}</div>
+              <div className="py-10 text-center text-slate-400">ยังไม่มียอดยาตามนัดจาก Sawee Refer สำหรับ รพ.สต. นี้{hosp?.hcode ? ` (hcode ${hosp.hcode})` : ''}</div>
             ) : (
               <>
                 <div className="flex flex-wrap gap-2" role="group" aria-label="เลือกวันนัด">
@@ -7955,12 +8093,13 @@ const AdminConfigView = ({ ctx }) => {
     const NcdsDemandFab = ({ ctx, hospitalId }) => {
       const [open, setOpen] = useState(false);
       const [pending, setPending] = useState(null);
+      const fabHcode = safeText(ctx.findHospital(hospitalId)?.hcode);
       useEffect(() => {
         let alive = true;
         if (!hospitalId) return;
         loadNcdsRounds(ctx, hospitalId).then(rows => { if (alive) setPending(rows.filter(r => !r.consumed_by_refill && String(r.round_date) >= ncdsToday()).length); }).catch(() => alive && setPending(0));
         return () => { alive = false; };
-      }, [hospitalId]);
+      }, [hospitalId, fabHcode]);
       if (!hospitalId) return null;
       return (
         <>

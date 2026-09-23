@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <title>Sawee Rxfill — เบิกยาภายใน รพ.</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%2310b981%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23047857%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22url%28%23g%29%22%2F%3E%3Cpath%20fill%3D%22%23fff%22%20d%3D%22M9%2020a3%203%200%200%201%203-3h22a3%203%200%200%201%203%203v3h7.2a3%203%200%200%201%202.4%201.2l6.8%209a3%203%200%200%201%20.6%201.8V43a3%203%200%200%201-3%203h-2.2a6%206%200%200%201-11.6%200H27.8a6%206%200%200%201-11.6%200H12a3%203%200%200%201-3-3Zm28%207v7h11.4l-5.2-7Z%22%2F%3E%3Ccircle%20cx%3D%2222%22%20cy%3D%2245%22%20r%3D%223.2%22%20fill%3D%22%23047857%22%2F%3E%3Ccircle%20cx%3D%2243%22%20cy%3D%2245%22%20r%3D%223.2%22%20fill%3D%22%23047857%22%2F%3E%3Cpath%20fill%3D%22%23047857%22%20d%3D%22M21%2025h4v4h4v4h-4v4h-4v-4h-4v-4h4Z%22%2F%3E%3C%2Fsvg%3E">
+  <meta name="theme-color" content="#047857">
 
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -49,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=5.7.2"></script>
+  <script src="shared.js?v=5.8.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '5.7.2';
+      var need = '5.8.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -184,7 +185,9 @@
       return normalizeForMatch(d.drug_name).includes(needle)
         || String(d.drug_id || '').toLowerCase().includes(q.toLowerCase().trim())
         || String(d.hosxp_code || '').toLowerCase().includes(q.toLowerCase().trim())
-        || normalizeForMatch(d.fuzzy).includes(needle);
+        || normalizeForMatch(d.fuzzy).includes(needle)
+        || normalizeForMatch(d.invs_keywords).includes(needle)
+        || String(d.invs_location || '').toLowerCase() === q.toLowerCase().trim();
     };
 
     // ช่องค้นหายาจาก master_drugs (ไม่แสดงยายกเลิกใช้ และวัคซีน type 6)
@@ -220,7 +223,7 @@
                 <button key={d.drug_id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => pick(d)}
                   className={`w-full text-left px-4 py-2.5 flex items-center gap-3 border-b last:border-0 ${i === hi ? 'bg-teal-50' : 'hover:bg-slate-50'}`}>
                   <span className="font-mono text-xs text-slate-400 w-16 shrink-0">{d.drug_id}</span>
-                  <span className="flex-1 text-sm font-medium">{d.drug_name}</span>
+                  <span className="flex-1 text-sm font-medium">{d.drug_name}{d.invs_keywords ? <span className="block text-[11px] text-slate-400 font-normal">{d.invs_keywords}</span> : null}</span>
                   <span className="text-xs text-slate-400 shrink-0">{ctx.unitName(d)}{safePackSize(d.pack_size) > 1 ? ` · แพ็ค ${safePackSize(d.pack_size)}` : ''}</span>
                   {added && <span className="text-[10px] font-bold text-teal-700 bg-teal-100 px-1.5 py-0.5 rounded">อยู่ในใบแล้ว</span>}
                 </button>
@@ -254,8 +257,9 @@
     };
 
     // ===== ใบพิมพ์ (ใช้ได้ทั้งหน่วยงานและห้องยา) =====
-    const PrintSheet = ({ req, dept }) => {
+    const PrintSheet = ({ req, dept, drugById }) => {
       if (!req) return null;
+      const locOf = (id) => safeText(drugById?.get(String(id))?.invs_location);
       const items = (req.items || []).filter(it => toNonNegativeNumber(it.dispenseQty ?? it.requestQty) > 0);
       const total = items.reduce((s, it) => s + internalItemValue(it), 0);
       return (
@@ -271,11 +275,11 @@
             {req.invs_sub_po_no && <div>INVS: {req.invs_sub_po_no}</div>}
           </div>
           <table>
-            <thead><tr><th>#</th><th>รหัส</th><th>รายการ</th><th>หน่วย</th>{req.kind === 'pharmacy' && <th>ใช้/ช่วง</th>}{req.kind === 'pharmacy' && <th>คงเหลือ</th>}<th>จำนวนเบิก</th><th>มูลค่า</th><th>หมายเหตุ</th></tr></thead>
+            <thead><tr><th>#</th><th>ตำแหน่ง</th><th>รหัส</th><th>รายการ</th><th>หน่วย</th>{req.kind === 'pharmacy' && <th>ใช้/ช่วง</th>}{req.kind === 'pharmacy' && <th>คงเหลือ</th>}<th>จำนวนเบิก</th><th>มูลค่า</th><th>หมายเหตุ</th></tr></thead>
             <tbody>
               {items.map((it, i) => (
                 <tr key={it.drugId}>
-                  <td style={{ textAlign: 'center' }}>{i + 1}</td><td>{it.drugId}</td><td>{it.name}</td><td>{it.unit}{safePackSize(it.packSize) > 1 ? ` (×${safePackSize(it.packSize)})` : ''}</td>
+                  <td style={{ textAlign: 'center' }}>{i + 1}</td><td>{locOf(it.drugId)}</td><td>{it.drugId}</td><td>{it.name}</td><td>{it.unit}{safePackSize(it.packSize) > 1 ? ` (×${safePackSize(it.packSize)})` : ''}</td>
                   {req.kind === 'pharmacy' && <td style={{ textAlign: 'right' }}>{fmtNum(it.usage)}</td>}
                   {req.kind === 'pharmacy' && <td style={{ textAlign: 'right' }}>{fmtNum(it.onHand)}</td>}
                   <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtNum(it.dispenseQty ?? it.requestQty)}</td>
@@ -283,7 +287,7 @@
                   <td>{it.note || ''}</td>
                 </tr>
               ))}
-              <tr><td colSpan={req.kind === 'pharmacy' ? 7 : 5} style={{ textAlign: 'right', fontWeight: 700 }}>รวม {items.length} รายการ</td><td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtMoney(total)}</td><td></td></tr>
+              <tr><td colSpan={req.kind === 'pharmacy' ? 8 : 6} style={{ textAlign: 'right', fontWeight: 700 }}>รวม {items.length} รายการ</td><td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtMoney(total)}</td><td></td></tr>
             </tbody>
           </table>
           {req.note && <div style={{ marginTop: 8, fontSize: 13 }}>หมายเหตุ: {req.note}</div>}
@@ -348,8 +352,23 @@
     };
 
     // ===== หน้าเบิกยาของหน่วยงาน: เลือกยา คีย์จำนวน ส่ง =====
+    // ใบล่าสุดของหน่วยงาน (ไม่นับใบยกเลิก) ใช้เป็นโครงรายการยาของใบใหม่
+    const lastDeptTemplate = (ctx) => ctx.reqs
+      .filter(r => r.kind !== 'pharmacy' && r.status !== 'Cancelled' && (r.items || []).length)
+      .sort((a, b) => tsToMillis(b.submitted_at || b.created_at) - tsToMillis(a.submitted_at || a.created_at))[0] || null;
+
     const DeptReqView = ({ ctx, editReq, onDone }) => {
-      const [items, setItems] = useState(() => (editReq?.items || []).map(it => ({ ...it })));
+      const [template] = useState(() => editReq ? null : lastDeptTemplate(ctx));
+      const [items, setItems] = useState(() => {
+        if (editReq) return (editReq.items || []).map(it => ({ ...it }));
+        if (!template) return [];
+        // โครงจากใบล่าสุด: ข้อมูลยาอัปเดตจาก master, จำนวนเริ่มที่ 0 ให้กรอกเอง
+        return (template.items || []).map(it => {
+          const drug = ctx.drugById.get(String(it.drugId));
+          if (!drug || isDrugDiscontinued(drug)) return null;
+          return { ...baseItemFromDrug(ctx, drug), requestQty: 0, dispenseQty: 0, note: '', source: 'template', lastQty: toNonNegativeNumber(it.dispenseQty ?? it.requestQty) };
+        }).filter(Boolean);
+      });
       const [note, setNote] = useState(editReq?.note || '');
       const [urgent, setUrgent] = useState(!!editReq?.urgent);
       const [saving, setSaving] = useState(false);
@@ -391,6 +410,8 @@
       }, [items.length]);
 
       const setQty = (id, qty) => setItems(prev => prev.map(it => String(it.drugId) === id ? { ...it, requestQty: toNonNegativeNumber(qty), dispenseQty: toNonNegativeNumber(qty) } : it));
+      const fillLast = () => setItems(prev => prev.map(it => it.lastQty ? { ...it, requestQty: it.lastQty, dispenseQty: it.lastQty } : it));
+      const clearTemplate = () => setItems(prev => prev.filter(it => toNonNegativeNumber(it.requestQty) > 0));
       const setItemNote = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === id ? { ...it, note: v } : it));
       const removeItem = (id) => setItems(prev => prev.filter(it => String(it.drugId) !== id));
 
@@ -408,7 +429,7 @@
           onConfirm: async () => {
             setSaving(true);
             try {
-              const clean = valid.map(it => ({ ...it, requestQty: toNonNegativeNumber(it.requestQty), dispenseQty: toNonNegativeNumber(it.requestQty), note: safeText(it.note) }));
+              const clean = valid.map(({ lastQty, ...it }) => ({ ...it, source: it.source === 'template' ? 'template' : (it.source || 'manual'), requestQty: toNonNegativeNumber(it.requestQty), dispenseQty: toNonNegativeNumber(it.requestQty), note: safeText(it.note) }));
               await saveInternalReq({ ctx, editReq, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent } });
               ctx.showToast(editReq ? 'ส่งใบเบิกที่แก้ไขแล้ว' : 'ส่งใบเบิกแล้ว รอห้องยาตรวจสอบ');
               await ctx.reload();
@@ -440,8 +461,18 @@
             </div>
           )}
 
+          {template && (
+            <div className="bg-teal-50 border border-teal-200 text-teal-900 rounded-xl px-4 py-3 text-sm flex flex-wrap items-center gap-3">
+              <span><i className="fa-solid fa-clone mr-2"></i>ดึงรายการยาจากใบล่าสุด <b>{template.doc_no || template.id}</b> ({formatAppDateTime(template.submitted_at || template.created_at)}) มาเป็นโครงแล้ว — กรอกเฉพาะจำนวนที่ต้องการ รายการที่เป็น 0 จะไม่ถูกส่ง</span>
+              <span className="flex gap-2 ml-auto">
+                <button onClick={fillLast} className="px-3 py-1.5 rounded-lg bg-white border border-teal-300 font-bold hover:bg-teal-100">ใส่จำนวนเท่าครั้งก่อน</button>
+                <button onClick={clearTemplate} className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 font-bold text-slate-600 hover:bg-slate-100">ลบรายการที่ยังเป็น 0</button>
+              </span>
+            </div>
+          )}
+
           <div className="bg-white rounded-2xl border shadow-sm p-5 space-y-4">
-            <DrugSearchBox ctx={ctx} onPick={d => addDrug(d, 0)} excludeIds={itemIds} autoFocus={!editReq} />
+            <DrugSearchBox ctx={ctx} onPick={d => addDrug(d, 0)} excludeIds={itemIds} autoFocus={!editReq && !template} />
             {frequent.length > 0 && (
               <div>
                 <div className="text-xs font-bold text-slate-500 mb-2">ยาที่เคยเบิก (กดเพื่อเพิ่ม · ใส่จำนวนครั้งล่าสุดให้)</div>
@@ -492,6 +523,7 @@
                             className="num-in w-24" value={it.requestQty || ''} placeholder="0"
                             onChange={e => { const v = e.target.value.replace(/[^\d.]/g, ''); setQty(id, v === '' ? 0 : Number(v)); }} />
                           {safePackSize(it.packSize) > 1 && toNonNegativeNumber(it.requestQty) > 0 && <div className="text-[11px] text-slate-400 mt-0.5">= {formatQty(it.requestQty, it.packSize)} แพ็ค</div>}
+                          {it.lastQty ? <button type="button" onClick={() => setQty(id, it.lastQty)} className="text-[11px] text-teal-700 hover:underline mt-0.5 block ml-auto">ครั้งก่อน {fmtNum(it.lastQty)}</button> : null}
                           {hint && <button onClick={() => setQty(id, hint)} className="text-[11px] text-amber-700 hover:underline mt-0.5 block ml-auto">ปัดเป็น {fmtNum(hint)} ให้ลงแพ็ค?</button>}
                         </td>
                         <td className="p-3"><input value={it.note || ''} onChange={e => setItemNote(id, e.target.value)} placeholder="-" aria-label={`หมายเหตุ ${it.name}`} className="w-full min-w-[8rem] px-2 py-1 border border-slate-200 rounded-lg text-sm" /></td>
@@ -646,6 +678,13 @@ ORDER BY d.name`;
       const [sortBy, setSortBy] = useState('name');
       const [showUnmatched, setShowUnmatched] = useState(false);
       const [showSql, setShowSql] = useState(false);
+      const [diag, setDiag] = useState(null);
+      const runDiag = async () => {
+        setBusy('diag');
+        try { setDiag(await callInvsBridge('hosxp_diag', '', { date_from: from, date_to: to })); }
+        catch (e) { setDiag({ error: e?.message || String(e) }); }
+        finally { setBusy(''); }
+      };
       const fileRef = useRef(null);
 
       const usageMatch = useMemo(() => usageRaw ? matchUsage(usageRaw, ctx.drugs) : null, [usageRaw, ctx.drugs]);
@@ -748,7 +787,12 @@ ORDER BY d.name`;
           const data = await callInvsBridge('hosxp_usage', '', { date_from: from, date_to: to });
           setUsageRaw(data.rows || []);
           setUsageMeta({ source: 'bridge', from, to, days: data.days || periodDays, fetchedAt: new Date().toISOString(), count: data.count });
-          ctx.showToast(`ดึงยอดใช้ ${fmtNum(data.count)} รายการจาก HOSxP แล้ว`);
+          if (!data.count) {
+            ctx.showToast('HOSxP คืนข้อมูล 0 รายการ — กำลังตรวจหาสาเหตุ', 'warn');
+            try { setDiag(await callInvsBridge('hosxp_diag', '', { date_from: from, date_to: to })); } catch (de) { setDiag({ error: de?.message || String(de) }); }
+          } else {
+            ctx.showToast(`ดึงยอดใช้ ${fmtNum(data.count)} รายการจาก HOSxP แล้ว`);
+          }
         } catch (e) {
           ctx.showToast((e?.message || String(e)) + ' — ถ้าเครื่องนี้ไม่มี Bridge ให้ใช้ "นำเข้าไฟล์" แทน', 'error');
         } finally { setBusy(''); }
@@ -889,6 +933,7 @@ ORDER BY d.name`;
                   {busy === 'file' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-file-arrow-up mr-2"></i>}นำเข้าไฟล์
                 </button>
                 <input ref={fileRef} type="file" accept=".csv,.xls,.xlsx" className="hidden" onChange={e => importFile(e.target.files?.[0])} />
+                <button onClick={runDiag} disabled={!!busy} className="px-3 py-2.5 rounded-xl text-slate-500 hover:bg-slate-100 font-bold text-sm"><i className={`fa-solid ${busy === 'diag' ? 'fa-spinner fa-spin' : 'fa-stethoscope'} mr-1`}></i>ตรวจการเชื่อม HOSxP</button>
                 <button onClick={() => setShowSql(true)} className="px-3 py-2.5 rounded-xl text-slate-500 hover:bg-slate-100 font-bold text-sm"><i className="fa-solid fa-code mr-1"></i>SQL สำหรับ export</button>
               </div>
             </div>
@@ -1053,6 +1098,29 @@ ORDER BY d.name`;
                 </tbody>
               </table>
             </div>
+          </Modal>
+
+          <Modal isOpen={!!diag} onClose={() => setDiag(null)} title="ตรวจการเชื่อม HOSxP ทีละขั้น" maxWidth="max-w-3xl">
+            {diag?.error ? (
+              <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+                <b>เรียก Bridge ไม่ได้:</b> {diag.error}
+                <div className="mt-2 text-slate-600">ถ้าข้อความบอกว่า action ไม่รองรับ แปลว่าเครื่องนี้ยังใช้ Bridge รุ่นเก่า ให้ติดตั้ง Bridge v2.5.0 แล้วลองใหม่</div>
+              </div>
+            ) : diag && (
+              <div className="space-y-2">
+                {(diag.steps || []).map((st, i) => (
+                  <div key={i} className={`rounded-xl border p-3 text-sm ${st.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                    <div className="font-bold"><i className={`fa-solid ${st.ok ? 'fa-circle-check text-emerald-600' : 'fa-circle-xmark text-red-600'} mr-2`}></i>{({ config: 'ค่าใน config.php', connect: 'เชื่อมต่อฐาน HOSxP', tables: 'ตาราง', data_range: 'ช่วงข้อมูลที่มี', rows_in_range: 'ข้อมูลในช่วงที่เลือก', join_drugitems: 'จับคู่กับ drugitems', sample: 'ตัวอย่างข้อมูล', custom_sql: 'SQL กำหนดเอง', dates: 'วันที่' })[st.step] || st.step}</div>
+                    <div className="text-slate-700 mt-1">{st.detail}</div>
+                    {st.data?.rows?.length > 0 && (
+                      <div className="overflow-x-auto mt-2"><table className="text-xs w-full"><thead><tr className="text-slate-500"><th className="text-left p-1">icode</th><th className="text-left p-1">ชื่อ</th><th className="text-left p-1">หน่วย</th><th className="text-right p-1">qty</th><th className="text-left p-1">rxdate</th><th className="text-left p-1">an</th></tr></thead>
+                        <tbody>{st.data.rows.map((r, j) => <tr key={j} className="border-t"><td className="p-1 font-mono">{r.icode}</td><td className="p-1">{r.name}</td><td className="p-1">{r.units}</td><td className="p-1 text-right">{r.qty}</td><td className="p-1">{r.rxdate}</td><td className="p-1">{r.an || '-'}</td></tr>)}</tbody></table></div>
+                    )}
+                  </div>
+                ))}
+                <div className={`text-sm font-bold ${diag.all_pass ? 'text-emerald-700' : 'text-red-700'}`}>{diag.all_pass ? 'ผ่านทุกขั้น — ถ้ายังได้ 0 รายการ ให้ตรวจว่า hosxp_code ของยาใน INVS ตรงกับ icode (กด Sync รหัส HOSxP)' : 'ขั้นที่เป็นสีแดงคือจุดที่ต้องแก้'}</div>
+              </div>
+            )}
           </Modal>
 
           <Modal isOpen={showSql} onClose={() => setShowSql(false)} title="SQL สำหรับ export ยอดใช้จาก HOSxP (Navicat)" maxWidth="max-w-3xl">
@@ -1432,7 +1500,7 @@ ORDER BY d.name`;
               </div>
             </main>
           </div>
-          <PrintSheet req={printReq} dept={dept} />
+          <PrintSheet req={printReq} dept={dept} drugById={drugById} />
           <UniversalConfirmModal confirmDialog={confirmDialog} setConfirmDialog={setConfirmDialog} />
           {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
         </>

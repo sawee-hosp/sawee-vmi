@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <title>ระบบส่งต่อผู้ป่วย รพ.สวี</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iI0ZGRjFFNSIvPjxwYXRoIGQ9Ik0zIDExYTIgMiAwIDAgMSAyLTJoMTFhMiAyIDAgMCAxIDIgMnY0aDQuM2EyIDIgMCAwIDEgMS42LjhsMi43IDMuNmEyIDIgMCAwIDEgLjQgMS4yVjIzYTIgMiAwIDAgMS0yIDJoLTFhMy41IDMuNSAwIDAgMC03IDBoLTJhMy41IDMuNSAwIDAgMC03IDBINWEyIDIgMCAwIDEtMi0yVjExeiIgZmlsbD0iI0U4NjIwQyIvPjxwYXRoIGQ9Ik0yMCAxMi45aDMuNGwyLjUgMy40SDIweiIgZmlsbD0iI0ZGRDlCRSIvPjxjaXJjbGUgY3g9IjkuNSIgY3k9IjI0LjUiIHI9IjMiIGZpbGw9IiMzQTJBMUQiLz48Y2lyY2xlIGN4PSI5LjUiIGN5PSIyNC41IiByPSIxLjIiIGZpbGw9IiNGRkYxRTUiLz48Y2lyY2xlIGN4PSIyMi41IiBjeT0iMjQuNSIgcj0iMyIgZmlsbD0iIzNBMkExRCIvPjxjaXJjbGUgY3g9IjIyLjUiIGN5PSIyNC41IiByPSIxLjIiIGZpbGw9IiNGRkYxRTUiLz48cGF0aCBkPSJNOSAxMy40aDIuM3YtMi4zaDIuNHYyLjNIMTZ2Mi40aC0yLjN2Mi4zaC0yLjR2LTIuM0g5eiIgZmlsbD0iI2ZmZiIvPjwvc3ZnPgo=">
+<meta name="theme-color" content="#E8620C">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -12,35 +14,54 @@
 
 <style>
 :root{
-  --bg:#F2F5F3; --surface:#fff; --border:#D8DDD9; --line:#EAEEEB;
-  --ink:#1C2B24; --muted:#5F6F63; --accent:#1B6B47; --accent-dim:#E5F2EB;
-  --warn:#8B2020; --warn-dim:#FBEAEA; --amber:#8A5A00; --amber-dim:#FFF4DC;
+  --bg:#FFF7F0; --surface:#fff; --border:#F0DCCB; --line:#FAEDE2;
+  --ink:#2B1D12; --muted:#7A6455; --accent:#E8620C; --accent-dim:#FFEBDC;
+  --accent-deep:#C44E05; --accent-soft:#FF8534;
+  --warn:#B3261E; --warn-dim:#FDEAE8; --amber:#8A5A00; --amber-dim:#FFF4DC;
+  --grad:linear-gradient(135deg,#FF8534 0%,#E8620C 55%,#C44E05 100%);
+  --amb-mask:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iI0ZGRjFFNSIvPjxwYXRoIGQ9Ik0zIDExYTIgMiAwIDAgMSAyLTJoMTFhMiAyIDAgMCAxIDIgMnY0aDQuM2EyIDIgMCAwIDEgMS42LjhsMi43IDMuNmEyIDIgMCAwIDEgLjQgMS4yVjIzYTIgMiAwIDAgMS0yIDJoLTFhMy41IDMuNSAwIDAgMC03IDBoLTJhMy41IDMuNSAwIDAgMC03IDBINWEyIDIgMCAwIDEtMi0yVjExeiIgZmlsbD0iI0U4NjIwQyIvPjxwYXRoIGQ9Ik0yMCAxMi45aDMuNGwyLjUgMy40SDIweiIgZmlsbD0iI0ZGRDlCRSIvPjxjaXJjbGUgY3g9IjkuNSIgY3k9IjI0LjUiIHI9IjMiIGZpbGw9IiMzQTJBMUQiLz48Y2lyY2xlIGN4PSI5LjUiIGN5PSIyNC41IiByPSIxLjIiIGZpbGw9IiNGRkYxRTUiLz48Y2lyY2xlIGN4PSIyMi41IiBjeT0iMjQuNSIgcj0iMyIgZmlsbD0iIzNBMkExRCIvPjxjaXJjbGUgY3g9IjIyLjUiIGN5PSIyNC41IiByPSIxLjIiIGZpbGw9IiNGRkYxRTUiLz48cGF0aCBkPSJNOSAxMy40aDIuM3YtMi4zaDIuNHYyLjNIMTZ2Mi40aC0yLjN2Mi4zaC0yLjR2LTIuM0g5eiIgZmlsbD0iI2ZmZiIvPjwvc3ZnPgo=");
   --r:8px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--ink);
+body{background:
+    radial-gradient(1100px 520px at 12% -8%, #FFE6D2 0%, rgba(255,230,210,0) 62%),
+    radial-gradient(900px 480px at 92% 4%, #FFF0E0 0%, rgba(255,240,224,0) 58%),
+    var(--bg);
+  background-attachment:fixed;
+  color:var(--ink);
   font-family:'Noto Sans Thai',system-ui,sans-serif;font-size:15px;line-height:1.55}
 .hidden{display:none !important}
 button,input,select,textarea{font-family:inherit;font-size:inherit}
 a{color:var(--accent)}
 
 #screen-login{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-.login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
-  padding:36px;width:100%;max-width:370px}
-.login-card h1{font-size:19px;font-weight:600;margin-bottom:2px}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  padding:36px;width:100%;max-width:370px;position:relative;overflow:hidden;
+  box-shadow:0 10px 30px rgba(196,78,5,.10)}
+.login-card::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:var(--grad)}
+.login-card h1{font-size:19px;font-weight:600;margin-bottom:2px;
+  display:flex;align-items:center;gap:9px}
+.login-card h1::before{content:"";width:28px;height:28px;flex:none;border-radius:6px;
+  background:var(--amb-mask) center/contain no-repeat}
 .login-card p.sub{color:var(--muted);font-size:13px;margin-bottom:24px}
 .login-card label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 .login-card input{width:100%;border:1px solid var(--border);border-radius:6px;padding:9px 12px;margin-bottom:14px}
-.btn-primary{background:var(--accent);color:#fff;border:none;border-radius:6px;
-  padding:10px 18px;font-weight:500;cursor:pointer}
-.btn-primary:hover{background:#155839}
-.btn-primary:disabled{background:#9DB5A8;cursor:not-allowed}
+.btn-primary{background:var(--grad);color:#fff;border:none;border-radius:6px;
+  padding:10px 18px;font-weight:600;cursor:pointer;
+  box-shadow:0 1px 2px rgba(196,78,5,.25)}
+.btn-primary:hover{filter:brightness(1.07)}
+.btn-primary:disabled{background:#E9C9B2;box-shadow:none;cursor:not-allowed}
 .login-card .btn-primary{width:100%}
 #login-err{color:var(--warn);font-size:13px;margin-top:10px}
 
 header{background:var(--surface);border-bottom:1px solid var(--border);
-  padding:0 18px;min-height:54px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-header h1{font-size:16px;font-weight:600;white-space:nowrap}
+  padding:0 18px;min-height:54px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  position:relative;box-shadow:0 1px 0 rgba(232,98,12,.10)}
+header::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--grad)}
+header h1{font-size:16px;font-weight:600;white-space:nowrap;
+  display:flex;align-items:center;gap:8px}
+header h1::before{content:"";width:24px;height:24px;flex:none;border-radius:5px;
+  background:var(--amb-mask) center/contain no-repeat}
 header .spacer{flex:1}
 .who{font-size:13px;color:var(--muted);text-align:right;line-height:1.3}
 .who b{display:block;color:var(--ink);font-weight:500}
@@ -53,7 +74,8 @@ nav{background:var(--surface);border-bottom:1px solid var(--border);padding:0 18
 nav button{background:none;border:none;border-bottom:2px solid transparent;
   padding:11px 14px;font-size:14px;color:var(--muted);cursor:pointer;white-space:nowrap}
 nav button:hover{color:var(--ink)}
-nav button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:500}
+nav button.on{color:var(--accent-deep);border-bottom-color:var(--accent);font-weight:600;
+  background:linear-gradient(180deg,rgba(255,133,52,0) 30%,rgba(255,133,52,.10) 100%)}
 
 main{padding:18px;max-width:1400px;margin:0 auto}
 .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
@@ -64,7 +86,7 @@ main{padding:18px;max-width:1400px;margin:0 auto}
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
 .chip{background:var(--surface);border:1px solid var(--border);border-radius:6px;
   padding:6px 12px;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
-.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.chip.on{background:var(--grad);border-color:var(--accent-deep);color:#fff;font-weight:600}
 .chip .n{font-weight:600;margin-left:4px}
 input[type=text],input[type=email],input[type=password],input[type=date],input[type=number],select{
   border:1px solid var(--border);border-radius:6px;padding:7px 10px;background:var(--surface)}
@@ -126,6 +148,11 @@ tbody tr:hover{background:#FAFCFA}
 .msg.ok{background:var(--accent-dim);color:var(--accent)}
 .msg.err{background:var(--warn-dim);color:var(--warn)}
 .msg.info{background:var(--amber-dim);color:var(--amber)}
+.msg.amber{background:var(--amber-dim);color:var(--amber);border:1px solid var(--amber);
+  display:flex;align-items:center;gap:10px}
+.nav-badge{display:inline-block;min-width:18px;padding:0 5px;margin-left:6px;
+  background:var(--warn);color:#fff;border-radius:9px;font-size:11px;font-weight:700;
+  line-height:18px;text-align:center;vertical-align:middle}
 
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:2000;
   display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto}
@@ -194,13 +221,35 @@ tbody tr:hover{background:#FAFCFA}
   <div class="login-card" style="max-width:420px">
     <h1>ลงทะเบียนเจ้าหน้าที่</h1>
     <p class="sub">กรอกข้อมูลจริงให้ครบ ผู้ดูแลระบบจะตรวจสอบและอนุมัติก่อนจึงจะเข้าใช้งานได้</p>
-    <label>ชื่อ-นามสกุลจริง</label><input type="text" id="r-name" placeholder="เช่น สมหญิง ใจดี">
-    <label>ตำแหน่ง</label><input type="text" id="r-pos" placeholder="เช่น พยาบาลวิชาชีพ">
-    <label>เบอร์โทรศัพท์</label><input type="text" id="r-phone" inputmode="tel" placeholder="08xxxxxxxx">
-    <label>หน่วยบริการ</label><select id="r-hcode" style="width:100%;margin-bottom:14px"></select>
-    <label>อีเมล (ใช้ล็อกอิน)</label><input type="email" id="r-email" autocomplete="username">
-    <label>ตั้งรหัสผ่าน (อย่างน้อย 8 ตัว)</label><input type="password" id="r-pass" autocomplete="new-password">
-    <button class="btn-primary" id="btn-reg">ส่งคำขอลงทะเบียน</button>
+
+    <!-- ขั้นที่ 1: สร้างบัญชีก่อน เพื่อให้มีสิทธิ์อ่านรายชื่อหน่วยบริการจากฐานข้อมูล -->
+    <div id="reg-step1">
+      <label>อีเมล (ใช้ล็อกอิน)</label><input type="email" id="r-email" autocomplete="username">
+      <label>ตั้งรหัสผ่าน (อย่างน้อย 8 ตัว)</label><input type="password" id="r-pass" autocomplete="new-password">
+      <button class="btn-primary" id="btn-reg-next">ถัดไป</button>
+    </div>
+
+    <!-- ขั้นที่ 2: กรอกข้อมูลตัวจริง (ตอนนี้ล็อกอินแล้ว จึงโหลดรายชื่อ รพ.สต. ได้) -->
+    <div id="reg-step2" class="hidden">
+      <div class="msg ok" style="margin-bottom:12px">สร้างบัญชีแล้ว กรอกข้อมูลให้ครบเพื่อส่งคำขอ</div>
+      <label>ชื่อ-นามสกุลจริง</label><input type="text" id="r-name" placeholder="เช่น สมหญิง ใจดี">
+      <label>ตำแหน่ง</label><input type="text" id="r-pos" placeholder="เช่น พยาบาลวิชาชีพ">
+      <label>เบอร์โทรศัพท์</label><input type="text" id="r-phone" inputmode="tel" placeholder="08xxxxxxxx">
+      <label>บทบาทที่ขอใช้งาน</label>
+      <select id="r-role" style="width:100%;margin-bottom:14px">
+        <option value="rpst">เจ้าหน้าที่ รพ.สต.</option>
+        <option value="clinic_nurse">พยาบาลประจำคลินิก</option>
+        <option value="hospital">พยาบาลจัดการคลินิก</option>
+        <option value="outreach">ทีมออกหน่วย รพ.สวี</option>
+        <option value="pharmacist">เภสัชกร</option>
+      </select>
+      <label>หน่วยบริการ</label>
+      <select id="r-hcode" style="width:100%;margin-bottom:6px"></select>
+      <input type="text" id="r-hcode-txt" class="hidden" placeholder="พิมพ์ชื่อหน่วยบริการเอง"
+             style="width:100%;margin-bottom:14px">
+      <div id="r-hcode-note" class="sub" style="margin:-2px 0 12px"></div>
+      <button class="btn-primary" id="btn-reg">ส่งคำขอลงทะเบียน</button>
+    </div>
     <div id="reg-msg" style="margin-top:10px"></div>
     <p class="sub" style="margin-top:14px;text-align:center">
       <a href="#" id="lnk-back">กลับไปหน้าเข้าสู่ระบบ</a></p>
@@ -227,6 +276,7 @@ tbody tr:hover{background:#FAFCFA}
     <button class="btn-ghost" id="btn-logout">ออกจากระบบ</button>
   </header>
   <nav id="nav"></nav>
+  <div id="pend-alert" class="msg amber hidden" style="margin:12px 18px 0"></div>
 
   <main>
     <!-- รายชื่อผู้ป่วย -->
@@ -384,6 +434,7 @@ tbody tr:hover{background:#FAFCFA}
             <option value="rpst">เจ้าหน้าที่ รพ.สต.</option>
             <option value="outreach">ทีมออกหน่วย รพ.สวี</option>
             <option value="hospital">พยาบาลจัดการคลินิก</option>
+            <option value="clinic_nurse">พยาบาลประจำคลินิก</option>
             <option value="pharmacist">เภสัชกร</option>
             <option value="admin">ผู้ดูแลระบบ</option></select></div>
           <div class="fld"><label>รพ.สต.</label><select id="u-hcode"></select></div>
@@ -394,6 +445,35 @@ tbody tr:hover{background:#FAFCFA}
       <div class="panel" id="pend-panel">
         <h2>คำขอลงทะเบียนที่รออนุมัติ <span class="note" id="pend-count"></span></h2>
         <div id="pend-body"></div>
+      </div>
+
+      <div class="panel">
+        <h2>หน่วยบริการ (รพ.สต.) <span class="note">ต้องมีในรายการนี้ก่อน จึงจะผูกผู้ใช้เข้าหน่วยได้</span></h2>
+        <div class="frm">
+          <div class="fld"><label>รหัสหน่วย (5 หลัก)</label><input type="text" id="rp-code" style="width:110px" placeholder="09415"></div>
+          <div class="fld grow"><label>ชื่อหน่วย</label><input type="text" id="rp-name" placeholder="รพ.สต.บ้าน..."></div>
+          <button class="btn-primary" id="btn-rp-add">บันทึกหน่วยบริการ</button>
+        </div>
+        <div id="rp-msg" style="margin-top:10px"></div>
+        <div class="tbl-wrap" style="margin-top:12px"><table>
+          <thead><tr><th style="width:90px">รหัส</th><th>ชื่อหน่วย</th><th style="width:150px">พิกัด</th>
+            <th style="width:90px">ผู้ป่วย</th><th style="width:120px"></th></tr></thead>
+          <tbody id="tb-rpst"></tbody></table></div>
+      </div>
+
+      <div class="panel" style="border-color:var(--amber)">
+        <h2>สนามทดสอบระบบ <span class="note">ข้อมูลจำลอง แยกจากข้อมูลจริง ลบทิ้งได้ทุกเมื่อ</span></h2>
+        <div class="msg info">หน่วยทดสอบและผู้ป่วยทดสอบจะมีธงกำกับ <b>ทดสอบ</b> ทุกจุด
+          และใช้รหัสเอกสารขึ้นต้นด้วย <span class="mono">TEST_</span> ตัว pusher จะไม่ยุ่งกับข้อมูลชุดนี้</div>
+        <div class="frm">
+          <button class="btn-sm" id="btn-mk-testunit">1. สร้างหน่วยทดสอบ "รพ.สวี ต.นาโพธิ์"</button>
+          <div class="fld"><label>จำนวนผู้ป่วยจำลอง</label>
+            <input type="number" id="tst-n" value="12" min="1" max="60" style="width:80px"></div>
+          <button class="btn-sm" id="btn-mk-testpt">2. สร้างผู้ป่วยจำลอง</button>
+          <button class="btn-sm" id="btn-mk-testround">3. สร้างรอบนัดจำลอง 3 รอบ</button>
+          <button class="btn-sm red" id="btn-rm-test">ลบข้อมูลทดสอบทั้งหมด</button>
+        </div>
+        <div id="tst-msg" style="margin-top:10px"></div>
       </div>
       <div class="panel">
         <h2>ผู้ใช้ในระบบ</h2>
@@ -464,18 +544,31 @@ tbody tr:hover{background:#FAFCFA}
     <!-- บัญชียา รพ.สต. -->
     <section id="tab-drugcat" class="hidden">
       <div class="panel">
-        <h2>บัญชียา รพ.สต. <span class="note">รายการยาและจำนวนที่ต้องเตรียมในแต่ละรอบ</span></h2>
+        <h2>บัญชียา รพ.สต. <span class="note">คำนวณจากวิธีใช้ของผู้ป่วยแต่ละคนจริง ไม่ใช่ค่าเฉลี่ย</span></h2>
         <div class="bar">
           <select id="dc-hcode" style="min-width:260px"></select>
+          <select id="dc-view">
+            <option value="allow">เฉพาะยาที่เบิกที่ รพ.สต. ได้</option>
+            <option value="all">ทุกรายการ (รวมที่ยังไม่จัดประเภท)</option>
+            <option value="block">เฉพาะยาที่ห้ามเบิกที่ รพ.สต.</option>
+            <option value="todo">ยังไม่จัดประเภท</option>
+          </select>
           <button class="btn-ghost" id="btn-dc-refresh">คำนวณใหม่</button>
+          <button class="btn-sm" id="btn-dc-export">ส่งยอดเบิกไป sawee refill</button>
           <span id="dc-status" class="sub"></span>
         </div>
+        <div id="dc-warn"></div>
         <div class="tbl-wrap"><table>
           <thead><tr><th>ชื่อยา</th><th>รูปแบบ</th><th class="right">คนไข้</th>
-            <th class="right">เคยจ่ายรวม</th><th class="right">เม็ด/วัน</th>
-            <th class="right">ต้องเตรียม</th><th>หมายเหตุ</th></tr></thead>
+            <th>วิธีใช้ที่พบ</th><th class="right">รวมเม็ด/วัน</th>
+            <th class="right">ต้องเตรียม</th><th style="width:150px">ประเภท</th><th>หมายเหตุ</th></tr></thead>
           <tbody id="tb-drugcat"></tbody>
         </table></div>
+        <div class="sub" style="margin-top:10px">
+          <b>ประเภทยา</b> — <b>เบิกได้</b> = ยาที่ รพ.สต. เบิกไปจ่ายต่อได้ จะถูกรวมในยอดเบิก ·
+          <b>ห้ามเบิก</b> = ยาที่ต้องจ่ายที่ รพ.สวี เท่านั้น จะถูกตัดออกจากบัญชีและยอดเบิกทั้งหมด ·
+          ยาที่ยังไม่จัดประเภทจะไม่ถูกนับในยอดเบิก จนกว่าจะเลือกให้ชัด
+        </div>
       </div>
     </section>
     <!-- วิธีใช้ยา -->
@@ -511,7 +604,7 @@ tbody tr:hover{background:#FAFCFA}
 </div>
 
 <div id="ov-add" class="ov hidden"><div class="modal" style="max-width:520px">
-  <button class="x" onclick="$('ov-add').classList.add('hidden')">&times;</button>
+  <button class="x" onclick="document.getElementById('ov-add').classList.add('hidden')">&times;</button>
   <h2>ขอเพิ่มผู้ป่วยเข้าระบบ</h2>
   <div class="msg info" style="margin-top:8px" id="ap-info">
     <b>กรณี A:</b> มีใน HOSxP แล้ว แต่ไม่ได้ถูกส่งต่อ (เช่น คลินิกไขมัน COPD ฯลฯ)<br>
@@ -575,14 +668,14 @@ const STATUS = { new:'ส่งต่อใหม่', acknowledged:'รับ�
   visited:'มารับยาแล้ว', missed:'ไม่มาตามนัด', returned:'ส่งกลับ รพ.', cancelled:'ยกเลิก',
   discharged:'จำหน่ายออกจากทะเบียน' };
 const SC = { new:'#B8860B', acknowledged:'#3E6E8E', scheduled:'#3E6E8E',
-  visited:'#1B6B47', missed:'#8B2020', returned:'#5F6F63', cancelled:'#8A8A8A', discharged:'#8B2020' };
+  visited:'#1F7A4D', missed:'#8B2020', returned:'#5F6F63', cancelled:'#8A8A8A', discharged:'#8B2020' };
 const DISCHARGE_REASON = ['ควบคุมโรคได้ดี ส่งกลับ รพสต. ดูแลต่อเนื่อง','ย้ายภูมิลำเนา',
   'เสียชีวิต','เข้าเกณฑ์ remission','ขาดการติดตามเกิน 6 เดือน','อื่น ๆ'];
 const TODO = ['new','acknowledged','scheduled'];
 const LAB = { bp:'ความดัน', fbs:'FBS', dtx:'DTX', hba1c:'HbA1c', chol:'Chol',
   ldl:'LDL', hdl:'HDL', tg:'TG', egfr:'eGFR', cr:'Creatinine', k:'Potassium' };
 const ROLE_LABEL = { admin:'ผู้ดูแลระบบ', pharmacist:'เภสัชกร', outreach:'ทีมออกหน่วย รพ.สวี',
-  hospital:'พยาบาลจัดการคลินิก', rpst:'เจ้าหน้าที่ รพ.สต.' };
+  hospital:'พยาบาลจัดการคลินิก', clinic_nurse:'พยาบาลประจำคลินิก', rpst:'เจ้าหน้าที่ รพ.สต.' };
 const MED_ACTION = { continue:'จ่ายต่อ', adjust:'ปรับขนาด/วิธีใช้', stop:'หยุดยา', add:'ยาใหม่' };
 const STOP_REASON = ['ควบคุมโรคได้แล้ว','ผลข้างเคียง','เปลี่ยนไปใช้ยาตัวอื่น',
   'ผู้ป่วยไม่ให้ความร่วมมือ','แพทย์สั่งหยุด','อื่น ๆ'];
@@ -595,7 +688,9 @@ const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออ
   record_visit:'บันทึกการให้บริการ', keyed_hosxp:'คีย์เข้า HOSxP แล้ว',
   approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
   reveal_sensitive:'เปิดดูข้อมูลส่วนบุคคล', add_patient_request:'ขอเพิ่มผู้ป่วย',
-  approve_add_patient:'อนุมัติเพิ่มผู้ป่วย' };
+  approve_add_patient:'อนุมัติเพิ่มผู้ป่วย', edit_rpst:'แก้ไขหน่วยบริการ',
+  create_test_data:'สร้างข้อมูลทดสอบ', delete_test_data:'ลบข้อมูลทดสอบ',
+  edit_drug_policy:'ตั้งค่าประเภทยา', export_refill:'ส่งยอดเบิกไป sawee refill' };
 
 /* ================= INIT ================= */
 const app  = initializeApp(FIREBASE_CONFIG);
@@ -643,7 +738,9 @@ const dayDiff = (a,b) => Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:0
 const daysFrom = iso => iso ? dayDiff(todayISO(), iso) : null;
 const isPharm=()=>PROFILE?.role==='pharmacist';
 const isAdmin=()=>PROFILE?.role==='admin'||isPharm(),  // เภสัชกรทำได้เหมือน admin ทุกอย่าง
-      isHospital=()=>PROFILE?.role==='hospital', isRpst=()=>PROFILE?.role==='rpst';
+      // พยาบาลประจำคลินิก ใช้สิทธิ์ชุดเดียวกับพยาบาลจัดการคลินิก
+      isHospital=()=>PROFILE?.role==='hospital'||PROFILE?.role==='clinic_nurse',
+      isRpst=()=>PROFILE?.role==='rpst';
 const isOutreach=()=>PROFILE?.role==='outreach';
 const seesAll=()=>isAdmin()||isHospital()||isOutreach();
 const canEdit=()=>isAdmin()||isRpst()||isOutreach();
@@ -669,16 +766,19 @@ function showOnly(id){
   ['screen-login','screen-reg','screen-wait','screen-app']
     .forEach(x=>show(x, x===id));
 }
+let REG_MODE = false;   // true = กำลังอยู่กลางขั้นตอนลงทะเบียน อย่าเพิ่งเปลี่ยนหน้า
 onAuthStateChanged(auth, async user => {
   if(!user){ ME=null; PROFILE=null; showOnly('screen-login'); return; }
+  if(REG_MODE){ ME=user; return; }          // อยู่ขั้นที่ 2 ของการลงทะเบียน ปล่อยให้กรอกต่อ
   ME = user;
+  let profErr=null;
   try{ const s = await getDoc(doc(db,'users',user.uid)); PROFILE = s.exists()?s.data():null; }
-  catch(e){ PROFILE=null; }
+  catch(e){ PROFILE=null; profErr=e; }
   if(!PROFILE){
     // ยังไม่มีสิทธิ์ ตรวจว่ามีคำขอลงทะเบียนค้างอยู่หรือไม่
-    let pend=null;
+    let pend=null, pendErr=null;
     try{ const p=await getDoc(doc(db,'pending_users',user.uid)); pend=p.exists()?p.data():null; }
-    catch(e){}
+    catch(e){ pendErr=e; }
     if(pend){
       $('wait-info').innerHTML = `
         <tr><td>ชื่อ</td><td>${esc(pend.full_name||'-')}</td></tr>
@@ -686,58 +786,111 @@ onAuthStateChanged(auth, async user => {
         <tr><td>โทรศัพท์</td><td>${esc(pend.phone||'-')}</td></tr>
         <tr><td>หน่วยบริการ</td><td>${esc(pend.hcode_name||pend.hcode||'-')}</td></tr>
         <tr><td>ส่งคำขอ</td><td>${esc(String(pend.requested_at_text||'-'))}</td></tr>`;
-      showOnly('screen-wait'); return;
+      showOnly('screen-wait');
+      waitPoll(user.uid);                  // เช็คทุก 20 วิ ว่าแอดมินอนุมัติหรือยัง
+      return;
     }
-    $('login-err').textContent = 'บัญชีนี้ยังไม่ได้กำหนดสิทธิ์ ติดต่อผู้ดูแลระบบ (UID: '+user.uid+')';
+    // ไม่มีทั้งโปรไฟล์และคำขอค้าง — บอกสาเหตุจริงให้ชัด จะได้แก้ถูกจุด
+    const why = profErr
+      ? (profErr.code==='permission-denied'
+          ? 'อ่านสิทธิ์ผู้ใช้ไม่ได้ (permission-denied) — กฎความปลอดภัยของ Firestore ยังไม่อนุญาตให้ผู้ใช้อ่านเอกสาร users ของตัวเอง'
+          : 'อ่านสิทธิ์ผู้ใช้ไม่ได้: '+(profErr.code||profErr.message))
+      : pendErr
+      ? 'อ่านคำขอลงทะเบียนไม่ได้: '+(pendErr.code||pendErr.message)
+      : 'ยังไม่มีเอกสารสิทธิ์ (users) และไม่มีคำขอค้าง — ผู้ดูแลระบบอาจยังไม่ได้กดปุ่ม "อนุมัติ" ในแท็บจัดการผู้ใช้ หรือคำขอถูกปฏิเสธไปแล้ว';
+    $('login-err').innerHTML = esc(why) + '<br><span class="sub">UID: ' + esc(user.uid) + '</span>';
     await signOut(auth); return;
   }
   showOnly('screen-app');
   await startApp();
   // login log ส่งเฉพาะครั้งแรกของ session
 });
-$('btn-wait-out').addEventListener('click', ()=>signOut(auth));
-$('lnk-reg').addEventListener('click', async e=>{ e.preventDefault();
-  await fillRegUnits(); showOnly('screen-reg'); });
+$('btn-wait-out').addEventListener('click', ()=>{ clearInterval(WAIT_TIMER); signOut(auth); });
+/* หน้ารออนุมัติ: ตรวจเองเป็นระยะ พออนุมัติแล้วจะเข้าระบบให้อัตโนมัติ ไม่ต้องรอผู้ใช้กดรีเฟรช */
+let WAIT_TIMER=null;
+function waitPoll(uid){
+  clearInterval(WAIT_TIMER);
+  WAIT_TIMER = setInterval(async ()=>{
+    try{
+      const s = await getDoc(doc(db,'users',uid));
+      if(s.exists()){ clearInterval(WAIT_TIMER); location.reload(); }
+    }catch(e){}
+  }, 20000);
+}
+$('lnk-reg').addEventListener('click', e=>{ e.preventDefault();
+  REG_MODE=false; show('reg-step1',true); show('reg-step2',false);
+  $('reg-msg').innerHTML=''; showOnly('screen-reg'); });
 $('lnk-back').addEventListener('click', e=>{ e.preventDefault(); showOnly('screen-login'); });
 
-// ดึงรายชื่อหน่วยบริการมาให้เลือกตอนลงทะเบียน (ยังไม่ล็อกอิน จึงอ่านจาก REST แบบสาธารณะไม่ได้
-// ใช้วิธีล็อกอินก่อนไม่ได้เช่นกัน จึงให้พิมพ์เองถ้าโหลดไม่ได้)
+/* ดึงรายชื่อหน่วยบริการ — เรียกหลังสร้างบัญชีแล้ว (ตอนนั้นถือว่าล็อกอินแล้ว จึงอ่าน rpst ได้)
+   ถ้าอ่านไม่ได้จริงๆ จะสลับเป็นช่องพิมพ์ชื่อเองแทน ไม่ปล่อยให้ค้างเป็น dropdown ว่าง */
 async function fillRegUnits(){
-  const sel=$('r-hcode');
-  if(sel.options.length) return;
+  const sel=$('r-hcode'), txt=$('r-hcode-txt'), note=$('r-hcode-note');
   try{
     const s=await getDocs(collection(db,'rpst'));
-    const rows=s.docs.map(d=>d.data()).sort((a,b)=>(a.hcode||'').localeCompare(b.hcode||''));
-    sel.innerHTML = rows.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
+    const rows=s.docs.map(d=>d.data()).filter(r=>r.hcode)
+      .sort((a,b)=>(a.hcode||'').localeCompare(b.hcode||''));
+    if(!rows.length) throw new Error('empty');
+    sel.innerHTML = rows.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)} (${esc(r.hcode)})</option>`).join('');
+    show('r-hcode',true); show('r-hcode-txt',false);
+    note.textContent = `มี ${rows.length} หน่วยบริการให้เลือก`;
   }catch(e){
-    sel.innerHTML='<option value="">(โหลดรายชื่อไม่ได้ ระบุในหมายเหตุแทน)</option>';
+    show('r-hcode',false); show('r-hcode-txt',true);
+    note.innerHTML = '<span style="color:var(--amber)">โหลดรายชื่อหน่วยบริการไม่ได้ ('
+      + esc(e.code||e.message||'error') + ') พิมพ์ชื่อหน่วยเองได้เลย ผู้ดูแลระบบจะเลือกให้ตอนอนุมัติ</span>';
   }
 }
-$('btn-reg').addEventListener('click', async ()=>{
-  const name=$('r-name').value.trim(), pos=$('r-pos').value.trim(),
-        phone=$('r-phone').value.replace(/\D/g,''), hcode=$('r-hcode').value,
-        email=$('r-email').value.trim(), pass=$('r-pass').value;
-  if(!name || name.split(' ').filter(Boolean).length<2){
-    $('reg-msg').innerHTML='<div class="msg err">กรอกชื่อและนามสกุลจริงให้ครบ</div>'; return; }
-  if(phone.length<9){ $('reg-msg').innerHTML='<div class="msg err">เบอร์โทรศัพท์ไม่ถูกต้อง</div>'; return; }
-  if(!email||pass.length<8){ $('reg-msg').innerHTML='<div class="msg err">อีเมลหรือรหัสผ่านไม่ถูกต้อง</div>'; return; }
-  $('btn-reg').disabled=true;
+
+/* ขั้นที่ 1 — สร้างบัญชีล็อกอินก่อน */
+$('btn-reg-next').addEventListener('click', async ()=>{
+  const email=$('r-email').value.trim(), pass=$('r-pass').value;
+  if(!email||pass.length<8){
+    $('reg-msg').innerHTML='<div class="msg err">กรอกอีเมลและรหัสผ่านอย่างน้อย 8 ตัว</div>'; return; }
+  $('btn-reg-next').disabled=true; $('reg-msg').innerHTML='';
   try{
-    const cred = await createUserWithEmailAndPassword(auth, email, pass);
-    await setDoc(doc(db,'pending_users',cred.user.uid), {
-      full_name:name, position:pos||null, phone, hcode:hcode||null,
-      hcode_name: $('r-hcode').selectedOptions[0]?.textContent||null,
-      email, requested_at: serverTimestamp(),
-      requested_at_text: new Date().toISOString().slice(0,16).replace('T',' ')
-    });
-    $('reg-msg').innerHTML='<div class="msg ok">ส่งคำขอแล้ว</div>';
+    await createUserWithEmailAndPassword(auth, email, pass);
+    REG_MODE = true;                       // กัน onAuthStateChanged ไม่ให้เด้งออกจากหน้าลงทะเบียน
+    show('reg-step1',false); show('reg-step2',true);
+    await fillRegUnits();
   }catch(e){
     const m = e.code==='auth/email-already-in-use' ? 'อีเมลนี้มีบัญชีอยู่แล้ว ลองเข้าสู่ระบบแทน'
             : e.code==='auth/invalid-email' ? 'รูปแบบอีเมลไม่ถูกต้อง'
-            : e.code==='auth/weak-password' ? 'รหัสผ่านสั้นเกินไป' : e.message;
+            : e.code==='auth/weak-password' ? 'รหัสผ่านสั้นเกินไป' : (e.code||e.message);
     $('reg-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`;
   }
-  $('btn-reg').disabled=false;
+  $('btn-reg-next').disabled=false;
+});
+
+/* ขั้นที่ 2 — ส่งคำขอพร้อมข้อมูลตัวจริง */
+$('btn-reg').addEventListener('click', async ()=>{
+  const name=$('r-name').value.trim(), pos=$('r-pos').value.trim(),
+        phone=$('r-phone').value.replace(/\D/g,''), role=$('r-role').value,
+        usingSel = !$('r-hcode').classList.contains('hidden'),
+        hcode = usingSel ? $('r-hcode').value : '',
+        hcodeName = usingSel ? ($('r-hcode').selectedOptions[0]?.textContent||null)
+                             : ($('r-hcode-txt').value.trim()||null);
+  if(!name || name.split(' ').filter(Boolean).length<2){
+    $('reg-msg').innerHTML='<div class="msg err">กรอกชื่อและนามสกุลจริงให้ครบ</div>'; return; }
+  if(phone.length<9){ $('reg-msg').innerHTML='<div class="msg err">เบอร์โทรศัพท์ไม่ถูกต้อง</div>'; return; }
+  if(role==='rpst' && !hcode && !hcodeName){
+    $('reg-msg').innerHTML='<div class="msg err">ระบุหน่วยบริการด้วย</div>'; return; }
+  const u = auth.currentUser;
+  if(!u){ $('reg-msg').innerHTML='<div class="msg err">เซสชันหมดอายุ กรุณาเริ่มใหม่</div>'; return; }
+  $('btn-reg').disabled=true;
+  try{
+    await setDoc(doc(db,'pending_users',u.uid), {
+      full_name:name, position:pos||null, phone, hcode:hcode||null,
+      hcode_name: hcodeName, want_role: role,
+      email: u.email, requested_at: serverTimestamp(),
+      requested_at_text: new Date().toISOString().slice(0,16).replace('T',' ')
+    });
+    REG_MODE = false;
+    $('reg-msg').innerHTML='<div class="msg ok">ส่งคำขอแล้ว กำลังไปหน้ารออนุมัติ...</div>';
+    setTimeout(()=>location.reload(), 1200);
+  }catch(e){
+    $('reg-msg').innerHTML=`<div class="msg err">ส่งคำขอไม่สำเร็จ: ${esc(e.code||e.message)}</div>`;
+    $('btn-reg').disabled=false;
+  }
 });
 $('btn-login').addEventListener('click', async ()=>{
   $('login-err').textContent=''; $('btn-login').disabled=true;
@@ -768,9 +921,24 @@ function buildNav(){
     || (t.seesAll&&seesAll()) || (t.adminOnly&&isAdmin())
     || (t.hospOnly&&(isAdmin()||isHospital())));
   $('nav').innerHTML = vis.map((t,i)=>
-    `<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}</button>`).join('');
+    `<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}` +
+    (t.id==='user'?'<span class="nav-badge hidden" id="nav-badge-user"></span>':'') +
+    `</button>`).join('');
   $('nav').querySelectorAll('button').forEach(b=>
     b.addEventListener('click', ()=>openTab(b.dataset.tab)));
+  paintPendBadge();
+}
+/* แจ้งเตือนแอดมินว่ามีคำขอลงทะเบียนใหม่กี่คำขอ — ทั้งบนแท็บและเป็นแถบด้านบน */
+function paintPendBadge(){
+  const n = PENDING.length, b = $('nav-badge-user');
+  if(b){ b.textContent = n; show('nav-badge-user', n>0); }
+  const bar = $('pend-alert');
+  if(bar){
+    show('pend-alert', n>0 && isAdmin());
+    if(n>0) bar.innerHTML = `<b>มีคำขอลงทะเบียนใหม่ ${n} คำขอ</b> รออนุมัติอยู่ ` +
+      `<button class="btn-sm" id="btn-goto-pend">ไปที่หน้าอนุมัติ</button>`;
+    $('btn-goto-pend')?.addEventListener('click', ()=>openTab('user'));
+  }
 }
 function openTab(id){
   $('nav').querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.tab===id));
@@ -795,8 +963,11 @@ async function startApp(){
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   buildNav();
   await audit('login');
-  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap()]);
-  if(isAdmin()) loadPending();
+  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy()]);
+  if(isAdmin()){
+    loadPending();
+    setInterval(loadPending, 120000);   // เช็คคำขอใหม่ทุก 2 นาที แอดมินจะได้ไม่พลาด
+  }
   $('who-role').textContent = (ROLE_LABEL[PROFILE.role]||PROFILE.role) +
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   if(seesAll()){
@@ -836,9 +1007,24 @@ async function loadList(){
   }
 }
 const stOf = r => r.workflow?.status || 'new';
+/* ===== คลินิกที่อนุญาตให้แสดงเท่านั้น (allow-list) =====
+   ด่านที่ 2 ต่อจากการกรองใน push.php — กันเอกสารเก่าที่ push ไปก่อนเปิดใช้การกรอง
+   ห้ามเพิ่ม TB / ARV / ไวรัสตับอักเสบ / โรคมะเร็ง / Clinic ฟ้าใส ลงในรายการนี้เด็ดขาด */
+const CLINIC_ALLOW = ['โรคความดัน','โรคไขมันในเลือดสูง','โรคเบาหวาน','ncds remission',
+  'โรคระบบประสาท','โรคหัวใจ','ckd clinic','copd','asthma','warfarin clinic',
+  'จิตเวช','palliative care','ข้อมูลทดสอบ'];
+const clinicNorm = s => String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+const clinicAllowed = name => {
+  const n = clinicNorm(name);
+  return !!n && CLINIC_ALLOW.some(a=>{ const x=clinicNorm(a); return n===x || n.includes(x); });
+};
 function clinicListOf(r){
-  return String(r.clinics||'').split('|').map(s=>s.replace(/\d+:/,'').trim()).filter(Boolean);
+  return String(r.clinics||'').split('|')
+    .map(s=>s.replace(/\d+:/,'').trim())
+    .filter(c=>c && clinicAllowed(c));
 }
+/** ข้อความรายชื่อคลินิกที่ปลอดภัยสำหรับแสดงผลทุกจุด — ใช้แทน r.clinics ดิบเสมอ */
+const clinicText = r => clinicListOf(r).join(' | ');
 function buildClinicOptions(){
   const set = new Set();
   LIST.forEach(r=>clinicListOf(r).forEach(c=>set.add(c)));
@@ -892,7 +1078,7 @@ function renderList(){
           ${p.moo?` · หมู่ ${esc(p.moo)} ${esc(p.tambon||'')}`:''}
           ${r.case_type==='data_only'?'<span class="pill pill-rem">Remission</span>':''}
           ${r.hcode_conflict?'<span class="pill pill-warn">ปลายทางขัดแย้ง</span>':''}</div>
-        ${r.clinics?`<div class="clin">${esc(String(r.clinics).replace(/\d+:/g,''))}</div>`:''}</td>
+        ${clinicText(r)?`<div class="clin">${esc(clinicText(r))}</div>`:''}</td>
       ${seesAll()?`<td class="sub">${esc(r.hcode_name||r.hcode||'-')}</td>`:''}
       <td><div>${thDate(r.refer_date)}</div><div class="sub">${ago===null?'':ago+' วันก่อน'}</div></td>
       <td>${ap?`<div>${thDate(ap)}</div><div class="sub ${apd<0?'old':''}">${
@@ -977,7 +1163,7 @@ function openDetail(id){
           <button class="btn-eye" id="d-eye-addr">👁</button></td></tr>
         <tr><td>โทรศัพท์</td><td><span id="d-phone">${esc(maskPhone(p.phone))}</span>
           <button class="btn-eye" id="d-eye-phone">👁</button></td></tr>
-        <tr><td>คลินิก</td><td>${esc(String(r.clinics||'').replace(/\d+:/g,'')||'-')}</td></tr>
+        <tr><td>คลินิก</td><td>${esc(clinicText(r)||'-')}</td></tr>
         <tr><td>วันที่ส่งต่อ</td><td>${thDate(r.refer_date)}</td></tr>
         <tr><td>ปลายทาง</td><td>${esc(r.hcode_name||r.hcode||'-')}
           <span class="pill pill-rem">${esc(r.hcode_source||'')}</span>
@@ -1037,6 +1223,13 @@ function openDetail(id){
   });
 }
 $('ov-x').addEventListener('click',()=>$('ov').classList.add('hidden'));
+/* กันหน้าต่างค้าง: กด Esc หรือคลิกพื้นหลังเพื่อปิดได้เสมอ */
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape') ['ov','ov-add'].forEach(id=>$(id)?.classList.add('hidden'));
+});
+['ov','ov-add'].forEach(id=>$(id)?.addEventListener('click', e=>{
+  if(e.target.id===id) $(id).classList.add('hidden');
+}));
 $('ov').addEventListener('click',e=>{ if(e.target===$('ov')) $('ov').classList.add('hidden'); });
 
 /* ================= รอบนัด ================= */
@@ -1146,6 +1339,7 @@ function computeDrugs(patients, days, bufPct, skipOld){
   const buf = 1 + (bufPct||0)/100, agg={};
   patients.forEach(r=>(r.medications||[]).forEach(m=>{
     if(skipOld && (m.days_before??0)>180) return;
+    if(polOf(polKey(m))===false) return;      // ยาที่ห้ามเบิกที่ รพ.สต. ไม่เอาเข้าบัญชี
     const k = m.icode || m.name;
     if(!agg[k]) agg[k]={name:m.name, people:0, qty:0, need:0, unknown:0, prn:0};
     const a=agg[k]; a.people++; a.qty += parseFloat(m.qty)||0;
@@ -1207,7 +1401,7 @@ function openRound(id){
       ${pool.length?`<div class="scroll">${pool.map(r=>
         `<label style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:13.5px">
           <input type="checkbox" class="poolchk" value="${esc(r.id)}">
-          <span>${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">HN ${esc(r.hn)} · ${esc(String(r.clinics||'').replace(/\d+:/g,''))}</span></span>
+          <span>${esc(maskName(r.patient?.full_name)||r.hn)} <span class="sub">HN ${esc(r.hn)} · ${esc(clinicText(r))}</span></span>
         </label>`).join('')}</div>
         <div style="margin-top:10px"><button class="btn-primary" id="r-add">นัดผู้ที่เลือกเข้ารอบนี้</button>
         <button class="btn-ghost" id="r-all">เลือกทั้งหมด</button></div>`
@@ -1313,7 +1507,7 @@ function renderDash(){
   const byH={}, byC={}, byA={}, byS={}, bySex={};
   LIST.forEach(r=>{
     const h=r.hcode_name||r.hcode||'-'; byH[h]=(byH[h]||0)+1;
-    String(r.clinics||'').split('|').map(s=>s.replace(/\d+:/,'').trim()).filter(Boolean)
+    clinicListOf(r)
       .forEach(c=>byC[c]=(byC[c]||0)+1);
     const a=r.patient?.age;
     const g=a==null?'ไม่ระบุ':a<40?'ต่ำกว่า 40':a<50?'40-49':a<60?'50-59':a<70?'60-69':a<80?'70-79':'80 ปีขึ้นไป';
@@ -1360,7 +1554,7 @@ function geoData(){
 }
 function colorFor(i){          // i = 0..1
   const a=[0.15,0.35,0.55,0.75,0.9][Math.min(4,Math.floor(i*5))];
-  return `rgba(27,107,71,${a})`;
+  return `rgba(232,98,12,${a})`;   // โทนส้มให้เข้ากับธีม
 }
 function drawMap(){
   if(typeof L==='undefined'){ $('map-status').textContent='โหลดแผนที่ไม่สำเร็จ'; return; }
@@ -1376,7 +1570,7 @@ function drawMap(){
     const byT = {}; LIST.forEach(r=>{ const t=r.patient?.tambon; if(t) byT[t]=(byT[t]||0)+1; });
     const max = Math.max(1,...Object.values(byT));
     const gl = L.geoJSON(SAWEE_GEO, {
-      style: f=>{ const n=byT[f.properties.tam_th]||0; return {fillColor:colorFor(n/max),color:'#1B6B47',weight:2,fillOpacity:n?0.7:0.15}; },
+      style: f=>{ const n=byT[f.properties.tam_th]||0; return {fillColor:colorFor(n/max),color:'#1F7A4D',weight:2,fillOpacity:n?0.7:0.15}; },
       onEachFeature: (f,layer)=>{ const n=byT[f.properties.tam_th]||0;
         layer.bindTooltip('<b>ต.'+esc(f.properties.tam_th)+'</b><br>'+n+' คน',{sticky:true});
         layer.on('click',()=>layer.bindPopup('<b>ต.'+esc(f.properties.tam_th)+'</b><br>'+n+' คน<br>'+(n/Math.max(1,LIST.length)*100).toFixed(1)+'%').openPopup()); }
@@ -1388,7 +1582,7 @@ function drawMap(){
     if(!rows.length){ $('map-status').innerHTML=isAdmin()?'ยังไม่มีพิกัด กดค้นพิกัดอัตโนมัติ':'ยังไม่มีพิกัด'; return; }
     const max=Math.max(1,...rows.map(x=>x.n));
     rows.forEach(x=>{
-      L.circleMarker([x.lat,x.lng],{radius:9+Math.sqrt(x.n/max)*26,fillColor:colorFor(x.n/max),color:'#1B6B47',weight:1.5,fillOpacity:0.75})
+      L.circleMarker([x.lat,x.lng],{radius:9+Math.sqrt(x.n/max)*26,fillColor:colorFor(x.n/max),color:'#1F7A4D',weight:1.5,fillOpacity:0.75})
         .bindTooltip('<b>'+esc(x.name)+'</b><br>'+x.n+' คน',{direction:'top'}).addTo(LAYER);
       if(isAdmin()){
         const m=L.marker([x.lat,x.lng],{draggable:true}).addTo(LAYER);
@@ -1538,14 +1732,14 @@ function renderRecord(o){
     if(v && v.attended===false) st = '<span class="tag" style="background:#8B20201a;color:#8B2020">ไม่มา</span>';
     else if(v) {
       const chg = (v.meds||[]).filter(m=>m.action!=='continue').length;
-      st = `<span class="tag" style="background:#1B6B471a;color:#1B6B47">บันทึกแล้ว</span>`
+      st = `<span class="tag" style="background:#1F7A4D1a;color:#1F7A4D">บันทึกแล้ว</span>`
          + (chg?`<span class="pill pill-rem">ปรับ ${chg} รายการ</span>`:'')
          + (v.keyed_in_hosxp?'<span class="pill pill-ok">คีย์แล้ว</span>':'<span class="pill pill-warn">รอคีย์</span>');
     }
     return `<tr>
       <td><div class="nm"><span class="masked">${esc(maskName(r.patient?.full_name)||r.hn)}</span></div>
         <div class="sub">HN ${esc(r.hn)} · ${esc(r.patient?.sex||'')} ${esc(r.patient?.age??'')} ปี</div>
-        <div class="clin">${esc(String(r.clinics||'').replace(/\d+:/g,''))}</div></td>
+        <div class="clin">${esc(clinicText(r))}</div></td>
       <td class="sub">${nMed} รายการ</td>
       <td>${st}</td>
       <td class="right">
@@ -1794,8 +1988,8 @@ function renderReview(o){
     ${list.length?`<div class="tbl-wrap"><table>
       <thead><tr><th style="width:110px">การสั่ง</th><th>ยา</th><th class="right" style="width:60px">คน</th><th>รายชื่อ</th></tr></thead>
       <tbody>${list.map(x=>`<tr>
-        <td><span class="tag" style="background:${x.action==='stop'?'#8B2020':x.action==='add'?'#1B6B47':'#B8860B'}1a;color:${
-          x.action==='stop'?'#8B2020':x.action==='add'?'#1B6B47':'#B8860B'}">${MED_ACTION[x.action]}</span></td>
+        <td><span class="tag" style="background:${x.action==='stop'?'#8B2020':x.action==='add'?'#1F7A4D':'#B8860B'}1a;color:${
+          x.action==='stop'?'#8B2020':x.action==='add'?'#1F7A4D':'#B8860B'}">${MED_ACTION[x.action]}</span></td>
         <td>${esc(x.name)}</td><td class="right mono">${x.n}</td>
         <td class="sub">${esc(x.who.join(', '))}</td></tr>`).join('')}</tbody></table></div>`
     :'<div class="empty">รอบนี้ยังไม่มีการปรับยา</div>'}
@@ -1856,7 +2050,7 @@ async function loadAddRequests(){
           <td>${r.status==='pending'
             ?'<span class="tag" style="background:#B8860B1a;color:#B8860B">รออนุมัติ</span>'
             :r.status==='approved'
-              ?'<span class="tag" style="background:#1B6B471a;color:#1B6B47">อนุมัติแล้ว รอ pusher</span>'
+              ?'<span class="tag" style="background:#1F7A4D1a;color:#1F7A4D">อนุมัติแล้ว รอ pusher</span>'
               :'<span class="tag" style="background:#8B20201a;color:#8B2020">ปฏิเสธ</span>'}</td>
           ${isAdmin()&&r.status==='pending'?`<td class="right">
             <button class="btn-sm" data-apapr="${esc(r.id)}">อนุมัติ</button>
@@ -1894,6 +2088,7 @@ async function loadPending(){
 }
 function renderPendingUsers(){
   $('pend-count').textContent = PENDING.length ? `${PENDING.length} คำขอ` : 'ไม่มีคำขอค้าง';
+  paintPendBadge();
   $('pend-body').innerHTML = PENDING.length ? `<div class="tbl-wrap"><table>
     <thead><tr><th>ผู้ขอ</th><th>ติดต่อ</th><th>หน่วยบริการ</th><th>บทบาทที่จะให้</th><th style="width:190px"></th></tr></thead>
     <tbody>${PENDING.map(p=>`<tr>
@@ -1906,7 +2101,9 @@ function renderPendingUsers(){
       </select></td>
       <td><select data-prole="${esc(p.uid)}">
         ${Object.entries(ROLE_LABEL).map(([k,v])=>
-          `<option value="${k}"${k==='rpst'?' selected':''}>${v}</option>`).join('')}</select></td>
+          `<option value="${k}"${k===(p.want_role||'rpst')?' selected':''}>${v}</option>`).join('')}</select>
+        ${p.want_role?`<div class="sub">ผู้ขอระบุ: ${esc(ROLE_LABEL[p.want_role]||p.want_role)}</div>`:''}
+        ${(!p.hcode&&p.hcode_name)?`<div class="sub" style="color:var(--amber)">พิมพ์เอง: ${esc(p.hcode_name)}</div>`:''}</td>
       <td class="right"><button class="btn-sm" data-appr="${esc(p.uid)}">อนุมัติ</button>
         <button class="btn-sm red" data-rej="${esc(p.uid)}">ปฏิเสธ</button></td>
     </tr>`).join('')}</tbody></table></div>`
@@ -1928,7 +2125,14 @@ function renderPendingUsers(){
         await audit('approve_user', uid, {role, hcode, name:p.full_name});
         PENDING=PENDING.filter(x=>x.uid!==uid);
         renderPendingUsers(); await loadUsers();
-      }catch(e){ alert('อนุมัติไม่สำเร็จ: '+e.message); b.disabled=false; }
+        alert('อนุมัติ '+(p.full_name||p.email)+' เรียบร้อย\n\n'
+          +'บทบาท: '+(ROLE_LABEL[role]||role)
+          +(role==='rpst'?'\nหน่วยบริการ: '+rpstName(hcode):'')
+          +'\n\nผู้ใช้เข้าระบบได้ทันที ถ้าเขาค้างอยู่หน้า "รอผู้ดูแลระบบอนุมัติ" '
+          +'ระบบจะพาเข้าเองภายใน 20 วินาที หรือกดรีเฟรชหน้าเว็บก็ได้');
+      }catch(e){ alert('อนุมัติไม่สำเร็จ: '+(e.code||e.message)
+        +'\n\nถ้าขึ้น permission-denied แปลว่ากฎ Firestore ยังไม่อนุญาตให้เขียน users/'+uid);
+        b.disabled=false; }
     }));
   $('pend-body').querySelectorAll('[data-rej]').forEach(b=>
     b.addEventListener('click', async ()=>{
@@ -1941,7 +2145,126 @@ function renderPendingUsers(){
     }));
 }
 
+/* ---------- จัดการหน่วยบริการ (รพ.สต.) ---------- */
+const TEST_HCODE = '99999';                       // รหัสสมมติของหน่วยทดสอบ
+const isTestUnit = h => h===TEST_HCODE;
+function renderRpstTable(){
+  const cnt={}; LIST.forEach(r=>cnt[r.hcode]=(cnt[r.hcode]||0)+1);
+  $('tb-rpst').innerHTML = RPST.length ? RPST.map(r=>`<tr>
+    <td class="mono">${esc(r.hcode)}</td>
+    <td class="nm">${esc(r.name)}${isTestUnit(r.hcode)?' <span class="pill pill-rem">ทดสอบ</span>':''}</td>
+    <td class="sub mono">${r.lat&&r.lng?(+r.lat).toFixed(4)+', '+(+r.lng).toFixed(4):'ยังไม่มีพิกัด'}</td>
+    <td class="right mono">${cnt[r.hcode]||0}</td>
+    <td class="right"><button class="btn-sm grey" data-rped="${esc(r.hcode)}">แก้ชื่อ</button></td>
+  </tr>`).join('') : '<tr><td colspan="5" class="empty">ยังไม่มีหน่วยบริการ</td></tr>';
+  $('tb-rpst').querySelectorAll('[data-rped]').forEach(b=>b.addEventListener('click', async ()=>{
+    const h=b.dataset.rped, cur=RPST.find(r=>r.hcode===h);
+    const nm=prompt('ชื่อหน่วยบริการ '+h, cur?.name||''); if(nm===null||!nm.trim()) return;
+    try{
+      await setDoc(doc(db,'rpst',h), {hcode:h, name:nm.trim()}, {merge:true});
+      await audit('edit_rpst', h, {name:nm.trim()});
+      await loadRpst(); renderRpstTable();
+    }catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.code||e.message)); }
+  }));
+}
+$('btn-rp-add')?.addEventListener('click', async ()=>{
+  const code=$('rp-code').value.trim(), name=$('rp-name').value.trim();
+  if(!/^\d{4,6}$/.test(code)){ $('rp-msg').innerHTML='<div class="msg err">รหัสหน่วยต้องเป็นตัวเลข 4-6 หลัก</div>'; return; }
+  if(!name){ $('rp-msg').innerHTML='<div class="msg err">ใส่ชื่อหน่วยด้วย</div>'; return; }
+  try{
+    await setDoc(doc(db,'rpst',code), {hcode:code, name}, {merge:true});
+    await audit('edit_rpst', code, {name});
+    $('rp-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>';
+    $('rp-code').value=''; $('rp-name').value='';
+    await loadRpst(); renderRpstTable(); await loadUsers();
+  }catch(e){ $('rp-msg').innerHTML=`<div class="msg err">บันทึกไม่สำเร็จ: ${esc(e.code||e.message)}</div>`; }
+});
+
+/* ---------- สนามทดสอบ ---------- */
+const TEST_FIRST=['สมชาย','สมหญิง','บุญมี','วิไล','ประยูร','จันทร์','สุนีย์','อำนวย','ประไพ','ถนอม','บุญช่วย','มาลี'];
+const TEST_LAST =['ใจดี','สุขสันต์','มั่นคง','ทองดี','ศรีสุข','พูนผล','แก้วมณี','บุญเรือง'];
+const TEST_DRUGS=[
+  {icode:'T001', name:'Amlodipine 5 mg', form:'TABLETS', usage:'รับประทานครั้งละ 1 เม็ด วันละ 1 ครั้ง เช้า'},
+  {icode:'T002', name:'Metformin 500 mg', form:'TABLETS', usage:'รับประทานครั้งละ 1 เม็ด วันละ 2 ครั้ง เช้า-เย็น'},
+  {icode:'T003', name:'Simvastatin 20 mg', form:'TABLETS', usage:'รับประทานครั้งละ 1 เม็ด วันละ 1 ครั้ง ก่อนนอน'},
+  {icode:'T004', name:'Enalapril 5 mg', form:'TABLETS', usage:'รับประทานครั้งละ 1/2 เม็ด วันละ 2 ครั้ง เช้า-เย็น'},
+  {icode:'T005', name:'ASA 81 mg', form:'TABLETS', usage:'รับประทานครั้งละ 1 เม็ด วันละ 1 ครั้ง หลังอาหารเช้า'}];
+const rnd = a => a[Math.floor(Math.random()*a.length)];
+
+$('btn-mk-testunit')?.addEventListener('click', async ()=>{
+  try{
+    await setDoc(doc(db,'rpst',TEST_HCODE),
+      {hcode:TEST_HCODE, name:'รพ.สวี ต.นาโพธิ์ (ทดสอบ)', is_test:true, lat:10.2312, lng:99.0367},{merge:true});
+    await audit('edit_rpst', TEST_HCODE, {test_unit:true});
+    await loadRpst(); renderRpstTable(); await loadUsers();
+    $('tst-msg').innerHTML='<div class="msg ok">สร้างหน่วยทดสอบแล้ว (รหัส '+TEST_HCODE+')</div>';
+  }catch(e){ $('tst-msg').innerHTML=`<div class="msg err">ไม่สำเร็จ: ${esc(e.code||e.message)}</div>`; }
+});
+$('btn-mk-testpt')?.addEventListener('click', async ()=>{
+  const n=Math.max(1,Math.min(60, parseInt($('tst-n').value)||12));
+  if(!RPST.some(r=>r.hcode===TEST_HCODE)){
+    $('tst-msg').innerHTML='<div class="msg err">สร้างหน่วยทดสอบก่อน (ปุ่มที่ 1)</div>'; return; }
+  $('btn-mk-testpt').disabled=true;
+  let ok=0, err=0;
+  const today=new Date();
+  for(let i=1;i<=n;i++){
+    const hn='TEST'+String(i).padStart(4,'0');
+    const meds=[...TEST_DRUGS].sort(()=>Math.random()-0.5).slice(0, 2+Math.floor(Math.random()*3))
+      .map(d=>({icode:d.icode, name:d.name, dosageform:d.form, usage:d.usage,
+                drugusage_code:null, qty:String(30+Math.floor(Math.random()*4)*30),
+                last_date:today.toISOString().slice(0,10), days_before:Math.floor(Math.random()*60)}));
+    try{
+      await setDoc(doc(db,'referrals','TEST_'+hn+'_testcase'), {
+        doc_key:'TEST_'+hn+'_testcase', is_test:true, case_type:'refill',
+        hn, refer_date:new Date(today.getTime()-86400000*Math.floor(Math.random()*90)).toISOString().slice(0,10),
+        as_of_date:today.toISOString().slice(0,10),
+        hcode:TEST_HCODE, hcode_name:'รพ.สวี ต.นาโพธิ์ (ทดสอบ)', hcode_source:'manual',
+        clinics:'999:ข้อมูลทดสอบ', clinic_count:1, sent_clinic_name:'ข้อมูลทดสอบ',
+        patient:{ full_name:rnd(TEST_FIRST)+' '+rnd(TEST_LAST), age:45+Math.floor(Math.random()*35),
+                  sex:Math.random()<0.5?'ชาย':'หญิง', moo:String(1+Math.floor(Math.random()*12)),
+                  tambon:'นาโพธิ์', ampur:'สวี', changwat:'ชุมพร', cid_last4:String(1000+Math.floor(Math.random()*9000)) },
+        labs:[], medications:meds,
+        workflow:{ status:'new' },
+        synced_at:new Date().toISOString().slice(0,19).replace('T',' ')
+      });
+      ok++;
+    }catch(e){ err++; }
+  }
+  await audit('create_test_data','patients',{created:ok, failed:err});
+  $('tst-msg').innerHTML=`<div class="msg ${err?'info':'ok'}">สร้างผู้ป่วยจำลอง ${ok} คน${err?' · ไม่สำเร็จ '+err:''}</div>`;
+  $('btn-mk-testpt').disabled=false;
+  await loadList();
+});
+$('btn-mk-testround')?.addEventListener('click', async ()=>{
+  const base=new Date(); let ok=0;
+  for(const add of [14, 74, 134]){                 // ห่างกันประมาณ 2 เดือน
+    const d=new Date(base.getTime()+86400000*add).toISOString().slice(0,10);
+    if(OUTREACH.some(o=>o.hcode===TEST_HCODE&&o.date===d)) continue;
+    try{ await addDoc(collection(db,'outreach'),
+      {hcode:TEST_HCODE, date:d, note:'รอบทดสอบ', is_test:true, created_by:ME.email}); ok++; }catch(e){}
+  }
+  await loadOutreach();
+  $('tst-msg').innerHTML=`<div class="msg ok">สร้างรอบนัดจำลอง ${ok} รอบ (ห่างกันประมาณ 2 เดือน)</div>`;
+});
+$('btn-rm-test')?.addEventListener('click', async ()=>{
+  if(!confirm('ลบข้อมูลทดสอบทั้งหมด (หน่วย ผู้ป่วย และรอบนัดทดสอบ)?\nข้อมูลจริงไม่ถูกแตะต้อง')) return;
+  let n=0;
+  try{
+    const s=await getDocs(query(collection(db,'referrals'), where('hcode','==',TEST_HCODE), limit(500)));
+    for(const d of s.docs){ await deleteDoc(doc(db,'referrals',d.id)); n++; }
+  }catch(e){}
+  for(const o of OUTREACH.filter(o=>o.hcode===TEST_HCODE)){
+    try{ await deleteDoc(doc(db,'outreach',o.id)); n++; }catch(e){}
+  }
+  try{ await deleteDoc(doc(db,'rpst',TEST_HCODE)); n++; }catch(e){}
+  await audit('delete_test_data', TEST_HCODE, {deleted:n});
+  await Promise.all([loadRpst(), loadOutreach()]);
+  renderRpstTable(); await loadList();
+  $('tst-msg').innerHTML=`<div class="msg ok">ลบข้อมูลทดสอบแล้ว ${n} รายการ</div>`;
+});
+
 async function loadUsers(){
+  renderRpstTable();
   $('u-hcode').innerHTML = '<option value="">(ไม่ผูก รพ.สต.)</option>' +
     RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
   try{
@@ -2241,6 +2564,51 @@ function printVisitForm(visitId){
 }
 
 /* ================= บัญชียา รพ.สต. ================= */
+/* ===== ประเภทยา: เบิกที่ รพ.สต. ได้ / ห้ามเบิก =====
+   เก็บใน Firestore collection drug_policy โดยใช้ icode (หรือชื่อยา) เป็นรหัสเอกสาร */
+let DRUGPOL = {};
+async function loadDrugPolicy(){
+  try{
+    const s=await getDocs(collection(db,'drug_policy'));
+    DRUGPOL={}; s.docs.forEach(d=>DRUGPOL[d.id]=d.data());
+  }catch(e){ DRUGPOL={}; }
+}
+const polKey  = m => String(m.icode || m.name || '').trim();
+const polOf   = k => DRUGPOL[polKeyId(k)]?.allow_rpst;   // true / false / undefined
+const polKeyId= k => String(k).replace(/[\/#?\[\]*]/g,'_').slice(0,120);
+async function setDrugPolicy(key, name, allow){
+  const id = polKeyId(key);
+  await setDoc(doc(db,'drug_policy',id),
+    {key:String(key), name:name||'', allow_rpst:allow,
+     updated_by:ME.email, updated_at:new Date().toISOString().slice(0,19).replace('T',' ')},{merge:true});
+  DRUGPOL[id]={key:String(key), name:name||'', allow_rpst:allow};
+  await audit('edit_drug_policy', String(key), {allow_rpst:allow, name});
+}
+
+/* คำนวณความต้องการยาของ รพ.สต. — ไล่ทีละคนทีละรายการยา ใช้วิธีใช้ของคนนั้นจริง
+   คืนค่าเป็น array ของยา พร้อมยอดที่ต้องเตรียมรวม และรายละเอียดวิธีใช้ที่พบ */
+function buildDrugNeed(patients, days){
+  const agg = {};
+  patients.forEach(r=>(r.medications||[]).forEach(m=>{
+    if((m.days_before??0)>180) return;              // ยาที่หยุดไปนานแล้ว ไม่นับ
+    const k = polKey(m); if(!k) return;
+    if(!agg[k]) agg[k] = {key:k, icode:m.icode||'', name:m.name||k, form:m.dosageform||'',
+                          people:new Set(), lines:0, qty:0, need:0,
+                          unknown:0, prn:0, usages:{}};
+    const a = agg[k];
+    a.people.add(r.id); a.lines++; a.qty += parseFloat(m.qty)||0;
+    if(m.usage) a.usages[m.usage] = (a.usages[m.usage]||0)+1;
+    const du = DRUGMAP[m.drugusage_code];
+    if(du?.is_prn)              a.prn++;             // prn คำนวณอัตโนมัติไม่ได้
+    else if(du?.doses_per_day>0) a.need += du.doses_per_day * (days||0);  // ← ของ "คนนี้" คนเดียว
+    else                         a.unknown++;        // ยังไม่ได้ระบุวิธีใช้
+  }));
+  return Object.values(agg)
+    .map(a=>({...a, n_people:a.people.size,
+              usage_list:Object.entries(a.usages).sort((x,y)=>y[1]-x[1])}))
+    .sort((a,b)=>b.n_people-a.n_people);
+}
+
 function renderDrugCat(){
   const scope = isRpst() ? myHcode() : ($('dc-hcode')?.value||'');
   $('dc-hcode').innerHTML = (isRpst()
@@ -2258,33 +2626,162 @@ function renderDrugCat(){
   $('dc-status').innerHTML = nextDays
     ? 'รอบถัดไป '+thDate(nextDate)+' จ่ายยา '+nextDays+' วัน (เผื่อ 10%)'
     : hc ? 'ไม่มีข้อมูลรอบนัดเพียงพอ แสดงจำนวนที่เคยจ่ายแทน' : 'เลือก รพ.สต. เพื่อดูจำนวน';
-  const pts = hc ? LIST.filter(r=>r.hcode===hc) : LIST;
-  const agg = {};
-  pts.forEach(r=>(r.medications||[]).forEach(m=>{
-    if((m.days_before??0)>180) return;
-    const k=m.icode||m.name;
-    if(!agg[k]) agg[k]={name:m.name, form:m.dosageform||'', people:new Set(), n:0, qty:0, dpd:null, prn:false};
-    const a=agg[k]; a.people.add(r.id); a.n++; a.qty+=parseFloat(m.qty)||0;
-    const du=DRUGMAP[m.drugusage_code];
-    if(du?.is_prn) a.prn=true;
-    if(du?.doses_per_day>0&&!a.prn) a.dpd=du.doses_per_day;
-  }));
-  const rows=Object.values(agg).sort((a,b)=>b.people.size-a.people.size);
-  $('tb-drugcat').innerHTML = rows.length ? rows.map(a=>{
-    const ppl=a.people.size, need=(nextDays&&a.dpd&&!a.prn)?Math.ceil(a.dpd*nextDays*ppl*1.1):null;
+  const pts  = hc ? LIST.filter(r=>r.hcode===hc) : LIST;
+  const rows = buildDrugNeed(pts, nextDays||0);
+  DC_CACHE = {hcode:hc, nextDate, nextDays, rows};   // เก็บไว้ให้ปุ่มส่งยอดเบิกใช้ต่อ
+
+  const view = $('dc-view')?.value || 'allow';
+  const shown = rows.filter(a=>{
+    const p = polOf(a.key);
+    return view==='all'   ? true
+         : view==='allow' ? p===true
+         : view==='block' ? p===false
+         :                  p===undefined;          // todo
+  });
+
+  const nTodo  = rows.filter(a=>polOf(a.key)===undefined).length;
+  const nNoSig = rows.filter(a=>polOf(a.key)!==false && a.unknown>0).length;
+  $('dc-warn').innerHTML =
+    (nTodo  ? `<div class="msg info">มียา ${nTodo} รายการที่ยังไม่จัดประเภท จะยังไม่ถูกนับในยอดเบิก — เลือก "เบิกได้" หรือ "ห้ามเบิก" ให้ครบก่อน</div>`:'')
+  + (nNoSig ? `<div class="msg info">มียา ${nNoSig} รายการที่ผู้ป่วยบางคนยังไม่ได้ระบุเม็ด/วัน ไปเติมที่แท็บ "วิธีใช้ยา" ยอดที่คำนวณจะยังขาดส่วนนี้</div>`:'');
+
+  $('tb-drugcat').innerHTML = shown.length ? shown.map(a=>{
+    const pol  = polOf(a.key);
+    const need = (nextDays && a.need>0) ? Math.ceil(a.need*1.1) : null;   // เผื่อ 10%
     let note='';
-    if(a.prn) note='<span class="pill pill-rem">prn</span>';
-    else if(!a.dpd) note='<span class="pill pill-warn">ยังไม่ระบุเม็ด/วัน</span>';
-    else if(!nextDays&&hc) note='<span class="pill pill-warn">ไม่มีรอบถัดไป</span>';
-    return '<tr><td class="nm">'+esc(a.name)+'</td><td class="sub">'+esc(a.form)+'</td>'
-      +'<td class="right mono">'+ppl+'</td><td class="right mono">'+a.n+'</td>'
-      +'<td class="right mono">'+(a.dpd??'-')+'</td>'
-      +'<td class="right mono"><b>'+(need!==null?need.toLocaleString():'-')+'</b>'
-      +'<div class="sub">เคยจ่าย '+Math.round(a.qty).toLocaleString()+'</div></td>'
-      +'<td>'+note+'</td></tr>';
-  }).join('') : '<tr><td colspan="7" class="empty">ไม่มีข้อมูล</td></tr>';
+    if(a.prn)      note+=`<span class="pill pill-rem">prn ${a.prn} คน</span>`;
+    if(a.unknown)  note+=`<span class="pill pill-warn">ยังไม่ระบุวิธีใช้ ${a.unknown} คน</span>`;
+    if(!nextDays && hc) note+='<span class="pill pill-warn">ไม่มีรอบถัดไป</span>';
+    if(!note) note='<span class="sub">คำนวณครบ</span>';
+    const usageHtml = a.usage_list.length
+      ? a.usage_list.slice(0,3).map(([u,c])=>`<div class="sub">${esc(u)} <b>× ${c}</b></div>`).join('')
+        + (a.usage_list.length>3?`<div class="sub">และอีก ${a.usage_list.length-3} แบบ</div>`:'')
+      : '<span class="sub">-</span>';
+    return `<tr>
+      <td class="nm">${esc(a.name)}</td>
+      <td class="sub">${esc(a.form)}</td>
+      <td class="right mono">${a.n_people}</td>
+      <td>${usageHtml}</td>
+      <td class="right mono">${a.need>0&&nextDays?(a.need/nextDays).toFixed(1):'-'}</td>
+      <td class="right mono"><b>${need!==null?need.toLocaleString():'-'}</b>
+        <div class="sub">เคยจ่าย ${Math.round(a.qty).toLocaleString()}</div></td>
+      <td>
+        <button class="btn-sm${pol===true?'':' grey'}" data-pol="1" data-k="${esc(a.key)}" data-nm="${esc(a.name)}">เบิกได้</button>
+        <button class="btn-sm${pol===false?' red':' grey'}" data-pol="0" data-k="${esc(a.key)}" data-nm="${esc(a.name)}">ห้ามเบิก</button>
+      </td>
+      <td>${note}</td></tr>`;
+  }).join('') : '<tr><td colspan="8" class="empty">ไม่มีรายการในมุมมองนี้</td></tr>';
+
+  $('tb-drugcat').querySelectorAll('[data-pol]').forEach(b=>
+    b.addEventListener('click', async ()=>{
+      b.disabled=true;
+      try{ await setDrugPolicy(b.dataset.k, b.dataset.nm, b.dataset.pol==='1'); renderDrugCat(); }
+      catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.code||e.message)); b.disabled=false; }
+    }));
 }
+let DC_CACHE = {rows:[]};
+
+/* ===== ส่งยอดเบิก NCDs ไปยังโปรแกรม sawee refill =====
+   เขียนเอกสารสรุปลง collection ncds_demand ของ sawee-refer
+   ฝั่ง refill จะอ่านไปบวกเพิ่มบนสูตร target stock เดิม (ไม่ใช่แทนที่) */
+$('btn-dc-export')?.addEventListener('click', async ()=>{
+  const c = DC_CACHE;
+  if(!c.hcode){ alert('เลือก รพ.สต. ก่อน แล้วค่อยส่งยอดเบิก'); return; }
+  if(!c.nextDays){ alert('หน่วยนี้ยังไม่มีรอบนัดถัดไปครบ 2 รอบ ระบบจึงคำนวณจำนวนวันจ่ายยาไม่ได้\n'
+    +'ไปกำหนดวันนัดที่แท็บ "รอบนัด" ก่อน'); return; }
+  // เอาเฉพาะยาที่ติดธง "เบิกได้" และคำนวณยอดได้จริง
+  const items = c.rows.filter(a=>polOf(a.key)===true && a.need>0).map(a=>({
+    key:a.key, icode:a.icode||null, name:a.name, form:a.form||null,
+    patients:a.n_people, doses_total_per_day:+(a.need/c.nextDays).toFixed(2),
+    qty_needed:Math.ceil(a.need*1.1), unknown_sig:a.unknown, prn:a.prn }));
+  if(!items.length){ alert('ยังไม่มียาที่ติดธง "เบิกได้" และคำนวณยอดได้ในหน่วยนี้'); return; }
+  const skipped = c.rows.filter(a=>polOf(a.key)===undefined).length;
+  const id = `${c.hcode}_${c.nextDate}`;
+  const payload = {
+    schema:'refer.ncds_demand.v1',
+    hcode:c.hcode, hcode_name:rpstName(c.hcode),
+    round_date:c.nextDate, days_supply:c.nextDays, buffer_pct:10,
+    patients_total: new Set(LIST.filter(r=>r.hcode===c.hcode).map(r=>r.id)).size,
+    items, items_count:items.length, skipped_unclassified:skipped,
+    generated_by:ME.email,
+    generated_at:new Date().toISOString().slice(0,19).replace('T',' '),
+    consumed_by_refill:false };
+  try{
+    await setDoc(doc(db,'ncds_demand',id), payload);
+    await audit('export_refill', id, {items:items.length, round:c.nextDate});
+    $('ov-body').innerHTML = `
+      <h2>ส่งยอดเบิกแล้ว</h2>
+      <div class="msg ok">บันทึกลง <span class="mono">ncds_demand/${esc(id)}</span> เรียบร้อย —
+        ${items.length} รายการยา สำหรับรอบ ${thDate(c.nextDate)} (จ่ายยา ${c.nextDays} วัน)
+        ${skipped?` · ข้ามยาที่ยังไม่จัดประเภท ${skipped} รายการ`:''}</div>
+      <p class="sub">โปรแกรม sawee refill ต้องอ่านเอกสารนี้ไปบวกเพิ่มบนสูตร target stock เดิม
+        ถ้ายังไม่ได้ทำฝั่งนั้น ให้คัดลอกคำสั่งด้านล่างไปใช้สร้างส่วนรับข้อมูล</p>
+      <div class="frm" style="margin:10px 0">
+        <button class="btn-sm" id="btn-cp-json">คัดลอก JSON ยอดเบิกรอบนี้</button>
+        <button class="btn-sm" id="btn-cp-prompt">คัดลอก prompt สำหรับสร้างฝั่ง refill</button>
+      </div>
+      <textarea id="exp-box" style="width:100%;height:280px;font-family:ui-monospace,monospace;font-size:12px"
+        readonly>${esc(JSON.stringify(payload,null,2))}</textarea>`;
+    $('ov').classList.remove('hidden');
+    $('btn-cp-json').addEventListener('click', ()=>{
+      $('exp-box').value = JSON.stringify(payload,null,2);
+      navigator.clipboard.writeText($('exp-box').value);
+      $('btn-cp-json').textContent='คัดลอกแล้ว';
+      setTimeout(()=>$('btn-cp-json').textContent='คัดลอก JSON ยอดเบิกรอบนี้',1500);
+    });
+    $('btn-cp-prompt').addEventListener('click', ()=>{
+      $('exp-box').value = refillPrompt(payload);
+      navigator.clipboard.writeText($('exp-box').value);
+      $('btn-cp-prompt').textContent='คัดลอกแล้ว';
+      setTimeout(()=>$('btn-cp-prompt').textContent='คัดลอก prompt สำหรับสร้างฝั่ง refill',1500);
+    });
+  }catch(e){ alert('ส่งไม่สำเร็จ: '+(e.code||e.message)); }
+});
+
+/** prompt สำเร็จรูป ไว้เอาไปบอกให้สร้างฝั่งรับข้อมูลในโปรแกรม sawee refill */
+function refillPrompt(p){
+  return `ฉันมีระบบ 2 ตัวที่แยก Firebase project กัน
+- sawee-refer (ระบบส่งต่อผู้ป่วย รพ.สต.) = ผู้ส่ง
+- sawee-refill (ระบบเบิกยา รพ.สต.) = ผู้รับ  ← ตัวนี้คือตัวที่ต้องแก้
+
+sawee-refer จะเขียนเอกสารสรุป "ยาที่ รพ.สต. ต้องเบิกสำหรับรอบนัดถัดไป"
+ลง Firestore collection ชื่อ ncds_demand โดยใช้รหัสเอกสารเป็น <hcode>_<round_date>
+
+โครงสร้างเอกสาร (schema: refer.ncds_demand.v1) หน้าตาแบบนี้:
+${JSON.stringify(p,null,2)}
+
+ความหมายของแต่ละฟิลด์
+- hcode / hcode_name : รหัสและชื่อ รพ.สต. ที่ต้องเบิก
+- round_date         : วันออกหน่วยรอบถัดไป (ยาต้องถึงมือก่อนวันนี้)
+- days_supply        : จำนวนวันที่ต้องจ่ายยาให้ผู้ป่วยในรอบนี้ (ระยะห่างถึงรอบถัดไป)
+- buffer_pct         : เผื่อไว้แล้วกี่ % (qty_needed บวกส่วนนี้ไว้เรียบร้อยแล้ว)
+- items[].name       : ชื่อยาตามที่ปรากฏใน HOSxP
+- items[].icode      : รหัสยาของ HOSxP (อาจเป็น null ถ้าไม่มี)
+- items[].patients   : จำนวนผู้ป่วยที่ใช้ยาตัวนี้ในหน่วยนี้
+- items[].doses_total_per_day : ผลรวมเม็ดต่อวันของผู้ป่วยทุกคนรวมกัน (คำนวณจากวิธีใช้รายคนจริง)
+- items[].qty_needed : จำนวนเม็ดที่ต้องเตรียมทั้งรอบ = doses_total_per_day × days_supply × 1.1
+- items[].unknown_sig: จำนวนผู้ป่วยที่ยังไม่ได้ระบุวิธีใช้ (ยอดนี้ยังไม่รวมคนกลุ่มนั้น จึงอาจต่ำกว่าจริง)
+- items[].prn        : จำนวนผู้ป่วยที่ใช้ยาแบบ prn (คำนวณอัตโนมัติไม่ได้ ต้องดูเอง)
+- skipped_unclassified : จำนวนยาที่ยังไม่ได้จัดประเภทจึงไม่ถูกส่งมา
+- consumed_by_refill : ฝั่ง refill ต้องตั้งเป็น true เมื่อรับยอดนี้ไปใช้แล้ว
+
+สิ่งที่ต้องการให้ทำในโปรแกรม sawee refill
+1. อ่านเอกสารจาก ncds_demand ที่ consumed_by_refill = false
+   (คนละ Firebase project กัน — ให้ใช้สคริปต์ PHP ไฟล์เดียวบนเครื่องเดิมที่รัน push.php
+   ยิง Firestore REST API ด้วย service account เหมือนที่ push.php ทำอยู่ ไม่ต้องใช้ SDK)
+2. จับคู่ยาเข้ากับ master_drugs ของ refill ด้วยฟิลด์ hosxp_code
+   (ถ้าจับคู่ไม่ได้ ห้ามทิ้งเงียบ ให้ขึ้นรายการ "ยาที่จับคู่ไม่ได้" ให้เภสัชกรแมปเอง)
+3. เอา qty_needed ไป **บวกเพิ่ม** บนสูตร target stock เดิมของ refill
+   ห้ามเอาไปแทนที่ค่าเดิม เพราะ refill คำนวณจากอัตราการใช้ปกติอยู่แล้ว
+   ยอดจาก NCDs นี้คือความต้องการพิเศษของรอบออกหน่วยที่รู้ล่วงหน้า
+4. แสดงให้เภสัชกรเห็นชัดว่ายอดที่เพิ่มมาจากรอบออกหน่วยวันไหน ของ รพ.สต. ไหน กี่รายการ
+5. เมื่อรับยอดเข้าระบบแล้ว ให้เขียนกลับไปตั้ง consumed_by_refill = true พร้อม consumed_at
+   จะได้ไม่บวกซ้ำรอบหน้า
+6. เขียนเป็น PHP ไฟล์เดียว รันด้วย C:\\xampp\\php\\php.exe ได้เลย ไม่ต้องติดตั้งอะไรเพิ่ม`;
+}
+
 $('dc-hcode')?.addEventListener('change', renderDrugCat);
+$('dc-view')?.addEventListener('change', renderDrugCat);
 $('btn-dc-refresh')?.addEventListener('click', renderDrugCat);
 
 /* ================= วิธีใช้ยา ================= */

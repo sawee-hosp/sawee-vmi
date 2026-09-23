@@ -196,6 +196,28 @@ tbody tr:hover{background:#FAFCFA}
 .reveal-warn{background:var(--warn-dim);color:var(--warn);padding:6px 12px;border-radius:6px;font-size:12px;margin:6px 0;display:inline-block}
 .scroll{max-height:300px;overflow-y:auto}
 @media(max-width:700px){.barrow .lbl{width:110px}#map{height:360px}}
+/* === ปฏิทินรอบนัด === */
+.mini-cal{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;font-size:13px}
+.mini-cal .mc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.mini-cal .mc-head b{font-size:14px}
+.mini-cal .mc-head button{background:none;border:none;cursor:pointer;font-size:16px;padding:2px 6px;border-radius:4px}
+.mini-cal .mc-head button:hover{background:var(--bg)}
+.mc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
+.mc-grid .mc-day{padding:4px 2px;border-radius:4px;min-width:28px;line-height:1.4}
+.mc-grid .mc-hdr{font-weight:600;color:var(--sub);font-size:11px}
+.mc-grid .mc-hl{background:var(--ok-dim);color:var(--ok);font-weight:700;cursor:pointer;position:relative}
+.mc-grid .mc-hl:hover{outline:2px solid var(--ok)}
+.mc-grid .mc-hl[title]:hover::after{content:attr(title);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
+  background:#333;color:#fff;padding:3px 8px;border-radius:4px;font-size:11px;white-space:nowrap;z-index:9}
+.mc-grid .mc-today{border:2px solid var(--amber)}
+.mc-grid .mc-other{color:var(--sub);opacity:.4}
+.mc-legend{margin-top:8px;font-size:12px;color:var(--sub)}
+.mc-legend span{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;margin-right:4px}
+/* ตัวเลือกวันนัดจากปฏิทิน */
+.ap-pick{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.ap-pick .ap-opt{padding:5px 12px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:13px;background:#fff;transition:all .15s}
+.ap-pick .ap-opt:hover{border-color:var(--ok);background:var(--ok-dim)}
+.ap-pick .ap-opt.sel{background:var(--ok);color:#fff;border-color:var(--ok)}
 </style>
 </head>
 <body>
@@ -243,11 +265,15 @@ tbody tr:hover{background:#FAFCFA}
         <option value="outreach">ทีมออกหน่วย รพ.สวี</option>
         <option value="pharmacist">เภสัชกร</option>
       </select>
-      <label>หน่วยบริการ</label>
-      <select id="r-hcode" style="width:100%;margin-bottom:6px"></select>
-      <input type="text" id="r-hcode-txt" class="hidden" placeholder="พิมพ์ชื่อหน่วยบริการเอง"
-             style="width:100%;margin-bottom:14px">
-      <div id="r-hcode-note" class="sub" style="margin:-2px 0 12px"></div>
+      <!-- หน่วยงาน: ซ่อนไว้ ให้ admin เป็นคนกำหนดตอนอนุมัติ -->
+      <div id="r-hcode-wrap" style="display:none">
+        <label>หน่วยบริการ</label>
+        <select id="r-hcode" style="width:100%;margin-bottom:6px"></select>
+        <input type="text" id="r-hcode-txt" class="hidden" placeholder="พิมพ์ชื่อหน่วยบริการเอง"
+               style="width:100%;margin-bottom:14px">
+      </div>
+      <div id="r-hcode-note" class="msg info" style="font-size:13px;margin:0 0 14px;padding:10px 14px">
+        ระบุหน่วยงานและรอให้ admin confirm อาจมีการติดต่อทางโทรศัพท์เพื่อยืนยันตัวตนก่อนอนุมัติ</div>
       <button class="btn-primary" id="btn-reg">ส่งคำขอลงทะเบียน</button>
     </div>
     <div id="reg-msg" style="margin-top:10px"></div>
@@ -308,6 +334,11 @@ tbody tr:hover{background:#FAFCFA}
 
     <!-- รอบนัด -->
     <section id="tab-cal" class="hidden">
+      <div class="panel">
+        <h2>ปฏิทินรอบนัด <span class="note">วันที่ไฮไลท์ = มีคลินิกออกหน่วย กดเพื่อเปิดรอบ</span></h2>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:10px" id="cal-months"></div>
+        <div id="cal-summary" class="sub" style="margin-bottom:6px"></div>
+      </div>
       <div class="panel">
         <h2>รอบนัดที่กำลังจะถึง <span class="note">กดที่การ์ดเพื่อเปิดรอบและดูยาที่ต้องเตรียม</span></h2>
         <div id="cal-alert"></div>
@@ -872,8 +903,7 @@ $('btn-reg').addEventListener('click', async ()=>{
   if(!name || name.split(' ').filter(Boolean).length<2){
     $('reg-msg').innerHTML='<div class="msg err">กรอกชื่อและนามสกุลจริงให้ครบ</div>'; return; }
   if(phone.length<9){ $('reg-msg').innerHTML='<div class="msg err">เบอร์โทรศัพท์ไม่ถูกต้อง</div>'; return; }
-  if(role==='rpst' && !hcode && !hcodeName){
-    $('reg-msg').innerHTML='<div class="msg err">ระบุหน่วยบริการด้วย</div>'; return; }
+  /* หน่วยบริการซ่อนไว้ — admin จะกำหนดให้ตอนอนุมัติ */
   const u = auth.currentUser;
   if(!u){ $('reg-msg').innerHTML='<div class="msg err">เซสชันหมดอายุ กรุณาเริ่มใหม่</div>'; return; }
   $('btn-reg').disabled=true;
@@ -1180,7 +1210,8 @@ function openDetail(id){
     ${canEdit()?`<div class="sec"><div class="st">บันทึกสถานะ</div><div class="frm">
       <div class="fld"><label>สถานะ</label><select id="d-st">
         ${Object.entries(STATUS).filter(([k])=>k!=='discharged').map(([k,v])=>`<option value="${k}"${k===st?' selected':''}>${v}</option>`).join('')}</select></div>
-      <div class="fld"><label>วันนัด</label><input type="date" id="d-ap" value="${esc(r.workflow?.appoint_date||'')}"></div>
+      <div class="fld"><label>วันนัด</label><input type="date" id="d-ap" value="${esc(r.workflow?.appoint_date||'')}">
+        <div class="ap-pick" id="d-ap-pick">${buildApPick(r.hcode, r.workflow?.appoint_date)}</div></div>
       <div class="fld grow"><label>บันทึกเพิ่มเติม</label><input type="text" id="d-note" value="${esc(r.workflow?.note||'')}"></div>
       <button class="btn-primary" id="d-save">บันทึก</button></div>
       <div id="d-msg" style="margin-top:8px"></div></div>`
@@ -1214,14 +1245,36 @@ function openDetail(id){
     $('d-lab').innerHTML = labs ? '<table><tr><th>รายการ</th><th>ผล</th><th>วันที่</th></tr>'+labs+'</table>'
       : '<div class="sub">ไม่มีข้อมูล</div>';
     $('d-eye-lab').style.display='none'; });
-  if(canEdit()) $('d-save').addEventListener('click', async ()=>{
-    try{
-      await setStatus(id, $('d-st').value,
-        {appoint_date:$('d-ap').value||null, note:$('d-note').value.trim()||null});
-      $('d-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>'; renderList();
-    }catch(e){ $('d-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
-  });
+  if(canEdit()){
+    $('d-save').addEventListener('click', async ()=>{
+      try{
+        await setStatus(id, $('d-st').value,
+          {appoint_date:$('d-ap').value||null, note:$('d-note').value.trim()||null});
+        $('d-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>'; renderList();
+      }catch(e){ $('d-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+    });
+    // กดเลือกวันจากปฏิทิน → เติมลง input
+    $('d-ap-pick')?.querySelectorAll('.ap-opt').forEach(el=>
+      el.addEventListener('click',()=>{
+        $('d-ap').value=el.dataset.apdate;
+        $('d-ap-pick').querySelectorAll('.ap-opt').forEach(x=>x.classList.remove('sel'));
+        el.classList.add('sel');
+      }));
+  }
 }
+/* สร้างตัวเลือกวันนัดจากปฏิทินออกหน่วยของหน่วยนั้น */
+function buildApPick(hcode, currentDate){
+  if(!hcode) return '';
+  const upcoming = OUTREACH.filter(o=>o.hcode===hcode && daysFrom(o.date)>=0)
+    .sort((a,b)=>a.date.localeCompare(b.date)).slice(0,6);
+  if(!upcoming.length) return '<span class="sub" style="font-size:12px">ยังไม่มีรอบนัดสำหรับหน่วยนี้</span>';
+  return upcoming.map(o=>{
+    const sel = o.date===currentDate ? ' sel':'';
+    const d = daysFrom(o.date);
+    return `<span class="ap-opt${sel}" data-apdate="${esc(o.date)}">${thDate(o.date)} <small>${d===0?'วันนี้':'อีก '+d+' วัน'}</small></span>`;
+  }).join('');
+}
+
 $('ov-x').addEventListener('click',()=>$('ov').classList.add('hidden'));
 /* กันหน้าต่างค้าง: กด Esc หรือคลิกพื้นหลังเพื่อปิดได้เสมอ */
 document.addEventListener('keydown', e=>{
@@ -1293,6 +1346,69 @@ function renderCal(){
       await audit('edit_outreach','delete:'+b.dataset.del);
       await loadOutreach(); renderCal();
     }));
+  /* === ปฏิทินรอบนัดแบบ mini calendar === */
+  renderCalMonths();
+}
+
+function renderCalMonths(){
+  const scope = roundScope();
+  const rounds = OUTREACH.filter(o=>!scope||o.hcode===scope);
+  if(!rounds.length){ $('cal-months').innerHTML='<div class="sub">ยังไม่มีวันนัด</div>'; $('cal-summary').innerHTML=''; return; }
+
+  // หาช่วงเดือนที่ต้องแสดง (เดือนปัจจุบัน +3 เดือน)
+  const today = new Date(), todayStr = today.toISOString().slice(0,10);
+  const months = [];
+  for(let i=0;i<4;i++){
+    const d=new Date(today.getFullYear(), today.getMonth()+i, 1);
+    months.push({y:d.getFullYear(), m:d.getMonth()});
+  }
+
+  // สร้าง lookup: date -> [{hcode, id, note}]
+  const byDate = {};
+  rounds.forEach(o=>{
+    if(!byDate[o.date]) byDate[o.date]=[];
+    byDate[o.date].push(o);
+  });
+
+  // สรุป รพ.สต. และจำนวนวัน
+  const hcSummary = {};
+  rounds.filter(o=>daysFrom(o.date)>=0).forEach(o=>{
+    if(!hcSummary[o.hcode]) hcSummary[o.hcode]={name:rpstName(o.hcode), days:0};
+    hcSummary[o.hcode].days++;
+  });
+  const sumArr = Object.values(hcSummary).sort((a,b)=>b.days-a.days);
+  $('cal-summary').innerHTML = sumArr.length
+    ? 'คลินิกที่กำลังจะถึง: ' + sumArr.map(s=>`<b>${esc(s.name)}</b> ${s.days} วัน`).join(' · ')
+    : '';
+
+  const TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  const TH_DAYS = ['อา','จ','อ','พ','พฤ','ศ','ส'];
+
+  $('cal-months').innerHTML = months.map(({y,m})=>{
+    const first = new Date(y,m,1), lastDay = new Date(y,m+1,0).getDate();
+    const startDow = first.getDay(); // 0=อาทิตย์
+    let cells = TH_DAYS.map(d=>`<div class="mc-day mc-hdr">${d}</div>`).join('');
+    // ช่องว่างก่อนวันที่ 1
+    for(let i=0;i<startDow;i++) cells+='<div class="mc-day mc-other"></div>';
+    for(let d=1;d<=lastDay;d++){
+      const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const evts = byDate[ds];
+      const isToday = ds===todayStr;
+      if(evts){
+        const tip = evts.map(o=>rpstName(o.hcode)).join(', ');
+        const rid = evts[0].id;
+        cells+=`<div class="mc-day mc-hl${isToday?' mc-today':''}" title="${esc(tip)}" data-calround="${esc(rid)}">${d}</div>`;
+      } else {
+        cells+=`<div class="mc-day${isToday?' mc-today':''}">${d}</div>`;
+      }
+    }
+    return `<div class="mini-cal"><div class="mc-head"><b>${TH_MONTHS[m]} ${y+543}</b></div>
+      <div class="mc-grid">${cells}</div></div>`;
+  }).join('');
+
+  // กดวันที่ไฮไลท์ → เปิดรอบ
+  $('cal-months').querySelectorAll('[data-calround]').forEach(el=>
+    el.addEventListener('click',()=>openRound(el.dataset.calround)));
 }
 $('btn-oc-add').addEventListener('click', async ()=>{
   const hcode = isRpst()?myHcode():$('oc-hcode').value, date=$('oc-date').value;
@@ -2777,7 +2893,12 @@ ${JSON.stringify(p,null,2)}
 4. แสดงให้เภสัชกรเห็นชัดว่ายอดที่เพิ่มมาจากรอบออกหน่วยวันไหน ของ รพ.สต. ไหน กี่รายการ
 5. เมื่อรับยอดเข้าระบบแล้ว ให้เขียนกลับไปตั้ง consumed_by_refill = true พร้อม consumed_at
    จะได้ไม่บวกซ้ำรอบหน้า
-6. เขียนเป็น PHP ไฟล์เดียว รันด้วย C:\\xampp\\php\\php.exe ได้เลย ไม่ต้องติดตั้งอะไรเพิ่ม`;
+6. **UI ฝั่ง refill**: ในหน้าเบิกยา ให้แสดงปุ่ม "ดูยอดจากออกหน่วย" (เฉพาะเมื่อมียอดที่ยังไม่ consumed)
+   เมื่อกดปุ่ม ให้เปิด modal แสดงรายการยาแต่ละนัดที่เลือกได้ ดังนี้:
+   - แสดงรายการรอบนัดที่มียอด (round_date + hcode_name) ให้เลือก
+   - เมื่อเลือกรอบ ให้แสดงตารางรายการยา: ชื่อยา, จำนวนผู้ป่วย, เม็ด/วัน, จำนวนที่ต้องเตรียม, หมายเหตุ (prn/unknown)
+   - ปุ่ม "รับยอดนี้เข้าระบบ" จะบวกเพิ่ม target stock และตั้ง consumed_by_refill = true
+7. เขียนเป็น PHP ไฟล์เดียว รันด้วย C:\\xampp\\php\\php.exe ได้เลย ไม่ต้องติดตั้งอะไรเพิ่ม`;
 }
 
 $('dc-hcode')?.addEventListener('change', renderDrugCat);
@@ -2791,6 +2912,19 @@ async function loadDrugMap(){
     DRUGMAP={}; s.docs.forEach(d=>DRUGMAP[d.id]=d.data());
   }catch(e){ DRUGMAP={}; }
 }
+/* ตัวเลือก drugusage dropdown — ค่าที่พบบ่อยในงานเภสัชกรรม */
+const DU_OPTIONS = [
+  {dpd:0.25,label:'¼ เม็ด วันละ 1 ครั้ง (0.25/วัน)'},
+  {dpd:0.5, label:'½ เม็ด วันละ 1 ครั้ง (0.5/วัน)'},
+  {dpd:1,   label:'1 เม็ด วันละ 1 ครั้ง (1/วัน)'},
+  {dpd:1.5, label:'1½ เม็ด วันละ 1 ครั้ง (1.5/วัน)'},
+  {dpd:2,   label:'2 เม็ด/วัน (1×2 หรือ 2×1)'},
+  {dpd:3,   label:'3 เม็ด/วัน (1×3)'},
+  {dpd:4,   label:'4 เม็ด/วัน (1×4 หรือ 2×2)'},
+  {dpd:6,   label:'6 เม็ด/วัน (2×3)'},
+  {dpd:8,   label:'8 เม็ด/วัน (2×4)'},
+];
+
 function renderDrugMap(){
   const found={};
   LIST.forEach(r=>(r.medications||[]).forEach(m=>{
@@ -2801,12 +2935,33 @@ function renderDrugMap(){
   const rows=Object.values(found).sort((a,b)=>b.n-a.n);
   $('tb-drug').innerHTML = rows.length ? rows.map(f=>{
     const d=DRUGMAP[f.code]||{};
+    const curVal = d.doses_per_day;
+    const matchOpt = curVal!=null ? DU_OPTIONS.find(o=>o.dpd===curVal) : null;
+    const isCustom = curVal!=null && !matchOpt;
+    const selHtml = `<select data-dusel="${esc(f.code)}" style="width:180px;margin-bottom:4px">
+      <option value="">-- เลือก --</option>
+      ${DU_OPTIONS.map((o,i)=>`<option value="${o.dpd}"${!isCustom && curVal===o.dpd?' selected':''}>${esc(o.label)}</option>`).join('')}
+      <option value="custom"${isCustom?' selected':''}>พิมพ์เอง...</option>
+    </select>
+    <input type="number" step="0.5" min="0" style="width:85px;${isCustom?'':'display:none'}" data-dpd="${esc(f.code)}" value="${curVal??''}"
+      placeholder="เม็ด/วัน">`;
     return `<tr><td class="mono">${esc(f.code)}</td><td class="sub">${esc(f.text)}</td>
-      <td><input type="number" step="0.5" min="0" style="width:85px" data-dpd="${esc(f.code)}" value="${d.doses_per_day??''}"></td>
+      <td>${selHtml}</td>
       <td><input type="checkbox" data-prn="${esc(f.code)}"${d.is_prn?' checked':''}></td>
       <td class="right mono">${f.n}</td>
       <td class="right"><button class="btn-sm" data-save="${esc(f.code)}">บันทึก</button></td></tr>`;
   }).join('') : '<tr><td colspan="6" class="empty">ยังไม่พบรหัสวิธีใช้ในข้อมูล</td></tr>';
+
+  // เชื่อม dropdown กับ input
+  $('tb-drug').querySelectorAll('[data-dusel]').forEach(sel=>{
+    const code = sel.dataset.dusel;
+    const inp = $('tb-drug').querySelector(`[data-dpd="${CSS.escape(code)}"]`);
+    sel.addEventListener('change',()=>{
+      if(sel.value==='custom'){ inp.style.display=''; inp.focus(); inp.value=''; }
+      else if(sel.value===''){ inp.style.display='none'; inp.value=''; }
+      else { inp.style.display='none'; inp.value=sel.value; }
+    });
+  });
   $('tb-drug').querySelectorAll('[data-save]').forEach(b=>
     b.addEventListener('click', async ()=>{
       const code=b.dataset.save;

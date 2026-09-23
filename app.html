@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <title>Sawee Rxfill — ระบบเติมยา VMI</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%2310b981%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23047857%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22url%28%23g%29%22%2F%3E%3Cpath%20fill%3D%22%23fff%22%20d%3D%22M9%2020a3%203%200%200%201%203-3h22a3%203%200%200%201%203%203v3h7.2a3%203%200%200%201%202.4%201.2l6.8%209a3%203%200%200%201%20.6%201.8V43a3%203%200%200%201-3%203h-2.2a6%206%200%200%201-11.6%200H27.8a6%206%200%200%201-11.6%200H12a3%203%200%200%201-3-3Zm28%207v7h11.4l-5.2-7Z%22%2F%3E%3Ccircle%20cx%3D%2222%22%20cy%3D%2245%22%20r%3D%223.2%22%20fill%3D%22%23047857%22%2F%3E%3Ccircle%20cx%3D%2243%22%20cy%3D%2245%22%20r%3D%223.2%22%20fill%3D%22%23047857%22%2F%3E%3Cpath%20fill%3D%22%23047857%22%20d%3D%22M21%2025h4v4h4v4h-4v4h-4v-4h-4v-4h4Z%22%2F%3E%3C%2Fsvg%3E">
+  <meta name="theme-color" content="#047857">
   
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -201,11 +202,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=5.7.2"></script>
+  <script src="shared.js?v=5.8.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '5.7.2';
+      var need = '5.8.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -6222,6 +6223,7 @@ const AdminConfigView = ({ ctx }) => {
 
       // HOSxP code sync (ย้ายขึ้นมาระดับ AdminConfigView: DrugManager ถูกเรียกเป็นฟังก์ชัน จึงใช้ hook ภายในไม่ได้)
       const [isSyncingHosxp, setIsSyncingHosxp] = useState(false);
+      const [showInvsExtras, setShowInvsExtras] = useState(false);
       const [hosxpSyncDiff, setHosxpSyncDiff] = useState(null); // {toUpdate:[],noChange:[],unmatched:[]} or null
 
       // STEP 1: fetch diff from bridge, show preview modal
@@ -6537,7 +6539,7 @@ const AdminConfigView = ({ ctx }) => {
         // ค้นหาชื่อ/รหัส/Fuzzy + กรองหมวด และคง filter ล่าสุดไว้แม้เปิดหน้าแก้ไขแล้วกลับ
         const q = drugSearchTerm.trim().toLowerCase();
         const filteredDrugs = ctx.appDb.drugs.filter(d => {
-          const matchesText = !q || (d.drug_name || '').toLowerCase().includes(q) || (d.drug_id || '').toLowerCase().includes(q) || (d.fuzzy || '').toLowerCase().includes(q);
+          const matchesText = !q || (d.drug_name || '').toLowerCase().includes(q) || (d.drug_id || '').toLowerCase().includes(q) || (d.fuzzy || '').toLowerCase().includes(q) || String(d.hosxp_code || '').toLowerCase().includes(q) || String(d.invs_keywords || '').toLowerCase().includes(q) || String(d.invs_location || '').toLowerCase().includes(q);
           const matchesType = drugTypeFilter === 'all' || String(d.type || '1') === String(drugTypeFilter);
           return matchesText && matchesType;
         }).sort(sortDrugs);
@@ -6557,7 +6559,7 @@ const AdminConfigView = ({ ctx }) => {
             <div className="flex justify-between items-center mb-4 gap-3 flex-wrap">
                <div className="relative w-full max-w-sm">
                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-slate-400"></i>
-                 <input type="text" placeholder="ค้นหารายการยา / รหัส / Fuzzy..." className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:border-emerald-500" value={drugSearchTerm} onChange={e=>setDrugSearchTerm(e.target.value)} />
+                 <input type="text" placeholder="ค้นหาชื่อยา / รหัส / Fuzzy / คำค้นหา INVS / ตำแหน่ง" className="w-full pl-10 pr-4 py-3 border rounded-xl outline-none focus:border-emerald-500" value={drugSearchTerm} onChange={e=>setDrugSearchTerm(e.target.value)} />
                </div>
                <select value={drugTypeFilter} onChange={e=>setDrugTypeFilter(e.target.value)} className="min-w-[220px] p-3 border rounded-xl bg-white font-bold text-slate-700 outline-none focus:border-emerald-500">
                  <option value="all">ทุกหมวดหมู่</option>
@@ -6570,6 +6572,9 @@ const AdminConfigView = ({ ctx }) => {
                  </button>
                  <button onClick={handleSyncHosxpCodes} disabled={isSyncingHosxp} className="bg-purple-100 text-purple-700 border border-purple-200 px-4 py-3 rounded-xl font-bold shrink-0 hover:bg-purple-200 transition disabled:opacity-50" title="ดึงรหัส HOSxP จากตาราง inv_has_his ใน INVS แล้วอัปเดต master_drugs อัตโนมัติ">
                    <i className={`fa-solid ${isSyncingHosxp?'fa-spinner fa-spin':'fa-link'} mr-1`}></i>{isSyncingHosxp?'กำลัง Sync...':'Sync รหัส HOSxP'}
+                 </button>
+                 <button onClick={()=>setShowInvsExtras(true)} className="bg-cyan-100 text-cyan-800 border border-cyan-200 px-4 py-3 rounded-xl font-bold shrink-0 hover:bg-cyan-200 transition" title="ดึงคำค้นหาและตำแหน่งยาจาก INVS">
+                   <i className="fa-solid fa-location-dot mr-1"></i> คำค้นหา/ตำแหน่ง INVS
                  </button>
                  <button onClick={()=>setEditTarget({ col: 'master_drugs', data: {}, isNew: true })} className="bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg shrink-0 hover:scale-105 transition">
                    <i className="fa-solid fa-plus mr-1"></i> เพิ่มรายการยา
@@ -6586,7 +6591,7 @@ const AdminConfigView = ({ ctx }) => {
                   {filteredDrugs.map(d=>(
                     <tr key={d.id} className={`border-b transition ${isDrugDiscontinued(d) ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'hover:bg-slate-50'}`}>
                       <td className="p-4 font-mono text-slate-500">{d.drug_id}</td>
-                      <td className="p-4 font-mono text-purple-600 text-xs">{d.hosxp_code || <span className="text-slate-300">-</span>}</td>
+                      <td className="p-4 font-mono text-purple-600 text-xs">{d.hosxp_code || <span className="text-slate-300">-</span>}{d.invs_location ? <div className="font-sans font-bold text-teal-700 mt-1" title="ตำแหน่งยาใน INVS"><i className="fa-solid fa-location-dot mr-1"></i>{d.invs_location}</div> : null}{d.invs_keywords ? <div className="font-sans text-slate-400 mt-0.5" title="คำค้นหาใน INVS">{d.invs_keywords}</div> : null}</td>
                       <td className="p-4 font-bold text-slate-600">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type] || DEFAULT_DRUG_TYPES['1']}</td>
                       <td className="p-4 font-bold text-slate-800"><div>{d.drug_name}</div>{d.needs_vmi_setup && <div className="mt-1"><span className="bg-amber-100 text-amber-800 border border-amber-200 rounded px-2 py-0.5 text-[10px] font-black">ใหม่จาก INVS • รอตั้งค่า VMI</span></div>}{safeText(d.master_sync_source)==='INVS' && <div className="text-[9px] text-emerald-600 mt-1">INVS Master Sync</div>}</td>
                       <td className="p-3 text-center"><select value={isDrugDiscontinued(d)?'discontinued':'active'} onChange={e=>handleInlineDrugUpdate(d,'status',e.target.value)} className={`w-[105px] rounded-lg border px-2 py-1.5 text-[11px] font-black outline-none ${isDrugDiscontinued(d)?'bg-slate-700 text-white border-slate-700':'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><option value="active">Active</option><option value="discontinued">ยกเลิกใช้</option></select></td>
@@ -6971,6 +6976,7 @@ const AdminConfigView = ({ ctx }) => {
             </Modal>
           )}
 
+          {showInvsExtras && <InvsExtrasModal ctx={ctx} onClose={() => setShowInvsExtras(false)} />}
           {/* HOSxP Sync Diff Preview Modal */}
           {hosxpSyncDiff && (
             <Modal title="ยืนยัน Sync รหัส HOSxP" isOpen={true} onClose={() => setHosxpSyncDiff(null)} maxWidth="max-w-3xl">
@@ -7125,6 +7131,118 @@ const AdminConfigView = ({ ctx }) => {
       }
     };
 
+
+    // ===== v5.8 คำค้นหา / ตำแหน่งยา จาก INVS (อ่านอย่างเดียว) =====
+    const InvsExtrasModal = ({ ctx, onClose }) => {
+      const [busy, setBusy] = useState('');
+      const [diff, setDiff] = useState(null);
+      const [probe, setProbe] = useState('FORTUM');
+      const [disc, setDisc] = useState(null);
+      const fetchExtras = async () => {
+        setBusy('fetch');
+        try {
+          const data = await callInvsBridge('invs_extras');
+          const kw = new Map(), loc = new Map();
+          (data.keywords || []).forEach(k => { const id = String(k.working_code); if (!kw.has(id)) kw.set(id, new Set()); kw.get(id).add(k.keyword); });
+          (data.locations || []).forEach(l => { loc.set(String(l.working_code), l.location); });
+          const known = new Set(ctx.appDb.drugs.map(d => String(d.drug_id)));
+          const changes = [];
+          ctx.appDb.drugs.forEach(d => {
+            const id = String(d.drug_id);
+            const newKw = kw.has(id) ? [...kw.get(id)].join(', ') : (d.invs_keywords || '');
+            const newLoc = loc.has(id) ? loc.get(id) : (d.invs_location || '');
+            if (newKw !== (d.invs_keywords || '') || newLoc !== (d.invs_location || '')) changes.push({ d, newKw, newLoc });
+          });
+          const unknown = new Set([...kw.keys(), ...loc.keys()].filter(id => !known.has(id)));
+          setDiff({ detected: data.detected || {}, kwCount: kw.size, locCount: loc.size, changes, unknown: unknown.size });
+        } catch (e) { ctx.showToast('ดึงจาก INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const apply = async () => {
+        if (!diff?.changes.length) return;
+        setBusy('apply');
+        try {
+          await executeBatchChunks(diff.changes.map(c => ({ type: 'update', ref: db.collection('master_drugs').doc(String(c.d.drug_id)),
+            data: { invs_keywords: c.newKw, invs_location: c.newLoc, invs_extras_synced_at: firebase.firestore.FieldValue.serverTimestamp() } })));
+          await writeAuditLog(ctx.currentUser, 'INVS_EXTRAS_SYNC', 'master_drugs', 'BATCH', { updated: diff.changes.length });
+          ctx.showToast(`อัปเดตคำค้นหา/ตำแหน่ง ${diff.changes.length} รายการ`); await ctx.refreshData(); onClose();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(''); }
+      };
+      const discover = async () => {
+        setBusy('disc');
+        try { setDisc(await callInvsBridge('invs_discover', '', { probe_value: safeText(probe) })); }
+        catch (e) { ctx.showToast('ค้นหาตารางไม่สำเร็จ: ' + (e?.message || e), 'error'); } finally { setBusy(''); }
+      };
+      return (
+        <Modal isOpen onClose={() => !busy && onClose()} title="คำค้นหาและตำแหน่งยาจาก INVS" maxWidth="max-w-5xl">
+          <div className="space-y-6">
+            <section className="space-y-3">
+              <p className="text-sm text-slate-600">อ่าน <b>คำค้นหา</b> (เมนูกำหนดรายการ › คำค้นหา ใน INVS) และ <b>ตำแหน่งยา</b> (คอลัมน์ LOCATION ของ lot ในคลังจ่าย) แล้วบันทึกลงรายการยา เพื่อใช้ค้นหาในหน้าเบิก และเรียงใบจัดยาตามตำแหน่ง — ไม่แก้ไขข้อมูลใน INVS</p>
+              <button onClick={fetchExtras} disabled={!!busy} className="px-5 py-2.5 rounded-xl bg-cyan-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy === 'fetch' ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-2`}></i>ดึงจาก INVS</button>
+              {diff && (
+                <div className="space-y-3">
+                  <div className="grid md:grid-cols-4 gap-3 text-sm">
+                    <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">แหล่งคำค้นหา</div><b>{diff.detected.keyword || 'ไม่พบ — ใช้ "ค้นหาตาราง" ด้านล่าง'}</b></div>
+                    <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">แหล่งตำแหน่ง</div><b>{diff.detected.location || 'ไม่พบ'}</b></div>
+                    <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">ยาที่มีคำค้นหา / ตำแหน่ง</div><b>{diff.kwCount} / {diff.locCount}</b></div>
+                    <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">จะอัปเดต</div><b>{diff.changes.length} รายการ</b>{diff.unknown ? <div className="text-[11px] text-amber-700">รหัสที่ไม่มีในแอป {diff.unknown}</div> : null}</div>
+                  </div>
+                  <div className="overflow-auto max-h-72 border rounded-xl">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-xs text-slate-500 sticky top-0"><tr><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">ชื่อยา</th><th className="p-2 text-left">คำค้นหา</th><th className="p-2 text-left">ตำแหน่ง</th></tr></thead>
+                      <tbody>{diff.changes.slice(0, 300).map(c => (
+                        <tr key={c.d.drug_id} className="border-t"><td className="p-2 font-mono text-xs">{c.d.drug_id}</td><td className="p-2">{c.d.drug_name}</td>
+                          <td className="p-2 text-xs">{c.newKw || '-'}{(c.d.invs_keywords || '') !== c.newKw && c.d.invs_keywords ? <div className="text-slate-400 line-through">{c.d.invs_keywords}</div> : null}</td>
+                          <td className="p-2 text-xs font-bold text-teal-700">{c.newLoc || '-'}{(c.d.invs_location || '') !== c.newLoc && c.d.invs_location ? <div className="text-slate-400 line-through font-normal">{c.d.invs_location}</div> : null}</td></tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                  <div className="text-right"><button onClick={apply} disabled={!!busy || !diff.changes.length} className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-40">{busy === 'apply' ? 'กำลังบันทึก...' : `บันทึก ${diff.changes.length} รายการ`}</button></div>
+                </div>
+              )}
+            </section>
+            <section className="border-t pt-5 space-y-3">
+              <h4 className="font-bold text-slate-800">ค้นหาตารางใน INVS (ใช้เมื่อหาแหล่งคำค้นหา/ตำแหน่งไม่เจอ)</h4>
+              <p className="text-sm text-slate-500">พิมพ์คำค้นหาที่รู้ว่ามีใน INVS แน่นอน (เช่น FORTUM ที่เพิ่งบันทึกให้ Cefotaxime) ระบบจะไล่หาว่าเก็บอยู่ตาราง/คอลัมน์ไหน แล้วส่งผลนี้ให้ผู้พัฒนาตั้งค่า <code>invs_extra.keyword_sql</code></p>
+              <div className="flex gap-2 flex-wrap">
+                <input value={probe} onChange={e => setProbe(e.target.value)} aria-label="คำที่ใช้ค้นหาตาราง" className="p-2.5 border rounded-xl w-64" />
+                <button onClick={discover} disabled={!!busy} className="px-4 py-2.5 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy === 'disc' ? 'fa-spinner fa-spin' : 'fa-magnifying-glass'} mr-2`}></i>ค้นหาตาราง</button>
+              </div>
+              {disc && (
+                <div className="grid md:grid-cols-2 gap-4 text-sm">
+                  <div className="border rounded-xl p-3">
+                    <div className="font-bold mb-2">พบค่า "{disc.probe_value}" ที่</div>
+                    {(disc.probe_hits || []).length ? disc.probe_hits.map(h => <div key={h.table + h.column} className="font-mono text-emerald-700">{h.table}.{h.column}</div>) : <div className="text-slate-400">ไม่พบ</div>}
+                  </div>
+                  <div className="border rounded-xl p-3 max-h-60 overflow-auto">
+                    <div className="font-bold mb-2">คอลัมน์ที่ชื่อเกี่ยวข้อง ({(disc.candidates || []).length})</div>
+                    {(disc.candidates || []).map(c => <div key={c.t + c.c} className="font-mono text-xs">{c.t}.{c.c} <span className="text-slate-400">{c.dt}</span></div>)}
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+        </Modal>
+      );
+    };
+
+    // ใบจัดยา: เรียงตามตำแหน่งยาใน INVS เพื่อหยิบเร็ว (เปิดหน้าต่างใหม่แล้วพิมพ์)
+    const printPickingList = (req, items, findDrug) => {
+      const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const rows = items.filter(it => toNonNegativeNumber(it.dispenseQty) > 0).map(it => ({ ...it, loc: safeText(findDrug(it.drugId)?.invs_location) }))
+        .sort((a, b) => (a.loc ? 0 : 1) - (b.loc ? 0 : 1) || a.loc.localeCompare(b.loc, 'th', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'th'));
+      const w = window.open('', '_blank');
+      if (!w) return alert('เบราว์เซอร์บล็อกหน้าต่างใหม่ กรุณาอนุญาต pop-up');
+      w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบจัดยา ${esc(req.doc_no || req.id)}</title>
+        <style>@page{size:A4;margin:12mm}body{font-family:Sarabun,'TH SarabunPSK',sans-serif;font-size:14px}h2{margin:0 0 4px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:4px 6px}th{background:#eee}.loc{font-weight:700;font-size:15px;white-space:nowrap}.r{text-align:right}.chk{width:28px}</style></head><body>
+        <h2>ใบจัดยา — ${esc(req.dept_name)}</h2><div>เลขที่ ${esc(req.doc_no || req.id)} · ${rows.length} รายการ · เรียงตามตำแหน่งยา${req.invs_sub_po_no ? ' · INVS ' + esc(req.invs_sub_po_no) : ''}</div><br>
+        <table><thead><tr><th class="chk">✓</th><th>ตำแหน่ง</th><th>รหัส</th><th>รายการ</th><th class="r">จำนวน</th><th>หน่วย</th><th>แพ็ค</th></tr></thead><tbody>
+        ${rows.map(it => `<tr><td></td><td class="loc">${esc(it.loc || '-')}</td><td>${esc(it.drugId)}</td><td>${esc(it.name)}</td><td class="r"><b>${toNonNegativeNumber(it.dispenseQty).toLocaleString('th-TH')}</b></td><td>${esc(it.unit)}</td><td>${safePackSize(it.packSize) > 1 ? esc(formatQty(it.dispenseQty, it.packSize)) + ' ×' + safePackSize(it.packSize) : ''}</td></tr>`).join('')}
+        </tbody></table><br><div>ผู้จัดยา ........................................ ผู้ตรวจ ........................................</div>
+        <script>window.onload=function(){window.print();}<\/script></body></html>`);
+      w.document.close();
+    };
+
     const InternalReviewPanel = ({ ctx, req, queue, onBack, reload }) => {
       const [items, setItems] = useState(() => (req.items || []).map(it => ({ ...it, dispenseQty: toNonNegativeNumber(it.dispenseQty ?? it.requestQty) })));
       const [adminNote, setAdminNote] = useState(req.admin_note || '');
@@ -7141,6 +7259,9 @@ const AdminConfigView = ({ ctx }) => {
       const total = items.reduce((s, it) => s + internalItemValue(it), 0);
       const isPharmacy = req.kind === 'pharmacy';
 
+      const [sortByLoc, setSortByLoc] = useState(false);
+      const locOf = (id) => safeText(ctx.findDrug(id)?.invs_location);
+      const shownItems = sortByLoc ? [...items].sort((a, b) => (locOf(a.drugId) ? 0 : 1) - (locOf(b.drugId) ? 0 : 1) || locOf(a.drugId).localeCompare(locOf(b.drugId), 'th', { numeric: true })) : items;
       const setQty = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, dispenseQty: toNonNegativeNumber(v) } : it));
       const setNote = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, adminNote: v } : it));
 
@@ -7240,21 +7361,26 @@ const AdminConfigView = ({ ctx }) => {
             {ahead.length > 0 && actionable && <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm"><i className="fa-solid fa-list-ol mr-2"></i>มี {ahead.length} ใบที่ส่งก่อนใบนี้ยังรอ — แนะนำอนุมัติตามลำดับเพื่อให้ INVS ตัด lot ตามลำดับ</div>}
           </div>
 
+          <div className="flex flex-wrap gap-2 justify-end">
+            <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 cursor-pointer mr-auto"><input type="checkbox" checked={sortByLoc} onChange={e => setSortByLoc(e.target.checked)} className="w-4 h-4" /> เรียงตามตำแหน่งยา (INVS)</label>
+            <button onClick={() => printPickingList(req, items, ctx.findDrug)} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold text-sm"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบจัดยา (เรียงตามตำแหน่ง)</button>
+          </div>
           <div className="bg-white rounded-2xl border shadow-sm overflow-auto max-h-[65vh]">
             <table className="w-full text-sm">
               <thead className="text-xs text-slate-500 bg-slate-100 sticky top-0 z-10"><tr>
-                <th className="p-2 text-left">#</th><th className="p-2 text-left">รายการ</th>
+                <th className="p-2 text-left">#</th><th className="p-2 text-left">ตำแหน่ง</th><th className="p-2 text-left">รายการ</th>
                 {isPharmacy && <th className="p-2 text-right">ใช้ OPD+IPD</th>}{isPharmacy && <th className="p-2 text-right">คงเหลือ</th>}{isPharmacy && <th className="p-2 text-right">แนะนำ</th>}
                 <th className="p-2 text-right">ขอเบิก</th><th className="p-2 text-right">อนุมัติจ่าย</th><th className="p-2 text-right">มูลค่า</th><th className="p-2 text-left">หมายเหตุ</th>
               </tr></thead>
               <tbody>
-                {items.map((it, i) => {
+                {shownItems.map((it, i) => {
                   const req0 = toNonNegativeNumber(it.requestQty ?? it.dispenseQty);
                   const changed = Math.abs(toNonNegativeNumber(it.dispenseQty) - req0) > 1e-9;
                   const pack = safePackSize(it.packSize);
                   return (
                     <tr key={it.drugId} className={`border-t ${it.dispenseQty > 0 ? '' : 'text-slate-400'}`}>
                       <td className="p-2 text-slate-400">{i + 1}</td>
+                      <td className="p-2 font-bold text-teal-700 whitespace-nowrap">{locOf(it.drugId) || <span className="text-slate-300 font-normal">-</span>}</td>
                       <td className="p-2"><div className="font-semibold">{it.name}</div><div className="text-[11px] text-slate-400 font-mono">{it.drugId} · {it.unit}{pack > 1 ? ` ×${pack}` : ''}{it.note ? ` · ผู้เบิก: ${it.note}` : ''}{isPharmacy && it.followSuggest === false ? ' · แก้จากที่แนะนำ' : ''}</div></td>
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.usage)}</td>}
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.onHand)}</td>}

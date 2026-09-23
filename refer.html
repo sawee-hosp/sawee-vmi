@@ -216,6 +216,12 @@ tbody tr:hover{background:#FAFCFA}
 .mini-cal.wide .mc-day{min-width:62px;min-height:44px}
 .mc-legend{margin-top:8px;font-size:12px;color:var(--sub)}
 .mc-legend span{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;margin-right:4px}
+.mini-cal.cal-one{display:block;max-width:760px;padding:14px}
+.mini-cal.cal-one .mc-head{gap:8px;justify-content:flex-start}
+.mini-cal.cal-one .mc-head select{padding:5px 8px}
+.mini-cal.cal-one .mc-day{min-height:52px;padding:4px 2px;border-top:1px solid var(--line);border-radius:0}
+.mini-cal.cal-one .mc-hdr{min-height:auto;border-top:none}
+.mini-cal.cal-one .mc-rp{max-width:100px;font-size:11px}
 /* ตัวเลือกวันนัดจากปฏิทิน */
 .ap-pick{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .ap-pick .ap-opt{padding:5px 12px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:13px;background:#fff;transition:all .15s}
@@ -251,9 +257,9 @@ tbody tr:hover{background:#FAFCFA}
          หน่วยบริการไม่ต้องเลือกเอง ให้พิมพ์ในหมายเหตุ admin จะกำหนดให้ตอนอนุมัติ -->
     <div id="reg-form">
       <label>อีเมล (ใช้ล็อกอิน)</label><input type="email" id="r-email" autocomplete="username">
-      <label>ตั้งรหัสผ่าน (อย่างน้อย 8 ตัว)</label><input type="password" id="r-pass" autocomplete="new-password">
+      <label>ตั้งรหัสผ่าน (อย่างน้อย 6 ตัว ใช้ตัวอักษรหรือตัวเลขอะไรก็ได้)</label><input type="password" id="r-pass" autocomplete="new-password">
       <label>ยืนยันรหัสผ่าน</label><input type="password" id="r-pass2" autocomplete="new-password">
-      <label>ชื่อ-นามสกุลจริง</label><input type="text" id="r-name" placeholder="เช่น สมหญิง ใจดี">
+      <label>ชื่อ-นามสกุลจริง <span class="sub">(ระบุคำนำหน้าที่ต้องการด้วย)</span></label><input type="text" id="r-name" placeholder="เช่น นายสมชาย ใจดี">
       <label>ตำแหน่ง</label><input type="text" id="r-pos" placeholder="เช่น พยาบาลวิชาชีพ">
       <label>เบอร์โทรศัพท์</label><input type="text" id="r-phone" inputmode="tel" placeholder="08xxxxxxxx">
       <label>บทบาทที่ขอใช้งาน</label>
@@ -292,6 +298,10 @@ tbody tr:hover{background:#FAFCFA}
     <h1>ระบบส่งต่อผู้ป่วย รพ.สวี</h1>
     <div class="spacer"></div>
     <div class="who"><b id="who-name"></b><span id="who-role"></span></div>
+    <div id="sync-wrap" class="hidden" style="display:flex;align-items:center;gap:8px;margin-right:8px">
+      <span id="sync-st" class="sub" style="font-size:12px;text-align:right;line-height:1.3"></span>
+      <button class="btn-sm" id="btn-sync" title="สั่งเครื่อง pusher ใน รพ. ให้ดึงข้อมูลจาก HOSxP ส่งให้ รพ.สต. ทันที">⟳ Sync ตอนนี้</button>
+    </div>
     <button class="btn-ghost" id="btn-logout">ออกจากระบบ</button>
   </header>
   <nav id="nav"></nav>
@@ -328,8 +338,8 @@ tbody tr:hover{background:#FAFCFA}
     <!-- รอบนัด -->
     <section id="tab-cal" class="hidden">
       <div class="panel">
-        <h2>ปฏิทินรอบนัด <span class="note">วันที่ไฮไลท์ = มีคลินิกออกหน่วย กดเพื่อเปิดรอบ</span></h2>
-        <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:10px" id="cal-months"></div>
+        <h2>ปฏิทินรอบนัด <span class="note">วันที่มีวงกลม = มีคลินิกออกหน่วย กดเพื่อเปิดรอบ</span></h2>
+        <div id="cal-months" style="margin-bottom:10px"></div>
         <div id="cal-summary" class="sub" style="margin-bottom:6px"></div>
       </div>
       <div class="panel">
@@ -351,11 +361,7 @@ tbody tr:hover{background:#FAFCFA}
           <span class="sub" style="margin-left:8px">ตามเอกสารแผนการออกให้บริการประชาชนโดยแพทย์และทีมสหวิชาชีพ วันที่ซ้ำจะถูกข้ามให้อัตโนมัติ</span>
         </div>
         <div id="oc-msg" style="margin-top:10px"></div>
-        <div class="tbl-wrap" style="margin-top:12px"><table>
-          <thead><tr><th>วันนัด</th><th>รพ.สต.</th><th>หมายเหตุ</th>
-            <th class="right">ผู้ป่วย</th><th>ช่วงถึงรอบหน้า</th><th style="width:150px"></th></tr></thead>
-          <tbody id="tb-oc"></tbody>
-        </table></div>
+
       </div>
     </section>
 
@@ -656,7 +662,7 @@ import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc,
-  updateDoc, query, where, orderBy, limit, serverTimestamp, writeBatch }
+  updateDoc, query, where, orderBy, limit, serverTimestamp, writeBatch, onSnapshot }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 /* ================= CONFIG ================= */
@@ -707,7 +713,7 @@ const ORDER_DAY = 20;   // เบิกยาล่วงหน้าภาย�
 const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออกจากระบบ', view_list:'เปิดรายชื่อผู้ป่วย',
   view_patient:'เปิดเวชระเบียนผู้ป่วย', change_status:'เปลี่ยนสถานะ', batch_appoint:'กำหนดวันนัดเป็นชุด',
   open_round:'เปิดรอบนัด', view_dashboard:'เปิดแดชบอร์ด', view_log:'เปิดบันทึกการเข้าถึง',
-  edit_outreach:'แก้ไขวันนัด', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
+  edit_outreach:'แก้ไขวันนัด', request_sync:'สั่ง sync ข้อมูล', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
   edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.',
   record_visit:'บันทึกการให้บริการ', keyed_hosxp:'คีย์เข้า HOSxP แล้ว',
   approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
@@ -853,9 +859,9 @@ $('btn-reg').addEventListener('click', async ()=>{
         note=$('r-note').value.trim();
   const err = m => { $('reg-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`; };
   if(!email)                 return err('กรอกอีเมล');
-  if(pass.length<8)          return err('รหัสผ่านอย่างน้อย 8 ตัว');
+  if(pass.length<6)          return err('รหัสผ่านอย่างน้อย 6 ตัว');
   if(pass!==pass2)           return err('ยืนยันรหัสผ่านไม่ตรงกัน');
-  if(!name || name.split(' ').filter(Boolean).length<2) return err('กรอกชื่อและนามสกุลจริงให้ครบ');
+  if(!name || name.split(' ').filter(Boolean).length<2) return err('กรอกคำนำหน้า ชื่อ และนามสกุลจริงให้ครบ เช่น นายสมชาย ใจดี');
   if(phone.length<9)         return err('เบอร์โทรศัพท์ไม่ถูกต้อง');
   if(!note)                  return err('ระบุหน่วยงานในช่องหมายเหตุด้วย');
   $('btn-reg').disabled=true; $('reg-msg').innerHTML='';
@@ -891,6 +897,56 @@ $('btn-login').addEventListener('click', async ()=>{
 });
 $('password').addEventListener('keydown', e=>{ if(e.key==='Enter') $('btn-login').click(); });
 $('btn-logout').addEventListener('click', async ()=>{ await audit('logout'); signOut(auth); });
+
+/* ================= Sync ทันที (admin) =================
+   หน้าเว็บอยู่บน GitHub Pages สั่งรัน push.php ในเครื่อง รพ. ตรงๆ ไม่ได้
+   จึงเขียนคำขอลง sync_control/request แล้วให้ sync_watch.php (รันค้างไว้ในเครื่อง pusher) มารับไปทำ
+   ตัว watcher จะเขียน sync_control/watcher ทุกรอบ เพื่อบอกว่ายังออนไลน์อยู่ */
+let SYNC_REQ=null, SYNC_WATCH=null;
+function agoText(t){
+  if(!t) return '';
+  const m = Math.round((Date.now()-new Date(String(t).replace(' ','T')+'+07:00').getTime())/60000);
+  return m<1?'เมื่อสักครู่':m<60?m+' นาทีที่แล้ว':m<1440?Math.round(m/60)+' ชม.ที่แล้ว':Math.round(m/1440)+' วันที่แล้ว';
+}
+function paintSync(){
+  const r=SYNC_REQ||{}, w=SYNC_WATCH||{};
+  const wAge = w.last_seen ? (Date.now()-new Date(String(w.last_seen).replace(' ','T')+'+07:00').getTime())/60000 : 1e9;
+  const online = wAge < 3;
+  // ถ้าค้างนานผิดปกติ (เครื่องดับกลางทาง) ให้กดใหม่ได้: running > 20 นาที, pending > 30 นาที
+  const ageMin = t => t ? (Date.now()-new Date(String(t).replace(' ','T')+'+07:00').getTime())/60000 : 1e9;
+  const busy = (r.status==='running' && ageMin(r.started_at_text)<20)
+            || (r.status==='pending' && ageMin(r.requested_at_text)<30);
+  $('btn-sync').disabled = busy;
+  $('btn-sync').textContent = r.status==='running' ? '⟳ กำลัง sync...' : r.status==='pending' ? '⟳ รอเครื่องรับคำสั่ง...' : '⟳ Sync ตอนนี้';
+  let line1 = r.status==='done'  ? `sync ล่าสุด ${agoText(r.finished_at_text)} ✓`
+            : r.status==='error' ? `<span style="color:var(--warn)">sync ล่าสุดผิดพลาด (${esc(r.finished_at_text||'')})</span>`
+            : r.status==='running' ? `เริ่ม ${agoText(r.started_at_text)}`
+            : r.status==='pending' ? `ส่งคำขอ ${agoText(r.requested_at_text)}` : '';
+  const line2 = online ? '<span style="color:var(--ok)">● เครื่อง pusher ออนไลน์</span>'
+              : `<span style="color:var(--warn)">● เครื่อง pusher ออฟไลน์${w.last_seen?' (เห็นล่าสุด '+agoText(w.last_seen)+')':''}</span>`;
+  $('sync-st').innerHTML = (line1?line1+'<br>':'') + line2;
+  $('sync-st').title = r.log_tail || '';
+}
+function initSync(){
+  $('sync-wrap').classList.remove('hidden');
+  onSnapshot(doc(db,'sync_control','request'), d=>{ SYNC_REQ=d.exists()?d.data():null; paintSync(); }, ()=>{});
+  onSnapshot(doc(db,'sync_control','watcher'), d=>{ SYNC_WATCH=d.exists()?d.data():null; paintSync(); }, ()=>{});
+  setInterval(paintSync, 30000);           // อัปเดตข้อความ "กี่นาทีที่แล้ว"
+  $('btn-sync').addEventListener('click', async ()=>{
+    const w=SYNC_WATCH;
+    const off = !w?.last_seen || (Date.now()-new Date(String(w.last_seen).replace(' ','T')+'+07:00').getTime())/60000 >= 3;
+    if(off && !confirm('เครื่อง pusher ดูเหมือนออฟไลน์อยู่ คำขอจะค้างไว้จนกว่าเครื่องจะเปิด sync_watch.php\nส่งคำขอไว้ก่อนไหม?')) return;
+    const force = confirm('บังคับส่งข้อมูลซ้ำทั้งหมด (--force) ด้วยไหม?\n\nตกลง = ส่งทั้งหมด (ช้ากว่า ใช้เมื่อข้อมูลดูไม่ตรง)\nยกเลิก = ส่งเฉพาะที่เปลี่ยน (ปกติ)');
+    try{
+      $('btn-sync').disabled=true;
+      await setDoc(doc(db,'sync_control','request'), {
+        status:'pending', force, requested_by:ME.email,
+        requested_at_text:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' '),
+        started_at_text:null, finished_at_text:null, exit_code:null, log_tail:null });
+      await audit('request_sync', 'sync_control', {force});
+    }catch(e){ alert('ส่งคำขอไม่สำเร็จ: '+(e.code||e.message)); $('btn-sync').disabled=false; }
+  });
+}
 
 /* ================= NAV ================= */
 const TABS = [
@@ -956,6 +1012,7 @@ async function startApp(){
   await audit('login');
   await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy()]);
   if(isAdmin()){
+    initSync();
     loadPending();
     setInterval(loadPending, 120000);   // เช็คคำขอใหม่ทุก 2 นาที แอดมินจะได้ไม่พลาด
   }
@@ -1265,7 +1322,7 @@ function nextRound(hcode,date){
 }
 function renderCal(){
   const scope = roundScope();
-  const up = OUTREACH.filter(o=>(!scope||o.hcode===scope) && daysFrom(o.date)>=0).slice(0,12);
+  const up = OUTREACH.filter(o=>(!scope||o.hcode===scope) && daysFrom(o.date)>=0).slice(0,24);
   $('cal-upcoming').innerHTML = up.length ? up.map(o=>{
     const d=daysFrom(o.date), n=patientsOf(o.hcode,o.date).length, nx=nextRound(o.hcode,o.date);
     return `<div class="oc${d<=7?' soon':''}" style="cursor:pointer" data-round="${esc(o.id)}">
@@ -1273,11 +1330,21 @@ function renderCal(){
       <div class="h">${esc(rpstName(o.hcode))}</div>
       <div class="cd">${d===0?'วันนี้':d+' <small>วัน</small>'}</div>
       <div class="sub" style="margin-top:6px">ผู้ป่วยในรอบ <b>${n}</b> คน</div>
-      <div class="sub">${nx?'จ่ายยา '+dayDiff(o.date,nx.date)+' วัน':'<span class="pill pill-warn">ยังไม่มีรอบถัดไป</span>'}</div>
+      <div class="sub">${nx?'จ่ายยา '+dayDiff(o.date,nx.date)+' วัน (ถึง '+thDate(nx.date)+')':'<span class="pill pill-warn">ยังไม่มีรอบถัดไป</span>'}</div>
+      ${o.note?`<div class="sub" style="margin-top:2px">${esc(o.note)}</div>`:''}
+      ${(isAdmin()||(isRpst()&&o.hcode===myHcode()))?`<button class="btn-sm red" style="margin-top:8px" data-del="${esc(o.id)}">ลบวันนัด</button>`:''}
     </div>`;
   }).join('') : '<div class="empty">ยังไม่มีรอบนัดที่กำลังจะถึง</div>';
   $('cal-upcoming').querySelectorAll('[data-round]').forEach(c=>
     c.addEventListener('click',()=>openRound(c.dataset.round)));
+  $('cal-upcoming').querySelectorAll('[data-del]').forEach(b=>
+    b.addEventListener('click', async e=>{
+      e.stopPropagation();                  // ไม่ให้คลิกทะลุไปเปิดรอบ
+      if(!confirm('ลบวันนัดนี้? ผู้ป่วยที่นัดไว้จะยังคงวันนัดเดิมอยู่')) return;
+      await deleteDoc(doc(db,'outreach',b.dataset.del));
+      await audit('edit_outreach','delete:'+b.dataset.del);
+      await loadOutreach(); renderCal();
+    }));
   renderOrderAlerts('cal-alert');
 
   const canMng = isAdmin() || isRpst();
@@ -1288,45 +1355,21 @@ function renderCal(){
       : RPST).map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
   $('oc-hcode').disabled = isRpst();
 
-  const rows = OUTREACH.filter(o=>!scope||o.hcode===scope);
-  $('tb-oc').innerHTML = rows.length ? rows.map(o=>{
-    const d=daysFrom(o.date), nx=nextRound(o.hcode,o.date), n=patientsOf(o.hcode,o.date).length;
-    const mine = isAdmin() || (isRpst() && o.hcode===myHcode());
-    return `<tr><td>${thDate(o.date)}<div class="sub">${d<0?'ผ่านมาแล้ว':d===0?'วันนี้':'อีก '+d+' วัน'}</div></td>
-      <td>${esc(rpstName(o.hcode))}</td><td class="sub">${esc(o.note||'-')}</td>
-      <td class="right mono">${n}</td>
-      <td>${nx?`<span class="pill pill-ok">${dayDiff(o.date,nx.date)} วัน</span>
-            <div class="sub">ถึง ${thDate(nx.date)}</div>`
-          :'<span class="pill pill-warn">ยังไม่มีรอบถัดไป</span>'}</td>
-      <td class="right"><button class="btn-sm" data-round="${esc(o.id)}">เปิดรอบ</button>
-        ${mine?` <button class="btn-sm red" data-del="${esc(o.id)}">ลบ</button>`:''}</td></tr>`;
-  }).join('') : '<tr><td colspan="6" class="empty">ยังไม่มีวันนัด</td></tr>';
-  $('tb-oc').querySelectorAll('[data-round]').forEach(b=>
-    b.addEventListener('click',()=>openRound(b.dataset.round)));
-  $('tb-oc').querySelectorAll('[data-del]').forEach(b=>
-    b.addEventListener('click', async ()=>{
-      if(!confirm('ลบวันนัดนี้? ผู้ป่วยที่นัดไว้จะยังคงวันนัดเดิมอยู่')) return;
-      await deleteDoc(doc(db,'outreach',b.dataset.del));
-      await audit('edit_outreach','delete:'+b.dataset.del);
-      await loadOutreach(); renderCal();
-    }));
   /* === ปฏิทินรอบนัดแบบ mini calendar === */
   renderCalMonths();
 }
 
+let CAL_YM = null;
+function calShift(n){ const d=new Date(CAL_YM.y, CAL_YM.m+n, 1); CAL_YM={y:d.getFullYear(), m:d.getMonth()}; renderCalMonths(); }
 function renderCalMonths(){
   const scope = roundScope();
   const rounds = OUTREACH.filter(o=>!scope||o.hcode===scope);
   if(!rounds.length){ $('cal-months').innerHTML='<div class="sub">ยังไม่มีวันนัด</div>'; $('cal-summary').innerHTML=''; return; }
 
-  // หาช่วงเดือนที่ต้องแสดง (เดือนปัจจุบัน +3 เดือน)
+  // ปฏิทินเดียว เลือกเดือนได้ (CAL_YM จำเดือนที่ดูอยู่ไว้ ไม่เด้งกลับทุกครั้งที่ render)
   const today = new Date(), todayStr = today.toISOString().slice(0,10);
-  const months = [];
-  for(let i=0;i<4;i++){
-    const d=new Date(today.getFullYear(), today.getMonth()+i, 1);
-    months.push({y:d.getFullYear(), m:d.getMonth()});
-  }
-
+  if(!CAL_YM) CAL_YM = {y:today.getFullYear(), m:today.getMonth()};
+  const months = [CAL_YM];
   // สร้าง lookup: date -> [{hcode, id, note}]
   const byDate = {};
   rounds.forEach(o=>{
@@ -1336,14 +1379,15 @@ function renderCalMonths(){
 
   // สรุป รพ.สต. และจำนวนวัน
   const hcSummary = {};
-  rounds.filter(o=>daysFrom(o.date)>=0).forEach(o=>{
+  const ymKey = `${CAL_YM.y}-${String(CAL_YM.m+1).padStart(2,'0')}`;
+  rounds.filter(o=>o.date.startsWith(ymKey)).forEach(o=>{
     if(!hcSummary[o.hcode]) hcSummary[o.hcode]={name:rpstName(o.hcode), days:0};
     hcSummary[o.hcode].days++;
   });
   const sumArr = Object.values(hcSummary).sort((a,b)=>b.days-a.days);
   $('cal-summary').innerHTML = sumArr.length
-    ? 'คลินิกที่กำลังจะถึง: ' + sumArr.map(s=>`<b>${esc(s.name)}</b> ${s.days} วัน`).join(' · ')
-    : '';
+    ? 'เดือนนี้มีคลินิก: ' + sumArr.map(s=>`<b>${esc(s.name)}</b> ${s.days} วัน`).join(' · ')
+    : '<span class="sub">เดือนนี้ไม่มีรอบนัด</span>';
 
   const multi = !scope && new Set(rounds.map(o=>o.hcode)).size>1;
   const shortRp = h => String(rpstName(h)||h).replace(/^(รพ\.?สต\.?|โรงพยาบาลส่งเสริมสุขภาพตำบล)\s*/,'');
@@ -1371,11 +1415,31 @@ function renderCalMonths(){
         cells+=`<div class="mc-day${isToday?' mc-today':''}"><span class="mc-num">${d}</span></div>`;
       }
     }
-    return `<div class="mini-cal${multi?' wide':''}"><div class="mc-head"><b>${TH_MONTHS[m]} ${y+543}</b></div>
+    // ตัวเลือกเดือน: ย้อนหลัง 3 เดือน ถึงเดือนสุดท้ายที่มีรอบนัด (อย่างน้อยล่วงหน้า 12 เดือน)
+    const last = rounds.reduce((mx,o)=>o.date>mx?o.date:mx, todayStr);
+    const opts=[]; let c=new Date(today.getFullYear(), today.getMonth()-3, 1);
+    const end=new Date(Math.max(new Date(last).getTime(), new Date(today.getFullYear(), today.getMonth()+12, 1).getTime()));
+    while(c<=end){
+      const yy=c.getFullYear(), mm=c.getMonth();
+      const n = rounds.filter(o=>o.date.startsWith(`${yy}-${String(mm+1).padStart(2,'0')}`)).length;
+      opts.push(`<option value="${yy}-${mm}"${yy===y&&mm===m?' selected':''}>${TH_MONTHS[mm]} ${yy+543}${n?` (${n} รอบ)`:''}</option>`);
+      c=new Date(yy, mm+1, 1);
+    }
+    if(!opts.some(o=>o.includes(' selected')))
+      opts.unshift(`<option value="${y}-${m}" selected>${TH_MONTHS[m]} ${y+543}</option>`);
+    return `<div class="mini-cal cal-one${multi?' wide':''}"><div class="mc-head">
+        <button type="button" id="cal-prev" title="เดือนก่อน">‹</button>
+        <select id="cal-ym" style="font-weight:600">${opts.join('')}</select>
+        <button type="button" id="cal-next" title="เดือนถัดไป">›</button>
+        <button type="button" id="cal-today" class="btn-sm grey" style="font-size:12px">เดือนนี้</button></div>
       <div class="mc-grid">${cells}</div></div>`;
   }).join('');
 
   // กดวันที่ไฮไลท์ → เปิดรอบ
+  $('cal-prev').onclick = ()=>calShift(-1);
+  $('cal-next').onclick = ()=>calShift(1);
+  $('cal-today').onclick = ()=>{ CAL_YM=null; renderCalMonths(); };
+  $('cal-ym').onchange = e=>{ const [yy,mm]=e.target.value.split('-').map(Number); CAL_YM={y:yy,m:mm}; renderCalMonths(); };
   $('cal-months').querySelectorAll('[data-calround]').forEach(el=>
     el.addEventListener('click',e=>{ e.stopPropagation(); openRound(el.dataset.calround); }));
 }

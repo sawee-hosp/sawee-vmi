@@ -13,7 +13,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <style>
-:root{
+:root{--ok:#1F7A4D;--ok-dim:#1F7A4D1a;--sub:var(--muted);
   --bg:#FFF7F0; --surface:#fff; --border:#F0DCCB; --line:#FAEDE2;
   --ink:#2B1D12; --muted:#7A6455; --accent:#E8620C; --accent-dim:#FFEBDC;
   --accent-deep:#C44E05; --accent-soft:#FF8534;
@@ -203,14 +203,17 @@ tbody tr:hover{background:#FAFCFA}
 .mini-cal .mc-head button{background:none;border:none;cursor:pointer;font-size:16px;padding:2px 6px;border-radius:4px}
 .mini-cal .mc-head button:hover{background:var(--bg)}
 .mc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
-.mc-grid .mc-day{padding:4px 2px;border-radius:4px;min-width:28px;line-height:1.4}
+.mc-grid .mc-day{padding:3px 1px;border-radius:4px;min-width:30px;line-height:1.3;display:flex;flex-direction:column;align-items:center}
 .mc-grid .mc-hdr{font-weight:600;color:var(--sub);font-size:11px}
-.mc-grid .mc-hl{background:var(--ok-dim);color:var(--ok);font-weight:700;cursor:pointer;position:relative}
-.mc-grid .mc-hl:hover{outline:2px solid var(--ok)}
-.mc-grid .mc-hl[title]:hover::after{content:attr(title);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
-  background:#333;color:#fff;padding:3px 8px;border-radius:4px;font-size:11px;white-space:nowrap;z-index:9}
-.mc-grid .mc-today{border:2px solid var(--amber)}
-.mc-grid .mc-other{color:var(--sub);opacity:.4}
+.mc-grid .mc-num{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%}
+.mc-grid .mc-hl{cursor:pointer}
+.mc-grid .mc-hl .mc-num{border:2px solid var(--ok);background:var(--ok-dim);color:var(--ok);font-weight:700}
+.mc-grid .mc-hl:hover .mc-num{background:var(--ok);color:#fff}
+.mc-grid .mc-today .mc-num{box-shadow:0 0 0 2px var(--amber)}
+.mc-grid .mc-rp{font-size:10px;line-height:1.15;color:var(--ok);font-weight:600;max-width:64px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;margin-top:1px}
+.mc-grid .mc-rp:hover{text-decoration:underline}
+.mini-cal.wide .mc-day{min-width:62px;min-height:44px}
 .mc-legend{margin-top:8px;font-size:12px;color:var(--sub)}
 .mc-legend span{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;margin-right:4px}
 /* ตัวเลือกวันนัดจากปฏิทิน */
@@ -244,16 +247,12 @@ tbody tr:hover{background:#FAFCFA}
     <h1>ลงทะเบียนเจ้าหน้าที่</h1>
     <p class="sub">กรอกข้อมูลจริงให้ครบ ผู้ดูแลระบบจะตรวจสอบและอนุมัติก่อนจึงจะเข้าใช้งานได้</p>
 
-    <!-- ขั้นที่ 1: สร้างบัญชีก่อน เพื่อให้มีสิทธิ์อ่านรายชื่อหน่วยบริการจากฐานข้อมูล -->
-    <div id="reg-step1">
+    <!-- ลงทะเบียนหน้าเดียว: กรอกทุกช่องแล้วกดส่งครั้งเดียว
+         หน่วยบริการไม่ต้องเลือกเอง ให้พิมพ์ในหมายเหตุ admin จะกำหนดให้ตอนอนุมัติ -->
+    <div id="reg-form">
       <label>อีเมล (ใช้ล็อกอิน)</label><input type="email" id="r-email" autocomplete="username">
       <label>ตั้งรหัสผ่าน (อย่างน้อย 8 ตัว)</label><input type="password" id="r-pass" autocomplete="new-password">
-      <button class="btn-primary" id="btn-reg-next">ถัดไป</button>
-    </div>
-
-    <!-- ขั้นที่ 2: กรอกข้อมูลตัวจริง (ตอนนี้ล็อกอินแล้ว จึงโหลดรายชื่อ รพ.สต. ได้) -->
-    <div id="reg-step2" class="hidden">
-      <div class="msg ok" style="margin-bottom:12px">สร้างบัญชีแล้ว กรอกข้อมูลให้ครบเพื่อส่งคำขอ</div>
+      <label>ยืนยันรหัสผ่าน</label><input type="password" id="r-pass2" autocomplete="new-password">
       <label>ชื่อ-นามสกุลจริง</label><input type="text" id="r-name" placeholder="เช่น สมหญิง ใจดี">
       <label>ตำแหน่ง</label><input type="text" id="r-pos" placeholder="เช่น พยาบาลวิชาชีพ">
       <label>เบอร์โทรศัพท์</label><input type="text" id="r-phone" inputmode="tel" placeholder="08xxxxxxxx">
@@ -265,15 +264,9 @@ tbody tr:hover{background:#FAFCFA}
         <option value="outreach">ทีมออกหน่วย รพ.สวี</option>
         <option value="pharmacist">เภสัชกร</option>
       </select>
-      <!-- หน่วยงาน: ซ่อนไว้ ให้ admin เป็นคนกำหนดตอนอนุมัติ -->
-      <div id="r-hcode-wrap" style="display:none">
-        <label>หน่วยบริการ</label>
-        <select id="r-hcode" style="width:100%;margin-bottom:6px"></select>
-        <input type="text" id="r-hcode-txt" class="hidden" placeholder="พิมพ์ชื่อหน่วยบริการเอง"
-               style="width:100%;margin-bottom:14px">
-      </div>
-      <div id="r-hcode-note" class="msg info" style="font-size:13px;margin:0 0 14px;padding:10px 14px">
-        ระบุหน่วยงานและรอให้ admin confirm อาจมีการติดต่อทางโทรศัพท์เพื่อยืนยันตัวตนก่อนอนุมัติ</div>
+      <label>หมายเหตุ</label>
+      <textarea id="r-note" rows="3" style="width:100%;margin-bottom:14px;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px"
+        placeholder="ระบุหน่วยงานและรอให้ admin confirm อาจมีการติดต่อทางโทรศัพท์เพื่อยืนยันตัวตนก่อนอนุมัติ"></textarea>
       <button class="btn-primary" id="btn-reg">ส่งคำขอลงทะเบียน</button>
     </div>
     <div id="reg-msg" style="margin-top:10px"></div>
@@ -815,7 +808,7 @@ onAuthStateChanged(auth, async user => {
         <tr><td>ชื่อ</td><td>${esc(pend.full_name||'-')}</td></tr>
         <tr><td>ตำแหน่ง</td><td>${esc(pend.position||'-')}</td></tr>
         <tr><td>โทรศัพท์</td><td>${esc(pend.phone||'-')}</td></tr>
-        <tr><td>หน่วยบริการ</td><td>${esc(pend.hcode_name||pend.hcode||'-')}</td></tr>
+        <tr><td>หน่วยงาน/หมายเหตุ</td><td>${esc(pend.note||pend.hcode_name||pend.hcode||'-')}</td></tr>
         <tr><td>ส่งคำขอ</td><td>${esc(String(pend.requested_at_text||'-'))}</td></tr>`;
       showOnly('screen-wait');
       waitPoll(user.uid);                  // เช็คทุก 20 วิ ว่าแอดมินอนุมัติหรือยัง
@@ -849,77 +842,45 @@ function waitPoll(uid){
   }, 20000);
 }
 $('lnk-reg').addEventListener('click', e=>{ e.preventDefault();
-  REG_MODE=false; show('reg-step1',true); show('reg-step2',false);
-  $('reg-msg').innerHTML=''; showOnly('screen-reg'); });
+  REG_MODE=false; $('reg-msg').innerHTML=''; showOnly('screen-reg'); });
 $('lnk-back').addEventListener('click', e=>{ e.preventDefault(); showOnly('screen-login'); });
 
-/* ดึงรายชื่อหน่วยบริการ — เรียกหลังสร้างบัญชีแล้ว (ตอนนั้นถือว่าล็อกอินแล้ว จึงอ่าน rpst ได้)
-   ถ้าอ่านไม่ได้จริงๆ จะสลับเป็นช่องพิมพ์ชื่อเองแทน ไม่ปล่อยให้ค้างเป็น dropdown ว่าง */
-async function fillRegUnits(){
-  const sel=$('r-hcode'), txt=$('r-hcode-txt'), note=$('r-hcode-note');
-  try{
-    const s=await getDocs(collection(db,'rpst'));
-    const rows=s.docs.map(d=>d.data()).filter(r=>r.hcode)
-      .sort((a,b)=>(a.hcode||'').localeCompare(b.hcode||''));
-    if(!rows.length) throw new Error('empty');
-    sel.innerHTML = rows.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)} (${esc(r.hcode)})</option>`).join('');
-    show('r-hcode',true); show('r-hcode-txt',false);
-    note.textContent = `มี ${rows.length} หน่วยบริการให้เลือก`;
-  }catch(e){
-    show('r-hcode',false); show('r-hcode-txt',true);
-    note.innerHTML = '<span style="color:var(--amber)">โหลดรายชื่อหน่วยบริการไม่ได้ ('
-      + esc(e.code||e.message||'error') + ') พิมพ์ชื่อหน่วยเองได้เลย ผู้ดูแลระบบจะเลือกให้ตอนอนุมัติ</span>';
-  }
-}
-
-/* ขั้นที่ 1 — สร้างบัญชีล็อกอินก่อน */
-$('btn-reg-next').addEventListener('click', async ()=>{
-  const email=$('r-email').value.trim(), pass=$('r-pass').value;
-  if(!email||pass.length<8){
-    $('reg-msg').innerHTML='<div class="msg err">กรอกอีเมลและรหัสผ่านอย่างน้อย 8 ตัว</div>'; return; }
-  $('btn-reg-next').disabled=true; $('reg-msg').innerHTML='';
-  try{
-    await createUserWithEmailAndPassword(auth, email, pass);
-    REG_MODE = true;                       // กัน onAuthStateChanged ไม่ให้เด้งออกจากหน้าลงทะเบียน
-    show('reg-step1',false); show('reg-step2',true);
-    await fillRegUnits();
-  }catch(e){
-    const m = e.code==='auth/email-already-in-use' ? 'อีเมลนี้มีบัญชีอยู่แล้ว ลองเข้าสู่ระบบแทน'
-            : e.code==='auth/invalid-email' ? 'รูปแบบอีเมลไม่ถูกต้อง'
-            : e.code==='auth/weak-password' ? 'รหัสผ่านสั้นเกินไป' : (e.code||e.message);
-    $('reg-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`;
-  }
-  $('btn-reg-next').disabled=false;
-});
-
-/* ขั้นที่ 2 — ส่งคำขอพร้อมข้อมูลตัวจริง */
+/* ลงทะเบียนหน้าเดียว — ตรวจทุกช่องก่อน แล้วค่อยสร้างบัญชี + ส่งคำขอในครั้งเดียว */
 $('btn-reg').addEventListener('click', async ()=>{
-  const name=$('r-name').value.trim(), pos=$('r-pos').value.trim(),
+  const email=$('r-email').value.trim(), pass=$('r-pass').value, pass2=$('r-pass2').value,
+        name=$('r-name').value.trim(), pos=$('r-pos').value.trim(),
         phone=$('r-phone').value.replace(/\D/g,''), role=$('r-role').value,
-        usingSel = !$('r-hcode').classList.contains('hidden'),
-        hcode = usingSel ? $('r-hcode').value : '',
-        hcodeName = usingSel ? ($('r-hcode').selectedOptions[0]?.textContent||null)
-                             : ($('r-hcode-txt').value.trim()||null);
-  if(!name || name.split(' ').filter(Boolean).length<2){
-    $('reg-msg').innerHTML='<div class="msg err">กรอกชื่อและนามสกุลจริงให้ครบ</div>'; return; }
-  if(phone.length<9){ $('reg-msg').innerHTML='<div class="msg err">เบอร์โทรศัพท์ไม่ถูกต้อง</div>'; return; }
-  /* หน่วยบริการซ่อนไว้ — admin จะกำหนดให้ตอนอนุมัติ */
-  const u = auth.currentUser;
-  if(!u){ $('reg-msg').innerHTML='<div class="msg err">เซสชันหมดอายุ กรุณาเริ่มใหม่</div>'; return; }
-  $('btn-reg').disabled=true;
+        note=$('r-note').value.trim();
+  const err = m => { $('reg-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`; };
+  if(!email)                 return err('กรอกอีเมล');
+  if(pass.length<8)          return err('รหัสผ่านอย่างน้อย 8 ตัว');
+  if(pass!==pass2)           return err('ยืนยันรหัสผ่านไม่ตรงกัน');
+  if(!name || name.split(' ').filter(Boolean).length<2) return err('กรอกชื่อและนามสกุลจริงให้ครบ');
+  if(phone.length<9)         return err('เบอร์โทรศัพท์ไม่ถูกต้อง');
+  if(!note)                  return err('ระบุหน่วยงานในช่องหมายเหตุด้วย');
+  $('btn-reg').disabled=true; $('reg-msg').innerHTML='';
+  REG_MODE = true;                         // กัน onAuthStateChanged เด้งออกระหว่างสร้างบัญชี
+  let created=false;
   try{
-    await setDoc(doc(db,'pending_users',u.uid), {
-      full_name:name, position:pos||null, phone, hcode:hcode||null,
-      hcode_name: hcodeName, want_role: role,
-      email: u.email, requested_at: serverTimestamp(),
-      requested_at_text: new Date().toISOString().slice(0,16).replace('T',' ')
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    created=true;
+    await setDoc(doc(db,'pending_users',cred.user.uid), {
+      full_name:name, position:pos||null, phone,
+      hcode:null, hcode_name:note, note, want_role:role,
+      email:cred.user.email, requested_at:serverTimestamp(),
+      requested_at_text:new Date().toISOString().slice(0,16).replace('T',' ')
     });
     REG_MODE = false;
     $('reg-msg').innerHTML='<div class="msg ok">ส่งคำขอแล้ว กำลังไปหน้ารออนุมัติ...</div>';
     setTimeout(()=>location.reload(), 1200);
   }catch(e){
-    $('reg-msg').innerHTML=`<div class="msg err">ส่งคำขอไม่สำเร็จ: ${esc(e.code||e.message)}</div>`;
-    $('btn-reg').disabled=false;
+    REG_MODE = false;
+    const m = e.code==='auth/email-already-in-use' ? 'อีเมลนี้มีบัญชีอยู่แล้ว ลองเข้าสู่ระบบแทน'
+            : e.code==='auth/invalid-email' ? 'รูปแบบอีเมลไม่ถูกต้อง'
+            : e.code==='auth/weak-password' ? 'รหัสผ่านสั้นเกินไป'
+            : (created ? 'สร้างบัญชีแล้วแต่ส่งคำขอไม่สำเร็จ ('+(e.code||e.message)+') ลองเข้าสู่ระบบด้วยอีเมลนี้อีกครั้ง'
+                       : (e.code||e.message));
+    err(m); $('btn-reg').disabled=false;
   }
 });
 $('btn-login').addEventListener('click', async ()=>{
@@ -1253,19 +1214,22 @@ function openDetail(id){
         $('d-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>'; renderList();
       }catch(e){ $('d-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
     });
-    // กดเลือกวันจากปฏิทิน → เติมลง input
-    $('d-ap-pick')?.querySelectorAll('.ap-opt').forEach(el=>
-      el.addEventListener('click',()=>{
-        $('d-ap').value=el.dataset.apdate;
-        $('d-ap-pick').querySelectorAll('.ap-opt').forEach(x=>x.classList.remove('sel'));
-        el.classList.add('sel');
-      }));
+    wireApPick('d-ap-pick','d-ap');
   }
 }
+/* กดเลือกวันจากปฏิทิน → เติมลง input */
+function wireApPick(pickId, inputId){
+  $(pickId)?.querySelectorAll('.ap-opt').forEach(el=>
+    el.addEventListener('click',()=>{
+      $(inputId).value=el.dataset.apdate;
+      $(pickId).querySelectorAll('.ap-opt').forEach(x=>x.classList.remove('sel'));
+      el.classList.add('sel');
+    }));
+}
 /* สร้างตัวเลือกวันนัดจากปฏิทินออกหน่วยของหน่วยนั้น */
-function buildApPick(hcode, currentDate){
+function buildApPick(hcode, currentDate, after){
   if(!hcode) return '';
-  const upcoming = OUTREACH.filter(o=>o.hcode===hcode && daysFrom(o.date)>=0)
+  const upcoming = OUTREACH.filter(o=>o.hcode===hcode && daysFrom(o.date)>=0 && (!after || o.date>after))
     .sort((a,b)=>a.date.localeCompare(b.date)).slice(0,6);
   if(!upcoming.length) return '<span class="sub" style="font-size:12px">ยังไม่มีรอบนัดสำหรับหน่วยนี้</span>';
   return upcoming.map(o=>{
@@ -1381,6 +1345,8 @@ function renderCalMonths(){
     ? 'คลินิกที่กำลังจะถึง: ' + sumArr.map(s=>`<b>${esc(s.name)}</b> ${s.days} วัน`).join(' · ')
     : '';
 
+  const multi = !scope && new Set(rounds.map(o=>o.hcode)).size>1;
+  const shortRp = h => String(rpstName(h)||h).replace(/^(รพ\.?สต\.?|โรงพยาบาลส่งเสริมสุขภาพตำบล)\s*/,'');
   const TH_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   const TH_DAYS = ['อา','จ','อ','พ','พฤ','ศ','ส'];
 
@@ -1396,19 +1362,22 @@ function renderCalMonths(){
       const isToday = ds===todayStr;
       if(evts){
         const tip = evts.map(o=>rpstName(o.hcode)).join(', ');
-        const rid = evts[0].id;
-        cells+=`<div class="mc-day mc-hl${isToday?' mc-today':''}" title="${esc(tip)}" data-calround="${esc(rid)}">${d}</div>`;
+        // มุมมองหลาย รพ.สต. → ระบุชื่อใต้วันที่ (กดชื่อเพื่อเปิดรอบนั้นโดยตรง)
+        const names = multi ? evts.map(o=>
+          `<div class="mc-rp" data-calround="${esc(o.id)}" title="${esc(rpstName(o.hcode))}">${esc(shortRp(o.hcode))}</div>`).join('') : '';
+        cells+=`<div class="mc-day mc-hl${isToday?' mc-today':''}" title="${esc(tip)}" data-calround="${esc(evts[0].id)}">
+          <span class="mc-num">${d}</span>${names}</div>`;
       } else {
-        cells+=`<div class="mc-day${isToday?' mc-today':''}">${d}</div>`;
+        cells+=`<div class="mc-day${isToday?' mc-today':''}"><span class="mc-num">${d}</span></div>`;
       }
     }
-    return `<div class="mini-cal"><div class="mc-head"><b>${TH_MONTHS[m]} ${y+543}</b></div>
+    return `<div class="mini-cal${multi?' wide':''}"><div class="mc-head"><b>${TH_MONTHS[m]} ${y+543}</b></div>
       <div class="mc-grid">${cells}</div></div>`;
   }).join('');
 
   // กดวันที่ไฮไลท์ → เปิดรอบ
   $('cal-months').querySelectorAll('[data-calround]').forEach(el=>
-    el.addEventListener('click',()=>openRound(el.dataset.calround)));
+    el.addEventListener('click',e=>{ e.stopPropagation(); openRound(el.dataset.calround); }));
 }
 $('btn-oc-add').addEventListener('click', async ()=>{
   const hcode = isRpst()?myHcode():$('oc-hcode').value, date=$('oc-date').value;
@@ -1751,14 +1720,103 @@ function buildDrugCatalog(){
   const m = {};
   LIST.forEach(r=>(r.medications||[]).forEach(d=>{
     const k = d.icode || d.name; if(!k) return;
-    if(!m[k]) m[k] = {icode:d.icode||'', name:d.name, usages:{}, hcodes:new Set(), n:0};
+    if(!m[k]) m[k] = {icode:d.icode||'', name:d.name, usages:{}, codes:{}, hcodes:new Set(), n:0};
     m[k].n++; m[k].hcodes.add(r.hcode);
     if(d.usage) m[k].usages[d.usage] = (m[k].usages[d.usage]||0)+1;
+    if(d.drugusage_code) m[k].codes[d.drugusage_code] = (m[k].codes[d.drugusage_code]||0)+1;
   }));
   DRUGCAT = Object.values(m).map(d=>({
     icode:d.icode, name:d.name, n:d.n, hcodes:[...d.hcodes],
-    top_usage: Object.entries(d.usages).sort((a,b)=>b[1]-a[1])[0]?.[0] || ''
+    top_usage: Object.entries(d.usages).sort((a,b)=>b[1]-a[1])[0]?.[0] || '',
+    top_code:  Object.entries(d.codes).sort((a,b)=>b[1]-a[1])[0]?.[0] || ''
   })).sort((a,b)=>b.n-a.n);
+}
+
+/* ===== ตัวเลือกวิธีใช้ยา (drugusage) =====
+   รายการหลักมาจากรหัส drugusage ของ HOSxP ที่พบในข้อมูลผู้ป่วย + ที่เคยตั้งไว้ในแท็บ "วิธีใช้ยา"
+   เลือกจากรายการก่อน ถ้าไม่มีค่อย "พิมพ์เอง" ซึ่งต้องระบุจำนวนเม็ดต่อวันด้วยเสมอ */
+function usageList(){
+  const f = {};
+  LIST.forEach(r=>(r.medications||[]).forEach(m=>{
+    const c=m.drugusage_code; if(!c) return;
+    if(!f[c]) f[c]={code:c, text:m.usage||DRUGMAP[c]?.text||c, n:0};
+    f[c].n++;
+  }));
+  Object.entries(DRUGMAP).forEach(([c,d])=>{ if(!f[c]) f[c]={code:c, text:d.text||c, n:0}; });
+  return Object.values(f).sort((a,b)=>b.n-a.n || String(a.text).localeCompare(String(b.text)));
+}
+function dpdLabel(code){
+  const d=DRUGMAP[code];
+  return d?.is_prn ? ' [prn]' : (d?.doses_per_day>0 ? ` [${d.doses_per_day} เม็ด/วัน]` : ' [ยังไม่ระบุเม็ด/วัน]');
+}
+/* cur = {code, usage, dpd} */
+function usagePicker(cur={}, disabled=false){
+  const list = usageList();
+  const custom = !cur.code && !!cur.usage;
+  const dis = disabled?' disabled':'';
+  return `<div class="up">
+    <select class="up-sel" style="width:100%"${dis}>
+      <option value="">-- เลือกวิธีใช้ (จาก HOSxP) --</option>
+      ${list.map(u=>`<option value="${esc(u.code)}"${u.code===cur.code?' selected':''}>${esc(String(u.text).slice(0,70))}${dpdLabel(u.code)}</option>`).join('')}
+      <option value="__custom"${custom?' selected':''}>✎ พิมพ์เอง...</option>
+    </select>
+    <input type="text" class="up-txt" style="width:100%;margin-top:4px${custom?'':';display:none'}"
+      placeholder="พิมพ์วิธีใช้ เช่น 1 เม็ด เช้า-เย็น" value="${esc(custom?cur.usage:'')}"${dis}>
+    <div class="up-dpdw" style="margin-top:4px;align-items:center;gap:6px;font-size:13px;display:none">
+      <input type="number" class="up-dpd" step="0.25" min="0" style="width:80px" value="${esc(cur.dpd??'')}"${dis}>
+      <span>เม็ด/วัน <span class="up-hint sub"></span></span></div>
+  </div>`;
+}
+/* ผูก event ให้ picker ทุกตัวใน root — แสดงช่องเม็ด/วันเมื่อพิมพ์เอง หรือรหัสที่เลือกยังไม่มีเม็ด/วัน */
+function wireUsagePickers(root){
+  root.querySelectorAll('.up').forEach(up=>{
+    const sel=up.querySelector('.up-sel'), txt=up.querySelector('.up-txt'),
+          w=up.querySelector('.up-dpdw'), dpd=up.querySelector('.up-dpd'), hint=up.querySelector('.up-hint');
+    const sync=()=>{
+      const v=sel.value, d=DRUGMAP[v];
+      txt.style.display = v==='__custom' ? '' : 'none';
+      const needDpd = v==='__custom' || (v && !d?.is_prn && !(d?.doses_per_day>0));
+      w.style.display = needDpd ? 'flex' : 'none';
+      hint.textContent = v==='__custom' ? '(จำเป็น — ใช้คำนวณยา)' : needDpd ? '(รหัสนี้ยังไม่ระบุ — กรอกแล้วจะบันทึกไว้ให้ครั้งต่อไป)' : '';
+      if(v==='__custom' && !txt.disabled) txt.focus();
+    };
+    sel.addEventListener('change', sync); sync();
+    up._sync = sync;
+  });
+}
+function setUsagePicker(up, code){
+  const sel=up.querySelector('.up-sel');
+  if(code && [...sel.options].some(o=>o.value===code)) sel.value=code;
+  up._sync?.();
+}
+function setUsageDisabled(up, dis){ up.querySelectorAll('select,input').forEach(x=>x.disabled=dis); }
+/* คืนค่า {usage, drugusage_code, doses_per_day, error} */
+function readUsage(up){
+  const v=up.querySelector('.up-sel').value, dpdRaw=up.querySelector('.up-dpd').value;
+  const dpdIn = dpdRaw==='' ? null : parseFloat(dpdRaw);
+  if(!v) return {usage:null, drugusage_code:null, doses_per_day:null, error:'ยังไม่ได้เลือกวิธีใช้'};
+  if(v==='__custom'){
+    const t=up.querySelector('.up-txt').value.trim();
+    if(!t) return {error:'พิมพ์วิธีใช้ด้วย'};
+    if(!(dpdIn>0)) return {error:'ระบุจำนวนเม็ดต่อวันด้วย'};
+    return {usage:t, drugusage_code:null, doses_per_day:dpdIn};
+  }
+  const d=DRUGMAP[v], u=usageList().find(x=>x.code===v);
+  const dpd = d?.doses_per_day>0 ? d.doses_per_day : dpdIn;
+  return {usage:u?.text||v, drugusage_code:v, doses_per_day:dpd??null,
+          is_prn:!!d?.is_prn, learn: (!d?.doses_per_day && dpdIn>0) ? dpdIn : null};
+}
+/* รหัส HOSxP ที่ยังไม่มีเม็ด/วัน แต่ผู้ใช้กรอกมา → เก็บลง drug_usage ให้คำนวณได้ครั้งหน้า (ถ้าไม่มีสิทธิ์ก็ข้าม) */
+async function learnDpd(items){
+  for(const it of items){
+    if(!it.drugusage_code || !it.learn) continue;
+    try{
+      const rec={code:it.drugusage_code, text:it.usage||'', doses_per_day:it.learn,
+                 is_prn:false, updated_by:ME.email};
+      await setDoc(doc(db,'drug_usage',it.drugusage_code), rec, {merge:true});
+      DRUGMAP[it.drugusage_code]={...(DRUGMAP[it.drugusage_code]||{}), ...rec};
+    }catch(e){ /* ไม่มีสิทธิ์แก้ตารางวิธีใช้ — ไม่เป็นไร ค่าเม็ด/วันยังติดไปกับรายการยานี้ */ }
+  }
 }
 function catalogFor(hcode){
   const local = DRUGCAT.filter(d=>d.hcodes.includes(hcode));
@@ -1903,8 +1961,10 @@ function openVisit(refId, o){
         ${['continue','adjust','stop'].map(a=>
           `<label style="display:block;font-size:13px"><input type="radio" name="a${i}" value="${a}"${
             act===a?' checked':''}> ${MED_ACTION[a]}</label>`).join('')}</td>
-      <td><input type="text" class="m-usage" style="width:100%" placeholder="วิธีใช้ใหม่"
-            value="${esc(p.usage||'')}"${act==='adjust'?'':' disabled'}>
+      <td><div class="m-usage">${usagePicker(
+              act==='adjust' ? {code:p.drugusage_code||null, usage:p.usage||'', dpd:p.doses_per_day}
+                             : {code:m.drugusage_code||null, usage:m.drugusage_code?'':(m.usage||'')},
+              act!=='adjust')}</div>
           <select class="m-reason" style="width:100%;margin-top:4px"${act==='stop'?'':' disabled'}>
             <option value="">เลือกเหตุผลที่หยุด</option>
             ${STOP_REASON.map(x=>`<option${p.reason===x?' selected':''}>${x}</option>`).join('')}
@@ -1927,7 +1987,8 @@ function openVisit(refId, o){
       <div class="fld grow"><label>แพทย์ผู้สั่ง / ผู้ให้บริการ</label>
         <input type="text" id="v-dr" value="${esc(v?.doctor_name||'')}" placeholder="ชื่อแพทย์ที่ออกหน่วย เว้นว่างได้ถ้าไม่มีแพทย์"></div>
       <div class="fld"><label>นัดครั้งถัดไป</label>
-        <input type="date" id="v-next" value="${esc(v?.next_appoint||nx?.date||'')}"></div>
+        <input type="date" id="v-next" value="${esc(v?.next_appoint||nx?.date||'')}">
+        <div class="ap-pick" id="v-next-pick">${buildApPick(o.hcode, v?.next_appoint||nx?.date, o.date)}</div></div>
     </div>
 
     <div class="sec"><div class="st">ทบทวนยาเดิม (${meds.length} รายการ)</div>
@@ -1939,7 +2000,7 @@ function openVisit(refId, o){
       <div class="frm">
         <div class="fld grow"><label>ค้นหาชื่อยา</label>
           <input type="text" id="v-newdrug" list="dl-drug" placeholder="พิมพ์ชื่อยาเพื่อค้นหา"></div>
-        <div class="fld grow"><label>วิธีใช้</label><input type="text" id="v-newusage"></div>
+        <div class="fld grow" style="min-width:260px"><label>วิธีใช้</label><div id="v-newusage">${usagePicker()}</div></div>
         <div class="fld"><label>จำนวน</label><input type="number" id="v-newqty" style="width:90px"></div>
         <button class="btn-sm" id="v-addmed">เพิ่ม</button>
       </div>
@@ -1955,13 +2016,15 @@ function openVisit(refId, o){
     </div>`;
   $('ov').classList.remove('hidden');
 
+  wireUsagePickers($('ov-body'));
+  wireApPick('v-next-pick','v-next');
   // เปิด/ปิดช่องตามการเลือก
   $('tb-med')?.querySelectorAll('tr[data-med]').forEach(tr=>{
+    const up = tr.querySelector('.m-usage .up');
     tr.querySelectorAll('input[type=radio]').forEach(rd=>rd.addEventListener('change',()=>{
-      tr.querySelector('.m-usage').disabled = rd.value!=='adjust';
+      setUsageDisabled(up, rd.value!=='adjust');
       tr.querySelector('.m-reason').disabled = rd.value!=='stop';
-      if(rd.value==='adjust' && !tr.querySelector('.m-usage').value)
-        tr.querySelector('.m-usage').value = meds[+tr.dataset.med].usage||'';
+      up._sync?.();
     }));
   });
 
@@ -1976,31 +2039,46 @@ function openVisit(refId, o){
       b.addEventListener('click',()=>{ NEW.splice(+b.dataset.rm,1); drawNew(); }));
   }
   drawNew();
+  const newUp = $('v-newusage').querySelector('.up');
   $('v-newdrug').addEventListener('change',()=>{
     const d = cat.find(x=>x.name===$('v-newdrug').value);
-    if(d && !$('v-newusage').value) $('v-newusage').value = d.top_usage||'';
+    if(d?.top_code && !newUp.querySelector('.up-sel').value) setUsagePicker(newUp, d.top_code);
   });
   $('v-addmed').addEventListener('click',()=>{
-    const nm=$('v-newdrug').value.trim(); if(!nm) return;
+    const nm=$('v-newdrug').value.trim(); if(!nm){ $('v-msg').innerHTML='<div class="msg err">เลือกชื่อยาก่อน</div>'; return; }
+    const u = readUsage(newUp);
+    if(u.error){ $('v-msg').innerHTML=`<div class="msg err">ยาใหม่ ${esc(nm)}: ${esc(u.error)}</div>`; return; }
+    $('v-msg').innerHTML='';
     const d = cat.find(x=>x.name===nm);
     NEW.push({icode:d?.icode||'', name:nm, action:'add',
-      usage:$('v-newusage').value.trim()||null,
+      usage:u.usage, drugusage_code:u.drugusage_code, doses_per_day:u.doses_per_day, learn:u.learn||null,
       qty:$('v-newqty').value?parseFloat($('v-newqty').value):null});
-    $('v-newdrug').value=$('v-newusage').value=$('v-newqty').value='';
+    $('v-newdrug').value=$('v-newqty').value='';
+    newUp.querySelector('.up-sel').value=''; newUp.querySelector('.up-txt').value='';
+    newUp.querySelector('.up-dpd').value=''; newUp._sync();
     drawNew();
   });
 
   $('v-save').addEventListener('click', async ()=>{
-    const out = [];
+    const out = [], usageErr = [];
     $('tb-med')?.querySelectorAll('tr[data-med]').forEach(tr=>{
       const i=+tr.dataset.med, m=meds[i];
       const act = tr.querySelector('input[type=radio]:checked')?.value || 'continue';
+      let u = {usage:m.usage||null, drugusage_code:m.drugusage_code||null,
+               doses_per_day:DRUGMAP[m.drugusage_code]?.doses_per_day??null};
+      if(act==='adjust'){
+        u = readUsage(tr.querySelector('.m-usage .up'));
+        if(u.error) usageErr.push(m.name+': '+u.error);
+      }
+      if(act==='stop') u = {usage:null, drugusage_code:null, doses_per_day:null};
       out.push({icode:m.icode||'', name:m.name, action:act,
-        usage: act==='adjust' ? (tr.querySelector('.m-usage').value.trim()||null)
-             : act==='stop' ? null : (m.usage||null),
+        usage:u.usage??null, drugusage_code:u.drugusage_code??null, doses_per_day:u.doses_per_day??null,
+        learn:u.learn||null,
         qty: m.qty??null,
         reason: act==='stop' ? (tr.querySelector('.m-reason').value||null) : null});
     });
+    if(usageErr.length){ $('v-msg').innerHTML=
+      '<div class="msg err">ยาที่ปรับต้องเลือกวิธีใช้ให้ครบ<br>'+usageErr.map(esc).join('<br>')+'</div>'; return; }
     NEW.forEach(n=>out.push(n));
     const stopNoReason = out.filter(m=>m.action==='stop' && !m.reason);
     if(stopNoReason.length){ $('v-msg').innerHTML=
@@ -2015,11 +2093,12 @@ function openVisit(refId, o){
         weight:$('v-wt').value?parseFloat($('v-wt').value):null,
         doctor_name:$('v-dr').value.trim()||null,
         next_appoint:$('v-next').value||null,
-        meds:out, changed: out.filter(m=>m.action!=='continue').length,
+        meds:out.map(({learn,...x})=>x), changed: out.filter(m=>m.action!=='continue').length,
         recorded_by:PROFILE.full_name||ME.email, recorded_at:serverTimestamp(),
         keyed_in_hosxp: v?.keyed_in_hosxp||false, vn: v?.vn||null
       }, {merge:true});
       await setStatus(refId,'visited', {appoint_date:$('v-next').value||null});
+      await learnDpd(out);
       await audit('record_visit', refId, {date:o.date, changed:out.filter(m=>m.action!=='continue').length});
       $('v-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>';
       await loadVisits(); renderVisitSub(); renderList();
@@ -2202,6 +2281,18 @@ async function loadPending(){
   }catch(e){ PENDING=[]; }
   renderPendingUsers();
 }
+/* เดาหน่วยบริการจากข้อความที่ผู้ขอพิมพ์ในหมายเหตุ (ชื่อ รพ.สต. หรือรหัส 5 หลัก) — admin เปลี่ยนเองได้ */
+function guessHcode(p){
+  if(p.hcode) return p.hcode;
+  const t=String(p.note||p.hcode_name||'').replace(/\s+/g,'');
+  if(!t) return '';
+  const byCode=RPST.find(r=>t.includes(r.hcode)); if(byCode) return byCode.hcode;
+  const byName=RPST.find(r=>{
+    const n=String(r.name||'').replace(/รพ\.?สต\.?|โรงพยาบาลส่งเสริมสุขภาพตำบล|\s+/g,'');
+    return n.length>=2 && t.includes(n);
+  });
+  return byName?byName.hcode:'';
+}
 function renderPendingUsers(){
   $('pend-count').textContent = PENDING.length ? `${PENDING.length} คำขอ` : 'ไม่มีคำขอค้าง';
   paintPendBadge();
@@ -2213,8 +2304,9 @@ function renderPendingUsers(){
         <div class="sub">${esc(p.email||'')}</div></td>
       <td class="mono">${esc(p.phone||'-')}</td>
       <td><select data-phc="${esc(p.uid)}">
-        ${RPST.map(r=>`<option value="${esc(r.hcode)}"${p.hcode===r.hcode?' selected':''}>${esc(r.name)}</option>`).join('')}
-      </select></td>
+        ${RPST.map(r=>`<option value="${esc(r.hcode)}"${guessHcode(p)===r.hcode?' selected':''}>${esc(r.name)}</option>`).join('')}
+      </select>
+        ${(p.note||p.hcode_name)?`<div class="sub" style="margin-top:4px;max-width:260px">ผู้ขอเขียนว่า: <b>${esc(p.note||p.hcode_name)}</b></div>`:''}</td>
       <td><select data-prole="${esc(p.uid)}">
         ${Object.entries(ROLE_LABEL).map(([k,v])=>
           `<option value="${k}"${k===(p.want_role||'rpst')?' selected':''}>${v}</option>`).join('')}</select>

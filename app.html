@@ -196,6 +196,16 @@
     .vmi-map-dot.none { background: #94a3b8; }
     @media (max-width: 1024px) { .vmi-map { height: 540px; } }
     @media (max-width: 640px) { .vmi-map { height: 470px; } }
+    /* v5.9: คอลัมน์จำนวนจ่ายเป็นสีเขียวอ่อนเพื่อโฟกัสง่าย (เฉพาะบนจอ ไม่พิมพ์สี) */
+    @media screen {
+      .official-table th.col-dispense { background: #bbf7d0 !important; color: #065f46; }
+      .official-table td.col-dispense { background: #ecfdf5; box-shadow: inset 2px 0 0 #6ee7b7, inset -2px 0 0 #6ee7b7; }
+      .official-table tr.bg-yellow-100 td.col-dispense { background: #fef9c3; }
+      .official-table tr.bg-slate-200 td.col-dispense { background: #e2e8f0; }
+    }
+    .ncds-flash td { animation: ncdsFlash 2.4s ease-out; }
+    @keyframes ncdsFlash { 0%, 40% { background: #fde68a; } 100% { background: transparent; } }
+    @media (prefers-reduced-motion: reduce) { .ncds-flash td { animation: none; background: #fde68a; } }
   </style>
 </head>
 <body class="text-slate-800 flex flex-col min-h-screen">
@@ -2798,7 +2808,7 @@ const CreateReqView = ({ ctx }) => {
                   { label:'เครดิต', width:'7%' },
                   { label:'คงเหลือจริง', width:'9%', className:'no-print', when: showCalc },
                   { label:'ระบบแนะนำเติม', width:'9%', className:'no-print', when: showCalc },
-                  { label:'จำนวนจ่าย', width:'9%' },
+                  { label:'จำนวนจ่าย', width:'9%', className:'col-dispense' },
                   { label:'ราคา/หน่วย', width:'8%' },
                   { label:'มูลค่า (บาท)', width:'9%' },
                   { label:'คงเหลือ', width:'6%' },
@@ -2861,7 +2871,7 @@ const CreateReqView = ({ ctx }) => {
 
                           {showCalc && <td className="no-print text-center font-bold text-indigo-700">{(isVaccine || isDisabled || isDiscontinued) ? '0' : formatQty(item.currentSuggestedQty ?? item.systemSuggestedQty,item.packSize)}</td>}
 
-                          <td className="text-center font-bold">
+                          <td className="text-center font-bold col-dispense">
                             {(isVaccine || isDisabled || isDiscontinued) ? '0' : editingQtyDrugId === item.drugId ? (
                               <div className="no-print flex flex-col items-center gap-1">
                                 <input autoFocus type="number" min="0" max={getMaximumQty(item)>0?getMaximumQty(item):undefined} step={getDispenseStep(item)} value={item.finalRequestedQty ?? item.dispenseQty ?? 0} onChange={e=>handleFinalQtyChange(item.drugId,e.target.value)} onKeyDown={e=>{if(e.key==='Enter') handleFinalQtyCommit(item.drugId)}} className="w-24 text-center border border-emerald-500 rounded px-1 py-0.5 font-black text-emerald-800 outline-none" title={`กรอกเป็น ${displayUnit}; ระบบปัดตามรอบ ${getDispenseStep(item)}${getMaximumQty(item)>0?`; Maximum ${getMaximumQty(item)}`:''}`} />
@@ -4276,7 +4286,7 @@ const ViewReqView = ({ ctx }) => {
                    { label:'Target Stock', width:'6%' },
                    { label:'ยอดใช้', width:'6%' },
                    { label:'เครดิต', width:'6%' },
-                   { label:'จำนวนจ่าย', width:'7%' },
+                   { label:'จำนวนจ่าย', width:'7%', className:'col-dispense' },
                    { label:'ราคา/หน่วย', width:'8%' },
                    { label:'มูลค่า (บาท)', width:'9%' },
                    { label:'คงเหลือ', width:'4%' },
@@ -4342,7 +4352,7 @@ const ViewReqView = ({ ctx }) => {
                                   </td>
                                   <td className="text-center">{formatQty(it.usage, it.packSize)}</td>
                                   <td className="text-center text-blue-700">{formatQty(it.prevExcess - it.usage, it.packSize)}</td>
-                                  <td className="text-center font-bold bg-emerald-50/50 no-print">
+                                  <td className="text-center font-bold col-dispense no-print">
                                      {(isVaccine || isDisabled || isDiscontinued) ? <span>0</span> : canEdit ? (
                                        editingPreviewQtyDrugId === it.drugId ? (
                                          <div className="flex items-center justify-center gap-1">
@@ -5620,7 +5630,8 @@ const MapDashboardView = ({ ctx }) => {
           (h.hospital_name || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
           (h.hospital_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
           (h.invs_dept_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (h.invs_stock_id || '').toLowerCase().includes(searchTerm.toLowerCase())
+          (h.invs_stock_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (h.hcode || '').toLowerCase().includes(searchTerm.toLowerCase())
         );
         return (
           <div className="p-6">
@@ -5636,7 +5647,8 @@ const MapDashboardView = ({ ctx }) => {
                 { header: 'สังกัด', className: 'p-4 font-bold text-indigo-600', cell: h => h.affiliation === 'OPT' ? 'อปท.' : 'สสอ.' },
                 { header: 'ชื่อ รพ.สต.', className: 'p-4 font-bold text-slate-800', cell: h => h.hospital_name },
                 { header: 'INVS Dept', className: 'p-4 font-mono font-bold text-cyan-700', cell: h => h.invs_dept_id || '-' },
-                { header: 'INVS Stock', className: 'p-4 font-mono text-slate-600', cell: h => h.invs_stock_id || '10' }
+                { header: 'INVS Stock', className: 'p-4 font-mono text-slate-600', cell: h => h.invs_stock_id || '10' },
+                { header: 'hcode', className: 'p-4 font-mono text-emerald-700', cell: h => h.hcode || <span className="text-slate-300">-</span> }
               ]}
               onEdit={h => setEditTarget({ col: 'master_hospitals', data: h, isNew: false })}
               onDelete={h => ctx.setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบ ${h.hospital_name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('master_hospitals', h.hospital_id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})}
@@ -6362,7 +6374,7 @@ const AdminConfigView = ({ ctx }) => {
           await batch.commit();
           ctx.showToast('อัปเดตหมวดหมู่สำเร็จ'); await ctx.refreshData(); setEditTarget(null); return;
         } else if (editTarget.col === 'master_hospitals') {
-           docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation, invs_dept_id: safeText(data.invs_dept_id), invs_stock_id: safeText(data.invs_stock_id) };
+           docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation, invs_dept_id: safeText(data.invs_dept_id), invs_stock_id: safeText(data.invs_stock_id), hcode: safeText(data.hcode) };
         } else if (editTarget.col === 'users') {
           docId = editTarget.data.id;
           payload = {
@@ -6921,6 +6933,11 @@ const AdminConfigView = ({ ctx }) => {
                       <div>
                         <label className="text-sm font-bold text-slate-600 block mb-1">INVS Stock ID (คลังจ่าย)</label>
                         <input name="invs_stock_id" defaultValue={editTarget.data.invs_stock_id || '10'} placeholder="10" maxLength="6" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-cyan-500 font-mono" />
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-600 block mb-1">hcode (รหัสสถานบริการ 5 หลัก)</label>
+                        <input name="hcode" defaultValue={editTarget.data.hcode || ''} placeholder="เช่น 09415" maxLength="5" inputMode="numeric" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-mono" />
+                        <div className="text-[10px] text-slate-400 mt-1">ใช้ผูกยอดยา NCDs ตามนัดจาก Sawee Refer</div>
                       </div>
                     </>
                   )}
@@ -7730,6 +7747,233 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+
+    // ===== v5.9 ยา NCDs ตามนัด (จาก Sawee Refer → ncds_demand_inbox) =====
+    const ncdsToday = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+    const ncdsThaiDate = (ymd) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ''));
+      if (!m) return ymd || '-';
+      const short = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+      return Number(m[3]) + ' ' + short[Number(m[2]) - 1] + ' ' + String(Number(m[1]) + 543).slice(2);
+    };
+    const loadNcdsRounds = async (ctx, hospitalId) => {
+      const hosp = ctx.findHospital(hospitalId);
+      const isAdmin = normalizeUserRole(ctx.currentUser?.role) === 'admin';
+      const tasks = [db.collection('ncds_demand_inbox').where('hospital_id', '==', String(hospitalId)).get()];
+      if (isAdmin && safeText(hosp?.hcode)) tasks.push(db.collection('ncds_demand_inbox').where('hcode', '==', safeText(hosp.hcode)).get());
+      const snaps = await Promise.all(tasks);
+      const m = new Map();
+      snaps.forEach(sn => sn.docs.forEach(d => m.set(d.id, { id: d.id, ...d.data() })));
+      return [...m.values()].sort((a, b) => String(a.round_date || '').localeCompare(String(b.round_date || '')));
+    };
+
+    const NcdsMapCell = ({ ctx, icode, onMapped }) => {
+      const [q, setQ] = useState('');
+      const hits = useMemo(() => {
+        const n = normalizeForMatch(q);
+        if (!n) return [];
+        return ctx.appDb.drugs.filter(d => !isDrugDiscontinued(d) && (normalizeForMatch(d.drug_name).includes(n) || String(d.drug_id).includes(q.trim()))).slice(0, 6);
+      }, [q, ctx.appDb.drugs]);
+      const pick = async (d) => {
+        try {
+          const codes = String(d.hosxp_code || '').split(/[,;\s]+/).filter(Boolean);
+          if (!codes.includes(String(icode))) codes.push(String(icode));
+          await db.collection('master_drugs').doc(String(d.drug_id)).update({ hosxp_code: codes.join(','), hosxp_mapped_at: firebase.firestore.FieldValue.serverTimestamp(), hosxp_mapped_by: safeText(ctx.currentUser.name) });
+          await writeAuditLog(ctx.currentUser, 'HOSXP_CODE_MAP', 'master_drugs', d.drug_id, { icode, source: 'ncds_demand' });
+          ctx.showToast(`จับคู่ ${icode} → ${d.drug_name} แล้ว (จำไว้ใช้ครั้งหน้า)`);
+          setQ(''); await ctx.refreshData(); onMapped && onMapped();
+        } catch (e) { ctx.showToast('จับคู่ไม่สำเร็จ: ' + e.message, 'error'); }
+      };
+      return (
+        <div className="relative mt-1">
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="จับคู่: ค้นหายา INVS" aria-label={`จับคู่ icode ${icode}`} className="w-full px-2 py-1 border border-amber-400 rounded-lg text-xs bg-white" />
+          {hits.length > 0 && (
+            <div className="absolute z-20 mt-1 w-72 bg-white border rounded-lg shadow-lg">
+              {hits.map(d => <button key={d.drug_id} type="button" onClick={() => pick(d)} className="block w-full text-left px-2 py-1.5 text-xs hover:bg-emerald-50 border-b last:border-0"><span className="font-mono text-slate-400 mr-2">{d.drug_id}</span>{d.drug_name}</button>)}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const NcdsDemandModal = ({ ctx, hospitalId, onClose, onLoaded }) => {
+      const [rounds, setRounds] = useState(null);
+      const [selected, setSelected] = useState(new Set());
+      const [busy, setBusy] = useState('');
+      const [err, setErr] = useState('');
+      const isAdmin = normalizeUserRole(ctx.currentUser?.role) === 'admin';
+      const hosp = ctx.findHospital(hospitalId);
+      const today = ncdsToday();
+
+      const load = async () => {
+        setErr('');
+        try {
+          const rows = await loadNcdsRounds(ctx, hospitalId);
+          setRounds(rows);
+          onLoaded && onLoaded(rows);
+          setSelected(prev => {
+            if (prev.size) return new Set([...prev].filter(id => rows.some(r => r.id === id)));
+            const next = rows.find(r => String(r.round_date) >= today && !r.consumed_by_refill) || rows[rows.length - 1];
+            return new Set(next ? [next.id] : []);
+          });
+        } catch (e) { setErr(e.message || String(e)); setRounds([]); }
+      };
+      useEffect(() => { load(); }, [hospitalId]);
+
+      const syncNow = async () => {
+        setBusy('sync');
+        try {
+          const r = await callInvsBridge('sync_ncds');
+          ctx.showToast(`ดึงยอดจาก Sawee Refer ${r.fetched} รอบ (บันทึก ${r.written})` + (Object.keys(r.unmapped || {}).length ? ` · ยังไม่ผูก hcode ${Object.keys(r.unmapped).join(', ')}` : ''), Object.keys(r.unmapped || {}).length ? 'warn' : 'success');
+          await load();
+        } catch (e) { ctx.showToast('ดึงยอดไม่สำเร็จ: ' + (e?.message || e) + ' — ปุ่มนี้ใช้ได้บนเครื่องที่มี Bridge', 'error'); }
+        finally { setBusy(''); }
+      };
+
+      const hosxpIndex = useMemo(() => buildHosxpIndex(ctx.appDb.drugs), [ctx.appDb.drugs]);
+      const merged = useMemo(() => {
+        const m = new Map();
+        (rounds || []).filter(r => selected.has(r.id)).forEach(r => {
+          (r.items || []).forEach(it => {
+            const key = String(it.icode || it.key || it.name);
+            const cur = m.get(key) || { key, icode: it.icode || '', name: it.name, form: it.form || '', patients: 0, perDay: 0, qty: 0, prn: 0, unknown: 0, rounds: [] };
+            cur.patients += toNonNegativeNumber(it.patients);
+            cur.perDay += toNonNegativeNumber(it.doses_total_per_day);
+            cur.qty += toNonNegativeNumber(it.qty_needed);
+            cur.prn += toNonNegativeNumber(it.prn);
+            cur.unknown += toNonNegativeNumber(it.unknown_sig);
+            if (!cur.rounds.includes(r.round_date)) cur.rounds.push(r.round_date);
+            m.set(key, cur);
+          });
+        });
+        return [...m.values()].map(x => {
+          const drug = x.icode ? hosxpIndex.get(String(x.icode)) : null;
+          const mult = drug ? getHosxpMultiplier(drug) : 1;
+          return { ...x, drug, invsQty: Math.ceil(x.qty * mult), mult };
+        }).sort((a, b) => (a.drug ? 1 : 0) - (b.drug ? 1 : 0) || String(a.name).localeCompare(String(b.name), 'th'));
+      }, [rounds, selected, hosxpIndex]);
+
+      const unmatchedCount = merged.filter(x => !x.drug).length;
+      const toggle = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+      const goToRow = (drugId) => {
+        const el = document.getElementById(`req-row-${drugId}`);
+        if (!el) return ctx.showToast('ยานี้ยังไม่มีในตารางใบเบิก (ยังไม่มียอดใช้หรือถูกกรองไว้)', 'error');
+        onClose();
+        setTimeout(() => { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('ncds-flash'); void el.offsetWidth; el.classList.add('ncds-flash'); }, 50);
+      };
+      const printList = () => {
+        const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const sel = (rounds || []).filter(r => selected.has(r.id));
+        const w = window.open('', '_blank');
+        if (!w) return ctx.showToast('เบราว์เซอร์บล็อกหน้าต่างใหม่ กรุณาอนุญาต pop-up', 'error');
+        w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ยา NCDs ตามนัด ${esc(hosp?.hospital_name || '')}</title>
+          <style>@page{size:A4;margin:12mm}body{font-family:Sarabun,'TH SarabunPSK',sans-serif;font-size:14px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:4px 6px}th{background:#eee}.r{text-align:right}</style></head><body>
+          <h2 style="margin:0">รายการยา NCDs ตามนัด — ${esc(hosp?.hospital_name || '')}</h2>
+          <div>รอบออกหน่วย: ${sel.map(r => esc(ncdsThaiDate(r.round_date)) + ' (' + esc(r.days_supply) + ' วัน, ผู้ป่วย ' + esc(r.patients_total) + ' คน)').join(' · ')}</div><br>
+          <table><thead><tr><th>#</th><th>ชื่อยา</th><th>รูปแบบ</th><th>รหัส INVS</th><th class="r">ผู้ป่วย</th><th class="r">เม็ด/วันรวม</th><th class="r">ต้องเตรียม</th><th>หมายเหตุ</th></tr></thead><tbody>
+          ${merged.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.drug?.drug_name || x.name)}</td><td>${esc(x.form)}</td><td>${esc(x.drug?.drug_id || 'ยังไม่จับคู่')}</td><td class="r">${x.patients}</td><td class="r">${x.perDay.toLocaleString('th-TH', { maximumFractionDigits: 1 })}</td><td class="r"><b>${x.invsQty.toLocaleString('th-TH')}</b></td><td>${x.prn ? 'prn ' + x.prn + ' คน ' : ''}${x.unknown ? 'ยังไม่ระบุวิธีใช้ ' + x.unknown + ' คน' : ''}${x.rounds.length > 1 ? ' รวม ' + x.rounds.length + ' รอบ' : ''}</td></tr>`).join('')}
+          </tbody></table><script>window.onload=function(){window.print();}<\/script></body></html>`);
+        w.document.close();
+      };
+
+      return (
+        <Modal isOpen onClose={onClose} title={`ยา NCDs ตามนัด — ${hosp?.hospital_name || hospitalId}`} maxWidth="max-w-6xl">
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
+              <span>ยอดจาก <b>Sawee Refer</b> (คำนวณจากวิธีใช้ของผู้ป่วยที่นัดรอบออกหน่วย รวมส่วนเผื่อแล้ว) · ดูอย่างเดียว ยังไม่บวกเข้าใบเบิก</span>
+              <span className="ml-auto flex gap-2">
+                {isAdmin && <button onClick={syncNow} disabled={!!busy} className="px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy === 'sync' ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>ดึงยอดใหม่</button>}
+                <button onClick={printList} disabled={!merged.length} className="px-3 py-1.5 rounded-lg bg-slate-800 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-print mr-1"></i>พิมพ์</button>
+              </span>
+            </div>
+            {!hosp?.hcode && isAdmin && <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm">รพ.สต. นี้ยังไม่ได้ตั้ง <b>hcode</b> (รหัสสถานบริการ 5 หลัก) — ตั้งได้ที่ จัดการฐานข้อมูล › รพ.สต. เพื่อให้ยอดจาก Sawee Refer ผูกได้แน่นอน</div>}
+            {err && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">โหลดไม่สำเร็จ: {err}{/permission/i.test(err) ? ' — ตรวจว่า deploy Firestore rules v5.9 แล้ว' : ''}</div>}
+            {rounds === null ? <div className="py-10 flex justify-center"><div className="loader"></div></div> : !rounds.length ? (
+              <div className="py-10 text-center text-slate-400">ยังไม่มียอดยาตามนัดจาก Sawee Refer สำหรับ รพ.สต. นี้{isAdmin ? ' — กด "ดึงยอดใหม่" บนเครื่องที่มี Bridge' : ''}</div>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="เลือกวันนัด">
+                  {rounds.map(r => {
+                    const on = selected.has(r.id); const past = String(r.round_date) < today;
+                    return (
+                      <label key={r.id} className={`cursor-pointer rounded-xl border px-3 py-2 text-sm transition ${on ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200' : 'border-slate-200 bg-white hover:bg-slate-50'} ${past && !on ? 'opacity-60' : ''}`}>
+                        <div className="flex items-center gap-2">
+                          <input type="checkbox" checked={on} onChange={() => toggle(r.id)} className="w-4 h-4 accent-emerald-600" />
+                          <span className="font-extrabold text-slate-800">{ncdsThaiDate(r.round_date)}</span>
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${r.consumed_by_refill ? 'bg-slate-200 text-slate-600' : 'bg-amber-100 text-amber-800'}`}>{r.consumed_by_refill ? 'รับแล้ว' : 'รอรับ'}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5 ml-6">จ่าย {r.days_supply} วัน · ผู้ป่วย {r.patients_total} คน · {r.items_count ?? (r.items || []).length} รายการ</div>
+                      </label>
+                    );
+                  })}
+                </div>
+                {selected.size > 1 && <div className="text-xs text-slate-500">รวมยอดยาตัวเดียวกันจาก {selected.size} รอบ</div>}
+                {unmatchedCount > 0 && <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm"><i className="fa-solid fa-triangle-exclamation mr-2"></i>ยา {unmatchedCount} รายการยังจับคู่รหัส INVS ไม่ได้ (แถวสีเหลือง){isAdmin ? ' — พิมพ์ค้นหาในช่องจับคู่ ระบบจะจำไว้ใช้ครั้งหน้า' : ' — แจ้งแอดมินให้จับคู่'}</div>}
+                <div className="overflow-x-auto border rounded-xl">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-xs text-slate-500"><tr>
+                      <th className="p-2 text-left">ชื่อยา</th><th className="p-2 text-left">รูปแบบ</th><th className="p-2 text-right">ผู้ป่วย</th><th className="p-2 text-right">เม็ด/วันรวม</th>
+                      <th className="p-2 text-right bg-emerald-50 text-emerald-800">ต้องเตรียม</th><th className="p-2 text-left">หมายเหตุ</th><th className="p-2"></th>
+                    </tr></thead>
+                    <tbody>
+                      {merged.map(x => (
+                        <tr key={x.key} className={`border-t align-top ${x.drug ? '' : 'bg-amber-50'}`}>
+                          <td className="p-2">
+                            <div className="font-semibold">{x.drug ? x.drug.drug_name : x.name}</div>
+                            <div className="text-[11px] text-slate-400 font-mono">{x.drug ? `INVS ${x.drug.drug_id} · ` : ''}HOSxP {x.icode || '-'}{x.drug && normalizeForMatch(x.drug.drug_name) !== normalizeForMatch(x.name) ? ` · ${x.name}` : ''}</div>
+                            {!x.drug && isAdmin && x.icode && <NcdsMapCell ctx={ctx} icode={x.icode} />}
+                            {!x.drug && !x.icode && <div className="text-[11px] text-amber-700">ไม่มี icode จาก Refer</div>}
+                          </td>
+                          <td className="p-2 text-xs text-slate-500">{x.form}</td>
+                          <td className="p-2 text-right tabular-nums">{x.patients}</td>
+                          <td className="p-2 text-right tabular-nums">{x.perDay.toLocaleString('th-TH', { maximumFractionDigits: 1 })}</td>
+                          <td className="p-2 text-right tabular-nums bg-emerald-50/60">
+                            <b className="text-emerald-800">{x.invsQty.toLocaleString('th-TH')}</b>
+                            {x.drug && safePackSize(x.drug.pack_size) > 1 && <div className="text-[10px] text-slate-400">{formatQty(x.invsQty, x.drug.pack_size)} แพ็ค×{safePackSize(x.drug.pack_size)}</div>}
+                            {x.mult !== 1 && <div className="text-[10px] text-slate-400">HOSxP {x.qty.toLocaleString('th-TH')} ×{x.mult}</div>}
+                          </td>
+                          <td className="p-2 text-xs space-x-1 space-y-1">
+                            {x.prn > 0 && <span className="inline-block px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-bold">prn {x.prn} คน</span>}
+                            {x.unknown > 0 && <span className="inline-block px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-bold">ยังไม่ระบุวิธีใช้ {x.unknown} คน</span>}
+                            {x.rounds.length > 1 && <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{x.rounds.map(ncdsThaiDate).join(' + ')}</span>}
+                          </td>
+                          <td className="p-2 text-right">{x.drug && <button onClick={() => goToRow(x.drug.drug_id)} className="text-xs font-bold text-emerald-700 hover:underline whitespace-nowrap">ดูในใบเบิก <i className="fa-solid fa-arrow-right"></i></button>}</td>
+                        </tr>
+                      ))}
+                      {!merged.length && <tr><td colSpan="7" className="p-8 text-center text-slate-400">เลือกวันนัดด้านบนอย่างน้อย 1 รอบ</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+                {(rounds || []).filter(r => selected.has(r.id)).some(r => r.skipped_unclassified) && <div className="text-xs text-slate-500">หมายเหตุ: มียาที่ Sawee Refer ยังไม่จัดประเภท จึงไม่ถูกส่งมา {(rounds || []).filter(r => selected.has(r.id)).reduce((s, r) => s + toNonNegativeNumber(r.skipped_unclassified), 0)} รายการ</div>}
+              </>
+            )}
+          </div>
+        </Modal>
+      );
+    };
+
+    const NcdsDemandFab = ({ ctx, hospitalId }) => {
+      const [open, setOpen] = useState(false);
+      const [pending, setPending] = useState(null);
+      useEffect(() => {
+        let alive = true;
+        if (!hospitalId) return;
+        loadNcdsRounds(ctx, hospitalId).then(rows => { if (alive) setPending(rows.filter(r => !r.consumed_by_refill && String(r.round_date) >= ncdsToday()).length); }).catch(() => alive && setPending(0));
+        return () => { alive = false; };
+      }, [hospitalId]);
+      if (!hospitalId) return null;
+      return (
+        <>
+          <button onClick={() => setOpen(true)} aria-haspopup="dialog"
+            className={`no-print fixed bottom-6 right-6 z-[120] flex items-center gap-2 pl-4 pr-5 py-3 rounded-full font-bold shadow-xl transition hover:-translate-y-0.5 ${pending ? 'bg-emerald-600 text-white shadow-emerald-900/30 hover:bg-emerald-700' : 'bg-white text-emerald-800 border border-emerald-300'}`}>
+            <i className="fa-solid fa-calendar-check"></i> ดูรายการยา NCDs ตามนัด
+            {pending ? <span className="ml-1 min-w-[1.5rem] h-6 px-1.5 rounded-full bg-amber-400 text-slate-900 text-xs flex items-center justify-center">{pending}</span> : null}
+          </button>
+          {open && <NcdsDemandModal ctx={ctx} hospitalId={hospitalId} onClose={() => setOpen(false)} onLoaded={rows => setPending(rows.filter(r => !r.consumed_by_refill && String(r.round_date) >= ncdsToday()).length)} />}
+        </>
+      );
+    };
+
     // ===== App Component (app.html — requires auth, redirects to index.html if not logged in) =====
     const App = () => {
       const [currentView, setCurrentView] = useState('dashboard');
@@ -7979,6 +8223,9 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'internal_queue' && currentUser?.role === 'admin' && <InternalQueueView ctx={{ ...ctx, refreshData }} />}
             </div>
           </div>
+          {(currentView === 'create_req' || currentView === 'view_req') && (
+            <NcdsDemandFab ctx={ctx} hospitalId={currentView === 'view_req' ? findReq(currentReqId)?.hospitalId : (normalizeUserRole(currentUser?.role) === 'hospital' ? currentUser?.hospital_id : targetUploadHosp)} />
+          )}
           <UniversalConfirmModal confirmDialog={confirmDialog} setConfirmDialog={setConfirmDialog} />
           {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
         </div>

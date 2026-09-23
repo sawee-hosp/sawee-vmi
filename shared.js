@@ -1,5 +1,5 @@
 // ============================================================
-// Sawee Rxfill — shared.js (v5.7.0)
+// Sawee Rxfill — shared.js (v5.7.2)
 // ไฟล์รวม: Firebase init, ค่าคงที่, utility functions
 // ใช้ร่วมกันทุกหน้า — ห้ามมี JSX (ไม่ผ่าน Babel)
 // ============================================================
@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '5.7.0';
+const APP_VERSION = '5.7.2';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -872,3 +872,24 @@ const tsToMillis = (v) => {
   return Number.isFinite(t) ? t : 0;
 };
 const internalItemValue = (it) => (toNonNegativeNumber(it?.dispenseQty) / safePackSize(it?.packSize)) * toNonNegativeNumber(it?.price);
+
+// ─── INVS dept_id → หน่วยงานในแอป (v5.7.1) ───────────────
+// จัดประเภทแถวจากตาราง dept_id ของ INVS: pharmacy | dept | rpst | skip
+const normalizeInvsDeptRow = (r) => {
+  const o = {};
+  Object.keys(r || {}).forEach(function (k) { o[String(k).toLowerCase()] = safeText(r[k]); });
+  return o;
+};
+const classifyInvsDept = (r) => {
+  const id = safeText(r.dept_id), name = safeText(r.dept_name);
+  const hide = safeText(r.hide).toUpperCase(), deptType = safeText(r.dept_type), hospType = safeText(r.hosp_type), mod = safeText(r.mod_sys).toUpperCase();
+  if (!id || !name) return { kind: 'skip', reason: 'ข้อมูลไม่ครบ' };
+  if (hide === 'Y' || hide === '1') return { kind: 'skip', reason: 'ซ่อนใน INVS' };
+  if (/รพ\.?\s*สต/.test(name) || hospType === '2') return { kind: 'rpst', reason: 'รพ.สต.' };
+  if (deptType === '1' || deptType === '2') return { kind: 'skip', reason: 'คลัง' };
+  if (deptType === '4') return { kind: 'skip', reason: 'จ่ายผู้ป่วย' };
+  if (mod && mod !== 'MED') return { kind: 'skip', reason: 'ไม่ใช่ระบบยา (' + mod + ')' };
+  if (id === '01' || /จ่ายยา|ห้องยา/.test(name)) return { kind: 'pharmacy', reason: 'ห้องยา' };
+  return { kind: 'dept', reason: 'หน่วยงาน' };
+};
+const normalizeRpstName = (s) => normalizeForMatch(String(s || '').replace(/รพ\.?\s*สต\.?/g, '').replace(/โรงพยาบาลส่งเสริมสุขภาพตำบล/g, ''));

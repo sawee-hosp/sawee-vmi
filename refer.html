@@ -340,6 +340,7 @@ tbody tr:hover{background:#FAFCFA}
         <button class="chip" data-f="scheduled">นัดแล้ว</button>
         <button class="chip" data-f="visited">มารับยาแล้ว</button>
         <button class="chip" data-f="missed">ไม่มาตามนัด</button>
+        <button class="chip" data-f="not_mine">ไม่ใช่คนของเรา</button>
         <div style="flex:1"></div>
         <input type="text" id="q" placeholder="เลขบัตร ปชช. 4 ตัวท้าย (หรือ HN)" style="width:240px">
         <button class="btn-ghost" id="btn-reload">โหลดใหม่</button>
@@ -356,6 +357,24 @@ tbody tr:hover{background:#FAFCFA}
         </tr></thead>
         <tbody id="tb-list"><tr><td colspan="7" class="loading">กำลังโหลด...</td></tr></tbody>
       </table></div></div>
+    </section>
+
+    <!-- ค้นหาการส่งตัว (พยาบาลคลินิก) -->
+    <section id="tab-find" class="hidden">
+      <div class="panel">
+        <h2>ค้นหาการส่งตัว <span class="note">พิมพ์ HN เพื่อตรวจว่าผู้ป่วยถูกส่งไป รพ.สต. แล้วหรือยัง</span></h2>
+        <div class="frm">
+          <div class="fld"><label>HN</label>
+            <input type="text" id="f-hn" inputmode="numeric" placeholder="เช่น 560001337" style="width:220px;font-size:20px;padding:10px 12px"></div>
+          <button class="btn-primary" id="f-go" style="padding:12px 22px">ค้นหา</button>
+        </div>
+        <div id="f-result" style="margin-top:14px"></div>
+      </div>
+      <div class="panel">
+        <h2>รายการรอส่งให้ รพ.สต. <span class="note">pusher ส่งอัตโนมัติรอบ 13.00 น. ทุกวัน</span>
+          <button class="btn-sm hidden" id="f-push-now" style="margin-left:10px">⟳ ส่งทันที (admin)</button></h2>
+        <div id="f-queue"><div class="sub">กำลังโหลด...</div></div>
+      </div>
     </section>
 
     <!-- รอบนัด -->
@@ -494,6 +513,21 @@ tbody tr:hover{background:#FAFCFA}
           <button class="btn-primary" id="btn-u-add">สร้างบัญชี</button>
         </div>
         <div id="u-msg" style="margin-top:10px"></div>
+      </div>
+      <div class="panel" style="border-color:var(--accent)">
+        <h2>ขอบเขตคลินิกที่ส่งออกจาก HOSxP <span class="note">pusher อ่านค่านี้ทุกรอบ ส่งเฉพาะผู้ป่วยที่ส่งต่อจากคลินิกที่ติ๊ก
+          และยา/แล็บจาก visit ที่มาตามนัดคลินิกเหล่านี้เท่านั้น</span></h2>
+        <div id="scope-box" style="display:flex;flex-wrap:wrap;gap:8px 18px"></div>
+        <div class="frm" style="margin-top:12px">
+          <button class="btn-primary" id="btn-scope-save">บันทึกขอบเขต</button>
+          <span class="sub" id="scope-info"></span></div>
+        <div class="sub" style="margin-top:6px">คลินิก TB / ARV / ไวรัสตับอักเสบ / มะเร็ง / ฟ้าใส ไม่มีให้เลือกและจะไม่ถูกส่งออกเด็ดขาด ·
+          หลังลดขอบเขต ให้กด Sync แบบ "ส่งทั้งหมด" หนึ่งครั้ง เพื่อลบเคสนอกขอบเขตและล้างชื่อคลินิกเดิมในเอกสาร</div>
+        <div id="scope-msg" style="margin-top:8px"></div>
+      </div>
+      <div class="panel">
+        <h2>ผู้ป่วยที่ลบออกจากระบบ <span class="note">pusher จะไม่ส่ง HN เหล่านี้มาอีก จนกว่าจะยกเลิกการลบ</span></h2>
+        <div id="block-body" class="sub">กำลังโหลด...</div>
       </div>
       <div class="panel" id="pend-panel">
         <h2>คำขอลงทะเบียนที่รออนุมัติ <span class="note" id="pend-count"></span></h2>
@@ -722,9 +756,9 @@ const SEED_ROUNDS = [
 
 const STATUS = { new:'ส่งต่อใหม่', acknowledged:'รับตัวแล้ว', scheduled:'นัดแล้ว',
   visited:'มารับยาแล้ว', missed:'ไม่มาตามนัด', returned:'ส่งกลับ รพ.', cancelled:'ยกเลิก',
-  discharged:'จำหน่ายออกจากทะเบียน' };
+  discharged:'จำหน่ายออกจากทะเบียน', not_mine:'ตรวจแล้ว ไม่ใช่คนของเรา' };
 const SC = { new:'#B8860B', acknowledged:'#3E6E8E', scheduled:'#3E6E8E',
-  visited:'#1F7A4D', missed:'#8B2020', returned:'#5F6F63', cancelled:'#8A8A8A', discharged:'#8B2020' };
+  visited:'#1F7A4D', missed:'#8B2020', returned:'#5F6F63', cancelled:'#8A8A8A', discharged:'#8B2020', not_mine:'#6B4C9A' };
 const DISCHARGE_REASON = ['ควบคุมโรคได้ดี ส่งกลับ รพสต. ดูแลต่อเนื่อง','ย้ายภูมิลำเนา',
   'เสียชีวิต','เข้าเกณฑ์ remission','ขาดการติดตามเกิน 6 เดือน','อื่น ๆ'];
 const TODO = ['new','acknowledged','scheduled'];
@@ -741,7 +775,7 @@ const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออ
   open_round:'เปิดรอบนัด', view_dashboard:'เปิดแดชบอร์ด', view_log:'เปิดบันทึกการเข้าถึง',
   edit_outreach:'แก้ไขวันนัด', request_sync:'สั่ง sync ข้อมูล', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
   edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.',
-  record_visit:'บันทึกการให้บริการ', view_clinical:'เปิดดูยา/แล็บ (ออกหน่วย)', add_manual_patient:'เพิ่มผู้ป่วยเอง', delete_manual_patient:'ลบผู้ป่วยที่เพิ่มเอง', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
+  record_visit:'บันทึกการให้บริการ', view_clinical:'เปิดดูยา/แล็บ (ออกหน่วย)', reassign_patient:'ย้าย รพ.สต. ปลายทาง', find_referral:'ค้นหาการส่งตัว', block_patient:'ลบผู้ป่วยออกจากระบบ', unblock_patient:'ยกเลิกการลบผู้ป่วย', edit_clinic_scope:'แก้ขอบเขตคลินิก', add_manual_patient:'เพิ่มผู้ป่วยเอง', delete_manual_patient:'ลบผู้ป่วยที่เพิ่มเอง', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
   approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
   reveal_sensitive:'เปิดดูข้อมูลส่วนบุคคล', add_patient_request:'ขอเพิ่มผู้ป่วย',
   approve_add_patient:'อนุมัติเพิ่มผู้ป่วย', edit_rpst:'แก้ไขหน่วยบริการ',
@@ -780,8 +814,9 @@ function eyeBtn(refId, field, label){
   return `<button class="btn-eye" title="เปิดดู${label} (มีบันทึก log)" data-eye="${esc(refId)}" data-ef="${field}">`
     + '👁</button>';
 }
+const FIND_CACHE = {};   // เคสที่ได้จากแท็บค้นหาการส่งตัว (อาจไม่อยู่ใน LIST ที่โหลดไว้)
 async function revealField(refId, field){
-  const r = LIST.find(x=>x.id===refId); if(!r) return;
+  const r = LIST.find(x=>x.id===refId) || FIND_CACHE[refId]; if(!r) return;
   const p = r.patient||{};
   const val = field==='full_name'?p.full_name : field==='address'?p.address_full
     : field==='phone'?p.phone : field==='labs'?'labs' : field==='birthday'?p.birthday : '';
@@ -993,15 +1028,19 @@ const TABS = [
   {id:'user', label:'จัดการผู้ใช้',   adminOnly:1},
   {id:'clinics', label:'คลินิกโรคเรื้อรัง', seesAll:1},
   {id:'intake', label:'รับข้อมูล NCDs', hospOnly:1},
+  {id:'find', label:'ค้นหาการส่งตัว', hospOnly:1},
   {id:'adjreport', label:'รายงานปรับยา', seesAll:1},
   {id:'drugcat', label:'บัญชียา รพ.สต.', seesAll:1},
   {id:'drug', label:'วิธีใช้ยา',      seesAll:1},
   {id:'log',  label:'บันทึกการเข้าถึง', adminOnly:1},
 ];
 function buildNav(){
-  const vis = TABS.filter(t => t.all || (t.record&&canRecord())
+  let vis = TABS.filter(t => t.all || (t.record&&canRecord())
     || (t.seesAll&&seesAll()) || (t.adminOnly&&isAdmin())
     || (t.hospOnly&&(isAdmin()||isHospital())));
+  // พยาบาลคลินิก: แท็บค้นหาการส่งตัวเป็นหน้าแรก / admin: อยู่ถัดจากรายชื่อ
+  const f = vis.find(t=>t.id==='find');
+  if(f){ vis = vis.filter(t=>t!==f); vis.splice(isHospital()?0:1, 0, f); }
   $('nav').innerHTML = vis.map((t,i)=>
     `<button data-tab="${t.id}"${i===0?' class="on"':''}>${t.label}` +
     (t.id==='user'?'<span class="nav-badge hidden" id="nav-badge-user"></span>':'') +
@@ -1010,6 +1049,7 @@ function buildNav(){
   $('nav').querySelectorAll('button').forEach(b=>
     b.addEventListener('click', ()=>openTab(b.dataset.tab)));
   paintPendBadge();
+  if(vis[0]?.id && vis[0].id!=='list') openTab(vis[0].id);
 }
 /* แจ้งเตือนแอดมินว่ามีคำขอลงทะเบียนใหม่กี่คำขอ — ทั้งบนแท็บและเป็นแถบด้านบน */
 function paintPendBadge(){
@@ -1030,7 +1070,8 @@ function openTab(id){
   if(id==='cal')   renderCal();
   if(id==='batch') renderBatch();
   if(id==='dash')  { renderDash(); audit('view_dashboard'); }
-  if(id==='user')  { loadUsers(); loadPending(); }
+  if(id==='user')  { loadUsers(); loadPending(); renderScopeAdmin(); }
+  if(id==='find')  { loadFindQueue(); setTimeout(()=>$('f-hn')?.focus(), 50); }
   if(id==='clinics') renderClinicMenu();
   if(id==='intake') renderIntake();
   if(id==='adjreport') renderAdjReport();
@@ -1046,7 +1087,7 @@ async function startApp(){
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   buildNav();
   await audit('login');
-  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy()]);
+  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy(), loadClinicScope()]);
   if(isAdmin()){
     initSync();
     loadPending();
@@ -1098,9 +1139,22 @@ const CLINIC_ALLOW = ['โรคความดัน','โรคไขมัน
   'โรคระบบประสาท','โรคหัวใจ','ckd clinic','copd','asthma','warfarin clinic',
   'จิตเวช','palliative care','ข้อมูลทดสอบ'];
 const clinicNorm = s => String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+/* ขอบเขตที่ admin เลือก (config/clinic_scope) — ต้องเป็นส่วนหนึ่งของ CLINIC_ALLOW เสมอ
+   ค่าเริ่มต้นตัดโรคระบบประสาท/จิตเวช ออก (ตรงกับ push.php) */
+const CLINIC_DEFAULT_OFF = ['โรคระบบประสาท','จิตเวช'];
+let CLINIC_SCOPE = CLINIC_ALLOW.filter(c=>!CLINIC_DEFAULT_OFF.includes(c));
+async function loadClinicScope(){
+  try{
+    const d = await getDoc(doc(db,'config','clinic_scope'));
+    if(d.exists() && Array.isArray(d.data().allowed)){
+      const want = d.data().allowed.map(clinicNorm);
+      CLINIC_SCOPE = CLINIC_ALLOW.filter(c=>c==='ข้อมูลทดสอบ' || want.includes(clinicNorm(c)));
+    }
+  }catch(e){ /* อ่านไม่ได้ใช้ค่าเริ่มต้น */ }
+}
 const clinicAllowed = name => {
   const n = clinicNorm(name);
-  return !!n && CLINIC_ALLOW.some(a=>{ const x=clinicNorm(a); return n===x || n.includes(x); });
+  return !!n && CLINIC_SCOPE.some(a=>{ const x=clinicNorm(a); return n===x || n.includes(x); });
 };
 function clinicListOf(r){
   return String(r.clinics||'').split('|')
@@ -1140,7 +1194,8 @@ function paintTodoAlert(){
   const nNew  = LIST.filter(r=>stOf(r)==='new').length;
   const nWait = LIST.filter(r=>stOf(r)==='acknowledged').length;
   const nLate = LIST.filter(r=>stOf(r)==='scheduled' && r.workflow?.appoint_date && daysFrom(r.workflow.appoint_date)<0).length;
-  const total = nNew + nWait + nLate;
+  const nNotMine = isAdmin() ? LIST.filter(r=>stOf(r)==='not_mine').length : 0;
+  const total = nNew + nWait + nLate + nNotMine;
   const b = $('nav-badge-list');
   if(b){ b.textContent = total; show('nav-badge-list', total>0); }
   const el = $('todo-alert');
@@ -1150,7 +1205,8 @@ function paintTodoAlert(){
   el.innerHTML = `<div class="ta-head"><span class="ta-bell">🔔</span>มีผู้ป่วยรอดำเนินการ</div>
     ${tile('ta-new', nNew, 'ส่งต่อรายใหม่<br><small style="font-weight:400">ยังไม่กดรับตัว</small>', 'new')}
     ${tile('ta-wait',nWait,'รับตัวแล้ว<br><small style="font-weight:400">ยังไม่ได้นัด</small>', 'acknowledged')}
-    ${tile('ta-late',nLate,'เลยวันนัด<br><small style="font-weight:400">ยังไม่บันทึกว่ามา/ไม่มา</small>', 'late')}`;
+    ${tile('ta-late',nLate,'เลยวันนัด<br><small style="font-weight:400">ยังไม่บันทึกว่ามา/ไม่มา</small>', 'late')}
+    ${tile('ta-late',nNotMine,'ไม่ใช่คนของ รพ.สต.<br><small style="font-weight:400">รอ admin ย้ายหรือลบ</small>', 'not_mine')}`;
   el.classList.remove('hidden');
   el.querySelectorAll('[data-taf]').forEach(t=>t.addEventListener('click',()=>{
     openTab('list');
@@ -1308,6 +1364,19 @@ function openDetail(id){
       <button class="btn-primary" id="d-save">บันทึก</button></div>
       <div id="d-msg" style="margin-top:8px"></div></div>`
     :'<div class="sub" style="margin-top:12px">บัญชีของคุณดูข้อมูลได้อย่างเดียว</div>'}
+    ${isAdmin()?`<div class="sec" style="border:1px solid ${st==='not_mine'?'#6B4C9A':'var(--line)'}">
+      <div class="st" style="color:#6B4C9A">จัดการปลายทาง (admin)${st==='not_mine'?' — รพ.สต. แจ้งว่าไม่ใช่คนของเขา':''}</div>
+      ${st==='not_mine'&&r.workflow?.note?`<div class="msg amber" style="margin-bottom:8px">เหตุผลจาก รพ.สต.: ${esc(r.workflow.note)}</div>`:''}
+      <div class="frm">
+        <div class="fld"><label>ย้ายไป รพ.สต.</label><select id="adm-hc">${RPST.map(x=>
+          `<option value="${esc(x.hcode)}"${x.hcode===r.hcode?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
+        <button class="btn-sm" id="adm-move">ย้ายปลายทาง</button>
+        <div style="flex:1"></div>
+        <button class="btn-sm red" id="adm-del">ลบออกจากระบบถาวร</button>
+      </div>
+      <div class="sub" style="margin-top:6px">ย้าย = รพ.สต. ใหม่จะเห็นเป็น "ส่งต่อใหม่" และ pusher จะจำปลายทางนี้ไว้ ·
+        ลบ = ผู้ป่วยหายจากระบบ และ pusher จะไม่ส่ง HN นี้มาอีก (ยกเลิกได้ที่แท็บจัดการผู้ใช้)</div>
+      <div id="adm-msg" style="margin-top:6px"></div></div>`:''}
     ${r.manual && (isAdmin()||isOutreach()||(isRpst()&&r.hcode===myHcode()))?`<div class="sec">
       <div class="sub">เพิ่มเองโดย ${esc(r.created_by_name||r.created_by||'-')} · ${thDate(r.refer_date)}</div>
       <button class="btn-sm red" id="man-del" style="margin-top:6px">ลบรายการนี้ (เพิ่มผิด/ซ้ำ)</button></div>`:''}
@@ -1318,6 +1387,37 @@ function openDetail(id){
         <button class="btn-sm red" id="dc-do">จำหน่ายออก</button>
       </div><div id="dc-msg" style="margin-top:8px"></div></div>`:''}`;
   $('ov').classList.remove('hidden');
+  $('adm-move')?.addEventListener('click', async ()=>{
+    const to=$('adm-hc').value;
+    if(to===r.hcode){ $('adm-msg').innerHTML='<div class="msg err">เลือกหน่วยใหม่ก่อน</div>'; return; }
+    if(!confirm(`ย้ายผู้ป่วยรายนี้จาก ${rpstName(r.hcode)} ไป ${rpstName(to)}?`)) return;
+    try{
+      const by=PROFILE.full_name||ME.email, at=new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' ');
+      if(r.hn && !r.manual) await setDoc(doc(db,'hcode_override',String(r.hn)), {hn:String(r.hn), hcode:to, from:r.hcode||null, by, at});
+      await updateDoc(doc(db,'referrals',id), {hcode:to, hcode_name:rpstName(to), hcode_source:'admin',
+        reassigned:{from:r.hcode||null, by, at},
+        'workflow.status':'new', 'workflow.note':`ย้ายมาจาก ${rpstName(r.hcode)} โดย ${by}`,
+        'workflow.appoint_date':null, 'workflow.updated_by':by, 'workflow.updated_at':serverTimestamp()});
+      await audit('reassign_patient', id, {hn:r.hn, from:r.hcode, to});
+      Object.assign(r, {hcode:to, hcode_name:rpstName(to), hcode_source:'admin'});
+      r.workflow = {...(r.workflow||{}), status:'new', appoint_date:null, note:`ย้ายมาจาก ${rpstName(r.hcode)}`};
+      $('ov').classList.add('hidden'); renderList();
+    }catch(e){ $('adm-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}${e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':''}</div>`; }
+  });
+  $('adm-del')?.addEventListener('click', async ()=>{
+    const why = prompt('เหตุผลที่ลบออกจากระบบ (จะบันทึกไว้):', r.workflow?.note||'');
+    if(why===null) return;
+    if(!confirm('ลบผู้ป่วยรายนี้ออกจากระบบถาวร และห้าม pusher ส่งมาอีก?')) return;
+    try{
+      const by=PROFILE.full_name||ME.email;
+      if(r.hn && !r.manual) await setDoc(doc(db,'referral_block',String(r.hn)), {hn:String(r.hn), reason:why||null,
+        hcode:r.hcode||null, cid_last4:r.patient?.cid_last4||null, doc_id:id, by,
+        at:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' ')});
+      await deleteDoc(doc(db,'referrals',id));
+      await audit('block_patient', id, {hn:r.hn, reason:why});
+      LIST = LIST.filter(x=>x.id!==id); $('ov').classList.add('hidden'); renderList();
+    }catch(e){ $('adm-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}${e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':''}</div>`; }
+  });
   $('man-del')?.addEventListener('click', async ()=>{
     if(!confirm('ลบผู้ป่วยที่เพิ่มเองรายนี้ออกจากระบบ? (ลบแล้วกู้คืนไม่ได้)')) return;
     try{
@@ -1350,6 +1450,9 @@ function openDetail(id){
     $('d-eye-lab').style.display='none'; });
   if(canEdit()){
     $('d-save').addEventListener('click', async ()=>{
+      if($('d-st').value==='not_mine' && !$('d-note').value.trim()){
+        $('d-msg').innerHTML='<div class="msg err">ระบุในช่อง "บันทึกเพิ่มเติม" ด้วยว่าทำไมไม่ใช่คนของเรา / ควรไปหน่วยไหน เพื่อให้ admin ย้ายได้ถูก</div>';
+        return; }
       try{
         await setStatus(id, $('d-st').value,
           {appoint_date:$('d-ap').value||null, note:$('d-note').value.trim()||null});
@@ -2430,6 +2533,160 @@ async function loadAddRequests(){
   }catch(e){ console.warn('loadAddRequests', e); }
 }
 
+/* ================= ค้นหาการส่งตัว (พยาบาลคลินิก) =================
+   1) พิมพ์ HN → ค้นใน Firestore ว่ามีเคสส่งต่อแล้วหรือยัง
+   2) ไม่เจอ → เลือก รพ.สต. ปลายทาง แล้วเพิ่มเข้าคิว (add_requests status approved)
+   3) pusher รอบ 13.00 น. (หรือ admin กดส่งทันที) ดึงข้อมูลจาก HOSxP ส่งไป แล้วเขียนผลกลับ */
+const REQ_STATUS = {approved:['รอส่งรอบ 13.00 น.','#B8860B'], pending:['รอ admin ตรวจ','#B8860B'],
+  done:['ส่งแล้ว','#1F7A4D'], not_found:['ไม่พบ HN ใน HOSxP','#8B2020'], out_of_scope:['ไม่อยู่ในคลินิกที่ส่งได้','#8B2020'],
+  bad_hcode:['รหัส รพ.สต. ผิด','#8B2020'], rejected:['ปฏิเสธ','#8A8A8A']};
+const reqTag = st => { const [t,c]=REQ_STATUS[st]||[st,'#888']; return `<span class="tag" style="background:${c}1a;color:${c}">${esc(t)}</span>`; };
+$('f-go')?.addEventListener('click', findReferral);
+$('f-hn')?.addEventListener('keydown', e=>{ if(e.key==='Enter') findReferral(); });
+$('f-push-now')?.addEventListener('click', ()=>$('btn-sync')?.click());
+
+async function findReferral(){
+  const hn = $('f-hn').value.replace(/\D/g,'');
+  if(!hn){ $('f-result').innerHTML='<div class="msg err">พิมพ์ HN</div>'; return; }
+  $('f-result').innerHTML='<div class="sub">กำลังค้นหา...</div>';
+  const variants = [...new Set([hn, hn.padStart(9,'0'), hn.replace(/^0+/,'')])].filter(Boolean);
+  try{
+    const [ref, req] = await Promise.all([
+      getDocs(query(collection(db,'referrals'), where('hn','in',variants), limit(20))),
+      getDocs(query(collection(db,'add_requests'), where('hn','in',variants), limit(20)))]);
+    const refs = ref.docs.map(d=>({id:d.id, ...d.data()}));
+    refs.forEach(r=>FIND_CACHE[r.id]=r);
+    const reqs = req.docs.map(d=>({id:d.id, ...d.data()}));
+    await audit('find_referral', hn, {found:refs.length});
+    if(refs.length){
+      $('f-result').innerHTML = `<div class="msg ok" style="font-size:16px"><b>✓ มีข้อมูลในระบบแล้ว</b> — ${refs.length} รายการ</div>` +
+        refs.map(r=>{ const st=stOf(r), p=r.patient||{};
+          return `<div class="sec"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+            <b style="font-size:16px">${esc(maskName(p.full_name))}</b> ${eyeBtn(r.id,'full_name','ชื่อ')}
+            <span class="sub">HN ${esc(r.hn)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี</span>
+            <span class="tag" style="background:${SC[st]}1a;color:${SC[st]}">${STATUS[st]||st}</span></div>
+            <table class="kv" style="margin-top:6px">
+              <tr><td>ปลายทาง</td><td><b>${esc(r.hcode_name||rpstName(r.hcode)||'-')}</b></td></tr>
+              <tr><td>วันที่ส่งข้อมูล</td><td>${thDate(r.refer_date)}${r.case_type==='data_only'?' <span class="pill pill-rem">Remission</span>':''}</td></tr>
+              <tr><td>คลินิก</td><td>${esc(clinicText(r)||'-')}</td></tr>
+              <tr><td>วันนัด รพ.สต.</td><td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'ยังไม่นัด'}</td></tr>
+              ${r.workflow?.note?`<tr><td>บันทึก รพ.สต.</td><td>${esc(r.workflow.note)}</td></tr>`:''}
+            </table></div>`; }).join('');
+      $('f-result').querySelectorAll('.btn-eye').forEach(b=>b.addEventListener('click', async ()=>{
+        const v = await revealField(b.dataset.eye, b.dataset.ef);
+        b.previousElementSibling.textContent = v||'-'; b.style.display='none'; }));
+      return;
+    }
+    const open = reqs.find(q=>['approved','pending'].includes(q.status));
+    if(open){
+      $('f-result').innerHTML = `<div class="msg info" style="font-size:15px"><b>อยู่ในคิวรอส่งแล้ว</b> —
+        ปลายทาง ${esc(open.hcode_name||rpstName(open.hcode))} ${reqTag(open.status)}
+        <div class="sub" style="margin-top:4px">เพิ่มโดย ${esc(open.requested_by||'-')} · ข้อมูลจะถูกส่งตามรอบ 13.00 น.</div></div>`;
+      return;
+    }
+    const last = reqs.sort((a,b)=>String(b.processed_at||'').localeCompare(String(a.processed_at||'')))[0];
+    $('f-result').innerHTML = `
+      <div class="msg amber" style="font-size:16px"><b>ยังไม่มีข้อมูลในระบบส่งต่อ</b> — HN ${esc(hn)}</div>
+      ${last?`<div class="sub" style="margin:6px 0">เคยขอแล้ว: ${reqTag(last.status)} ${esc(last.result_note||'')}</div>`:''}
+      <div class="sec"><div class="st">เพิ่มเข้าคิวส่งให้ รพ.สต.</div>
+        <div class="frm">
+          <div class="fld"><label>รพ.สต. ปลายทาง</label><select id="f-hcode" style="min-width:230px">
+            <option value="">-- เลือก --</option>${RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('')}</select></div>
+          <div class="fld grow"><label>หมายเหตุ</label><input type="text" id="f-note" placeholder="เช่น คนไข้ขอรับยาใกล้บ้าน"></div>
+          <button class="btn-primary" id="f-add">เพิ่มเข้าคิว</button>
+        </div>
+        <div class="sub" style="margin-top:6px">ข้อมูลจะถูกส่งตามรอบ <b>13.00 น.</b> · ส่งได้เฉพาะผู้ป่วยในคลินิกที่อยู่ในขอบเขต
+          (${esc(CLINIC_SCOPE.filter(c=>c!=='ข้อมูลทดสอบ').map(c=>CLINIC_LABEL[c]||c).join(', '))})</div>
+        <div id="f-msg" style="margin-top:8px"></div></div>`;
+    $('f-add').addEventListener('click', async ()=>{
+      const hc=$('f-hcode').value;
+      if(!hc){ $('f-msg').innerHTML='<div class="msg err">เลือก รพ.สต. ปลายทาง</div>'; return; }
+      $('f-add').disabled=true;
+      try{
+        await addDoc(collection(db,'add_requests'), {
+          hn, hcode:hc, hcode_name:rpstName(hc), reason:$('f-note').value.trim()||'เพิ่มจากหน้าค้นหาการส่งตัว',
+          source:'find', requested_by:PROFILE.full_name||ME.email, requested_by_uid:ME.uid,
+          requested_at:serverTimestamp(), status:'approved', approved_by:ME.email, approved_at:serverTimestamp()});
+        await audit('add_patient_request', hn, {hcode:hc, source:'find'});
+        $('f-result').innerHTML = `<div class="msg ok" style="font-size:16px"><b>เพิ่มเข้าคิวแล้ว</b> —
+          HN ${esc(hn)} → ${esc(rpstName(hc))}<div style="margin-top:4px">ข้อมูลจะถูกส่งตามรอบ 13.00 น.</div></div>`;
+        $('f-hn').value=''; loadFindQueue();
+      }catch(e){ $('f-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}${e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':''}</div>`; $('f-add').disabled=false; }
+    });
+  }catch(e){ $('f-result').innerHTML=`<div class="msg err">ค้นหาไม่สำเร็จ: ${esc(e.code||e.message)}</div>`; }
+}
+
+async function loadFindQueue(){
+  show('f-push-now', isAdmin());
+  try{
+    const s = await getDocs(query(collection(db,'add_requests'), limit(300)));
+    const rows = s.docs.map(d=>({id:d.id, ...d.data()}));
+    const open = rows.filter(r=>['approved','pending'].includes(r.status));
+    const recent = rows.filter(r=>!['approved','pending'].includes(r.status))
+      .sort((a,b)=>String(b.processed_at||'').localeCompare(String(a.processed_at||''))).slice(0,15);
+    const tr = r => `<tr><td class="mono">${esc(r.hn)}</td><td>${esc(r.hcode_name||rpstName(r.hcode))}</td>
+      <td class="sub">${esc(r.reason||'-')}</td><td class="sub">${esc(r.requested_by||'-')}</td>
+      <td>${reqTag(r.status)}${r.result_note?`<div class="sub">${esc(r.result_note)}</div>`:''}</td>
+      ${isAdmin()?`<td class="right" style="white-space:nowrap">${r.status==='pending'?`<button class="btn-sm" data-fq-ok="${esc(r.id)}">อนุมัติ</button> `:''}
+        ${['approved','pending'].includes(r.status)?`<button class="btn-sm grey" data-fq-no="${esc(r.id)}">ยกเลิก</button>`:''}</td>`:''}</tr>`;
+    const head = `<thead><tr><th>HN</th><th>ปลายทาง</th><th>หมายเหตุ</th><th>เพิ่มโดย</th><th>สถานะ</th>${isAdmin()?'<th></th>':''}</tr></thead>`;
+    $('f-queue').innerHTML =
+      (open.length ? `<div class="tbl-wrap"><table>${head}<tbody>${open.map(tr).join('')}</tbody></table></div>`
+                   : '<div class="empty">ไม่มีรายการรอส่ง</div>')
+      + (recent.length ? `<div class="st" style="margin-top:14px">ผลล่าสุด</div><div class="tbl-wrap"><table>${head}<tbody>${recent.map(tr).join('')}</tbody></table></div>` : '');
+    $('f-queue').querySelectorAll('[data-fq-ok]').forEach(b=>b.addEventListener('click', async ()=>{
+      await updateDoc(doc(db,'add_requests',b.dataset.fqOk), {status:'approved', approved_by:ME.email, approved_at:serverTimestamp()});
+      await audit('approve_add_patient', b.dataset.fqOk); loadFindQueue(); }));
+    $('f-queue').querySelectorAll('[data-fq-no]').forEach(b=>b.addEventListener('click', async ()=>{
+      if(!confirm('ยกเลิกคำขอนี้?')) return;
+      await updateDoc(doc(db,'add_requests',b.dataset.fqNo), {status:'rejected', rejected_by:ME.email});
+      loadFindQueue(); }));
+  }catch(e){ $('f-queue').innerHTML=`<div class="msg err">โหลดไม่ได้: ${esc(e.code||e.message)}</div>`; }
+}
+
+/* ================= ขอบเขตคลินิก / ผู้ป่วยที่ลบออก (admin) ================= */
+async function renderScopeAdmin(){
+  if(!isAdmin()) return;
+  await loadClinicScope();
+  const on = new Set(CLINIC_SCOPE.map(clinicNorm));
+  $('scope-box').innerHTML = CLINIC_ALLOW.filter(c=>c!=='ข้อมูลทดสอบ').map(c=>
+    `<label style="display:flex;gap:6px;align-items:center;font-size:14px"><input type="checkbox" class="scope-c" value="${esc(c)}"${
+      on.has(clinicNorm(c))?' checked':''}> ${esc(CLINIC_LABEL[c]||c)}</label>`).join('');
+  try{
+    const m = await getDoc(doc(db,'meta','sync'));
+    const d = m.exists()?m.data():{};
+    $('scope-info').innerHTML = d.clinic_scope ? `pusher รอบล่าสุด (${esc(d.last_run_at||'-')}) ใช้: ${esc((d.clinic_codes||d.clinic_scope).join(' · '))}` : '';
+  }catch(e){}
+  try{
+    const s = await getDocs(collection(db,'referral_block'));
+    const rows = s.docs.map(x=>({id:x.id, ...x.data()}));
+    $('block-body').innerHTML = rows.length ? `<div class="tbl-wrap"><table><thead><tr><th>HN</th><th>บัตร</th><th>หน่วยเดิม</th>
+      <th>เหตุผล</th><th>ลบโดย</th><th></th></tr></thead><tbody>${rows.map(b=>`<tr><td class="mono">${esc(b.hn)}</td>
+      <td>${b.cid_last4?'••••'+esc(b.cid_last4):'-'}</td><td>${esc(rpstName(b.hcode)||b.hcode||'-')}</td><td class="sub">${esc(b.reason||'-')}</td>
+      <td class="sub">${esc(b.by||'-')}<div>${esc(b.at||'')}</div></td>
+      <td class="right"><button class="btn-sm grey" data-unblock="${esc(b.id)}">ยกเลิกการลบ</button></td></tr>`).join('')}</tbody></table></div>`
+      : 'ยังไม่มี';
+    $('block-body').querySelectorAll('[data-unblock]').forEach(b=>b.addEventListener('click', async ()=>{
+      if(!confirm('ยกเลิกการลบ? pusher รอบถัดไปจะส่งผู้ป่วยนี้กลับมาถ้ายังอยู่ในเงื่อนไขการส่ง')) return;
+      await deleteDoc(doc(db,'referral_block',b.dataset.unblock));
+      await audit('unblock_patient', b.dataset.unblock);
+      renderScopeAdmin();
+    }));
+  }catch(e){ $('block-body').textContent='อ่านไม่ได้: '+(e.code||e.message); }
+}
+$('btn-scope-save')?.addEventListener('click', async ()=>{
+  const allowed = [...document.querySelectorAll('.scope-c:checked')].map(x=>x.value);
+  if(!allowed.length){ $('scope-msg').innerHTML='<div class="msg err">ต้องเลือกอย่างน้อย 1 คลินิก</div>'; return; }
+  if(!confirm(`บันทึกขอบเขตการส่งข้อมูล ${allowed.length} คลินิก?\n${allowed.map(c=>CLINIC_LABEL[c]||c).join(', ')}`)) return;
+  try{
+    await setDoc(doc(db,'config','clinic_scope'), {allowed, updated_by:PROFILE.full_name||ME.email,
+      updated_at:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' ')});
+    await audit('edit_clinic_scope','config/clinic_scope',{allowed});
+    await loadClinicScope(); buildClinicOptions(); renderList();
+    $('scope-msg').innerHTML='<div class="msg ok">บันทึกแล้ว มีผลกับ pusher รอบถัดไป · หน้าเว็บซ่อนคลินิกนอกขอบเขตทันที</div>';
+  }catch(e){ $('scope-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}${e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':''}</div>`; }
+});
+
 /* ================= จัดการผู้ใช้ ================= */
 let PENDING=[];
 async function loadPending(){
@@ -2869,7 +3126,7 @@ async function loadIntakeUnmatched(){
      เก็บแค่ 4 ตัวท้าย + ค่า hash ไว้เช็คซ้ำ/จับคู่กับ HOSxP ภายหลัง */
 const CLINIC_LABEL = {'ncds remission':'NCDs Remission','ckd clinic':'CKD clinic','copd':'COPD','asthma':'Asthma',
   'warfarin clinic':'Warfarin Clinic','palliative care':'Palliative Care'};
-const MAN_CLINICS = CLINIC_ALLOW.filter(c=>c!=='ข้อมูลทดสอบ').map(c=>CLINIC_LABEL[c]||c);
+const manClinics = () => CLINIC_SCOPE.filter(c=>c!=='ข้อมูลทดสอบ').map(c=>CLINIC_LABEL[c]||c);
 function cidValid(c){
   if(!/^\d{13}$/.test(c)) return false;
   let sum=0; for(let i=0;i<12;i++) sum += +c[i]*(13-i);
@@ -2927,7 +3184,7 @@ function openManualAdd(){
       </div>
     </div>
     <div class="sec"><div class="st">คลินิก * <span class="sub" style="font-weight:400">(เลือกได้หลายคลินิก)</span></div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px 16px">${MAN_CLINICS.map(c=>
+      <div style="display:flex;flex-wrap:wrap;gap:6px 16px">${manClinics().map(c=>
         `<label style="display:flex;gap:5px;align-items:center;font-size:13.5px"><input type="checkbox" class="mn-clin" value="${esc(c)}"> ${esc(c)}</label>`).join('')}</div>
     </div>
     <div class="sec"><div class="st">ยาที่ใช้อยู่ <span class="sub" style="font-weight:400">(ใส่เพื่อให้คำนวณยอดเบิกได้ เว้นได้ถ้ายังไม่ทราบ)</span></div>
@@ -3288,14 +3545,14 @@ function renderDrugCat(){
     .map(r=>'<option value="'+esc(r.hcode)+'"'+(r.hcode===scope?' selected':'')+'>'+esc(r.name)+'</option>').join('');
   $('dc-hcode').disabled = isRpst();
   const hc = scope||null;
-  let nextDays=null, nextDate=null;
+  let nextDays=null, nextDate=null; DC_FALLBACK=false;
   if(hc){
     const up=OUTREACH.filter(o=>o.hcode===hc&&daysFrom(o.date)>=0).sort((a,b)=>a.date.localeCompare(b.date));
     if(up.length>=2){ nextDays=dayDiff(up[0].date,up[1].date); nextDate=up[0].date; }
-    else if(up.length===1) nextDate=up[0].date;
+    else if(up.length===1){ nextDate=up[0].date; nextDays=fbDays(); DC_FALLBACK=true; }
   }
   $('dc-status').innerHTML = nextDays
-    ? 'รอบถัดไป '+thDate(nextDate)+' จ่ายยา '+nextDays+' วัน (เผื่อ 10%)'
+    ? 'รอบถัดไป '+thDate(nextDate)+' จ่ายยา '+nextDays+' วัน'+(DC_FALLBACK?' (ยังไม่มีรอบถัดไป ใช้ค่าสำรอง)':'')+' (เผื่อ 10%)'
     : hc ? 'ไม่มีข้อมูลรอบนัดเพียงพอ แสดงจำนวนที่เคยจ่ายแทน' : 'เลือก รพ.สต. เพื่อดูจำนวน';
   const pts  = hc ? LIST.filter(r=>r.hcode===hc) : LIST;
   const rows = buildDrugNeed(pts, nextDays||0);
@@ -3350,7 +3607,7 @@ function renderDrugCat(){
       catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.code||e.message)); b.disabled=false; }
     }));
 }
-let DC_CACHE = {rows:[]};
+let DC_CACHE = {rows:[]}, DC_FALLBACK=false;
 
 /* ===== ส่งยอดเบิก NCDs ไปยังโปรแกรม sawee refill =====
    เขียนเอกสารสรุปลง collection ncds_demand ของ sawee-refer
@@ -3506,6 +3763,7 @@ ${JSON.stringify(p,null,2)}
 }
 
 $('dc-hcode')?.addEventListener('change', renderDrugCat);
+$('dc-days-fb')?.addEventListener('change', renderDrugCat);
 $('dc-view')?.addEventListener('change', renderDrugCat);
 $('btn-dc-refresh')?.addEventListener('click', renderDrugCat);
 

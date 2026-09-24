@@ -212,11 +212,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=5.8.0"></script>
+  <script src="shared.js?v=5.9.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '5.8.0';
+      var need = '5.9.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -6247,11 +6247,14 @@ const AdminConfigView = ({ ctx }) => {
           const toUpdate = [], noChange = [], unmatched = [];
           // inv_has_his อาจมีหลาย HOSxP code ต่อ 1 รหัส INVS → รวมเป็นรายการคั่นด้วย , และเก็บรหัสที่จับคู่เองไว้ด้วย
           const grouped = new Map();
-          mappings.forEach(({ invs_code, hosxp_code }) => {
+          const factors = new Map(); // CONVER_FACT จาก inv_has_his (ตัวคูณ HOSxP → INVS)
+          mappings.forEach(({ invs_code, hosxp_code, conver_fact }) => {
             const k = String(invs_code || '').trim(); const c = String(hosxp_code || '').trim();
             if (!k || !c) return;
             if (!grouped.has(k)) grouped.set(k, new Set());
             grouped.get(k).add(c);
+            const f = toNonNegativeNumber(conver_fact, 1);
+            if (f > 0 && f !== 1) factors.set(k, f);
           });
           grouped.forEach((codes, invs_code) => {
             const drug = ctx.appDb.drugs.find(d => String(d.drug_id) === String(invs_code));
@@ -6259,7 +6262,9 @@ const AdminConfigView = ({ ctx }) => {
             const existing = String(drug.hosxp_code || '').split(/[,;\s]+/).filter(Boolean);
             const merged = [...new Set([...existing, ...codes])];
             const hosxp_code = merged.join(',');
-            if (hosxp_code !== existing.join(',')) toUpdate.push({ drug, invs_code, hosxp_code, old_hosxp: drug.hosxp_code || '' });
+            // ตั้งตัวคูณจาก CONVER_FACT เฉพาะยาที่ยังไม่เคยตั้งเอง
+            const hosxp_multiplier = factors.has(invs_code) && !(toNonNegativeNumber(drug.hosxp_multiplier, 0) > 0) ? factors.get(invs_code) : null;
+            if (hosxp_code !== existing.join(',') || hosxp_multiplier) toUpdate.push({ drug, invs_code, hosxp_code, hosxp_multiplier, old_hosxp: drug.hosxp_code || '' });
             else noChange.push({ drug, invs_code, hosxp_code });
           });
           setHosxpSyncDiff({ toUpdate, noChange, unmatched });
@@ -6272,10 +6277,10 @@ const AdminConfigView = ({ ctx }) => {
         const { toUpdate, noChange, unmatched } = hosxpSyncDiff;
         setHosxpSyncDiff(null);
         await runBusy(setIsSyncingHosxp, ctx.showToast, async () => {
-          const ops = toUpdate.map(({ drug, hosxp_code }) => ({
+          const ops = toUpdate.map(({ drug, hosxp_code, hosxp_multiplier }) => ({
             type: 'update',
             ref: db.collection('master_drugs').doc(String(drug.drug_id)),
-            data: { hosxp_code: String(hosxp_code), hosxp_sync_at: firebase.firestore.FieldValue.serverTimestamp() }
+            data: { hosxp_code: String(hosxp_code), hosxp_sync_at: firebase.firestore.FieldValue.serverTimestamp(), ...(hosxp_multiplier ? { hosxp_multiplier } : {}) }
           }));
           await executeBatchChunks(ops);
           await writeAuditLog(ctx.currentUser, 'HOSXP_CODE_SYNC', 'master_drugs', 'BATCH', {
@@ -7260,7 +7265,45 @@ const AdminConfigView = ({ ctx }) => {
       w.document.close();
     };
 
-    const InternalReviewPanel = ({ ctx, req, queue, onBack, reload }) => {
+    // พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์ (ฝั่งแอดมิน) — ใช้ตัวสร้างฟอร์มเดียวกับหน้าหน่วยงานใน shared.js
+    const AdminFormPrintModal = ({ ctx, req, items, allReqs, onClose, onSaved }) => {
+      const [formNo, setFormNo] = useState(() => internalFormNoFor(req, allReqs || [req]));
+      const [formDate, setFormDate] = useState(() => safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at));
+      const [busy, setBusy] = useState(false);
+      const doPrint = async () => {
+        setBusy(true);
+        try {
+          if (formNo !== safeText(req.form_no) || formDate !== safeText(req.form_date)) {
+            await db.collection('internal_requisitions').doc(req.id).update({ form_no: safeText(formNo), form_date: formDate, fiscal_year: fiscalYearBEOfYmd(formDate) });
+            onSaved && onSaved();
+          }
+          await printHtmlDocument(buildInternalReqFormHtml({
+            req: { ...req, items: items || req.items }, formNo, formDate, deptName: req.dept_name, drugTypes: ctx.appDb.drugTypes,
+            locOf: (id) => safeText(ctx.findDrug(id)?.invs_location)
+          }));
+          await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_PRINT', 'internal_requisitions', req.id, { form_no: formNo });
+          onClose();
+        } catch (e) { ctx.showToast('พิมพ์ไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(false); }
+      };
+      return (
+        <Modal isOpen onClose={onClose} title="พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์" maxWidth="max-w-md">
+          <div className="space-y-4">
+            <label className="block"><span className="text-sm font-bold text-slate-600">เลขที่</span>
+              <input id="admin-form-no" value={formNo} onChange={e => setFormNo(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl font-mono" /></label>
+            <label className="block"><span className="text-sm font-bold text-slate-600">วันที่</span>
+              <input id="admin-form-date" type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl" />
+              <span className="text-xs text-slate-500">{thaiDateLong(formDate)}</span></label>
+            <p className="text-xs text-slate-500">จำนวนจ่ายในใบ = ค่าที่แสดงในตารางตอนนี้ (ยอดที่ใช้ตัด INVS)</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button>
+              <button onClick={doPrint} disabled={busy} className="px-5 py-2 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>พิมพ์ / บันทึก PDF</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    };
+
+    const InternalReviewPanel = ({ ctx, req, queue, allReqs, onBack, reload }) => {
       const [items, setItems] = useState(() => (req.items || []).map(it => ({ ...it, dispenseQty: toNonNegativeNumber(it.dispenseQty ?? it.requestQty) })));
       const [adminNote, setAdminNote] = useState(req.admin_note || '');
       const [busy, setBusy] = useState('');
@@ -7277,6 +7320,7 @@ const AdminConfigView = ({ ctx }) => {
       const isPharmacy = req.kind === 'pharmacy';
 
       const [sortByLoc, setSortByLoc] = useState(false);
+      const [showForm, setShowForm] = useState(false);
       const locOf = (id) => safeText(ctx.findDrug(id)?.invs_location);
       const shownItems = sortByLoc ? [...items].sort((a, b) => (locOf(a.drugId) ? 0 : 1) - (locOf(b.drugId) ? 0 : 1) || locOf(a.drugId).localeCompare(locOf(b.drugId), 'th', { numeric: true })) : items;
       const setQty = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, dispenseQty: toNonNegativeNumber(v) } : it));
@@ -7380,6 +7424,7 @@ const AdminConfigView = ({ ctx }) => {
 
           <div className="flex flex-wrap gap-2 justify-end">
             <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 cursor-pointer mr-auto"><input type="checkbox" checked={sortByLoc} onChange={e => setSortByLoc(e.target.checked)} className="w-4 h-4" /> เรียงตามตำแหน่งยา (INVS)</label>
+            <button onClick={() => setShowForm(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 font-bold text-sm"><i className="fa-solid fa-file-lines mr-2"></i>พิมพ์ใบเบิก</button>
             <button onClick={() => printPickingList(req, items, ctx.findDrug)} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold text-sm"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบจัดยา (เรียงตามตำแหน่ง)</button>
           </div>
           <div className="bg-white rounded-2xl border shadow-sm overflow-auto max-h-[65vh]">
@@ -7402,7 +7447,7 @@ const AdminConfigView = ({ ctx }) => {
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.usage)}</td>}
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.onHand)}</td>}
                       {isPharmacy && <td className="p-2 text-right tabular-nums text-teal-700">{iqNum(it.suggestedQty)}</td>}
-                      <td className="p-2 text-right tabular-nums">{iqNum(req0)}{pack > 1 && req0 > 0 && <div className="text-[10px] text-slate-400">{formatQty(req0, pack)} แพ็ค</div>}</td>
+                      <td className="p-2 text-right tabular-nums">{pack > 1 && req0 > 0 ? <><b>{formatQty(req0, pack)}</b> <span className="text-[10px] text-slate-400">แพ็ค</span><div className="text-[10px] text-slate-400">= {iqNum(req0)} {it.unit}{it.requestMode === 'unit' ? ' (ขอหน่วยย่อย)' : ''}</div></> : iqNum(req0)}</td>
                       <td className="p-2 text-right">{editable ? <IqNumCell value={it.dispenseQty} touched={changed} ariaLabel={`อนุมัติจ่าย ${it.name}`} onCommit={v => setQty(it.drugId, v)} /> : <b className="tabular-nums">{iqNum(it.dispenseQty)}</b>}
                         {pack > 1 && it.dispenseQty > 0 && <div className="text-[10px] text-slate-400">{formatQty(it.dispenseQty, pack)} แพ็ค</div>}</td>
                       <td className="p-2 text-right tabular-nums">{iqMoney(internalItemValue(it))}</td>
@@ -7429,6 +7474,7 @@ const AdminConfigView = ({ ctx }) => {
             </div>
           )}
 
+          {showForm && <AdminFormPrintModal ctx={ctx} req={req} items={items} allReqs={allReqs} onClose={() => setShowForm(false)} onSaved={reload} />}
           <Modal isOpen={!!preflight} onClose={() => setPreflight(null)} title="ตรวจก่อนส่งเข้า INVS" maxWidth="max-w-5xl">
             {preflight && (
               <div className="space-y-4">
@@ -7495,7 +7541,7 @@ const AdminConfigView = ({ ctx }) => {
 
       const all = useMemo(() => { const m = new Map(); [...recent, ...queue].forEach(r => m.set(r.id, r)); return m; }, [queue, recent]);
       const selected = selectedId ? all.get(selectedId) : null;
-      if (selected) return <InternalReviewPanel key={selected.id + ':' + (selected.revision || 0) + ':' + selected.status} ctx={ctx} req={selected} queue={queue.filter(q => q.status === 'Pending' || q.status === 'ApprovalFailed')} onBack={() => setSelectedId(null)} reload={load} />;
+      if (selected) return <InternalReviewPanel key={selected.id + ':' + (selected.revision || 0) + ':' + selected.status} ctx={ctx} req={selected} queue={queue.filter(q => q.status === 'Pending' || q.status === 'ApprovalFailed')} allReqs={[...all.values()]} onBack={() => setSelectedId(null)} reload={load} />;
 
       const list = (tab === 'queue' ? queue : recent.filter(r => !['Pending', 'Approving', 'ApprovalFailed'].includes(r.status)))
         .filter(r => kindFilter === 'all' || r.kind === kindFilter);

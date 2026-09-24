@@ -284,10 +284,7 @@ tbody tr:hover{background:#FAFCFA}
       <label>บทบาทที่ขอใช้งาน</label>
       <select id="r-role" style="width:100%;margin-bottom:14px">
         <option value="rpst">เจ้าหน้าที่ รพ.สต.</option>
-        <option value="clinic_nurse">พยาบาลประจำคลินิก</option>
-        <option value="hospital">พยาบาลจัดการคลินิก</option>
-        <option value="outreach">ทีมออกหน่วย รพ.สวี</option>
-        <option value="pharmacist">เภสัชกร</option>
+        <option value="hospital">พยาบาล / เภสัชกร รพ.สวี</option>
       </select>
       <label>หมายเหตุ</label>
       <textarea id="r-note" rows="3" style="width:100%;margin-bottom:14px;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px"
@@ -400,8 +397,8 @@ tbody tr:hover{background:#FAFCFA}
     <section id="tab-find" class="hidden">
       <div class="panel">
         <div style="text-align:center;padding:18px 8px 6px">
-          <div style="font-size:26px;font-weight:700;color:var(--accent-deep)">เช็คผู้ป่วยที่ส่งต่อ</div>
-          <div class="sub" style="margin-top:4px;font-size:14px">พิมพ์ HN แล้วกดปุ่ม — ระบบจะบอกว่าส่งถึง รพ.สต. แล้ว / กำลังส่งออก / หรือยังไม่ได้ส่ง</div>
+          <div style="font-size:26px;font-weight:700;color:var(--accent-deep)">เช็ค / ส่งตัวผู้ป่วยไป รพ.สต.</div>
+          <div class="sub" style="margin-top:4px;font-size:14px">พิมพ์ HN แล้วกดปุ่ม — ถ้ายังไม่มีในระบบ ส่งตัวและเลือกวันนัดของ รพ.สต. ได้ทันที</div>
           <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px">
             <input type="text" id="f-hn" inputmode="numeric" placeholder="HN เช่น 560001337"
               style="width:280px;font-size:24px;padding:14px 16px;text-align:center;border-radius:12px">
@@ -411,7 +408,14 @@ tbody tr:hover{background:#FAFCFA}
         <div id="f-result" style="margin-top:14px"></div>
       </div>
       <div class="panel">
-        <h2>รายการรอส่งให้ รพ.สต. <span class="note">pusher ส่งอัตโนมัติรอบ 13.00 น. ทุกวัน</span>
+        <h2>ผู้ป่วยที่ส่งตัว — รพ.สต. ยืนยันหรือยัง
+          <select id="f-sent-days" style="margin-left:10px;font-size:13px"><option value="7">7 วัน</option><option value="14" selected>14 วัน</option><option value="30">30 วัน</option><option value="90">90 วัน</option></select>
+          <label style="font-size:13px;font-weight:400;margin-left:8px"><input type="checkbox" id="f-sent-mine"> เฉพาะที่ฉันส่ง</label>
+          <button class="btn-sm grey" id="f-sent-reload" style="margin-left:8px">⟳ โหลดใหม่</button></h2>
+        <div id="f-sent"><div class="sub">กำลังโหลด...</div></div>
+      </div>
+      <div class="panel">
+        <h2>คำขอดึงข้อมูลจาก HOSxP <span class="note">pusher ทำอัตโนมัติรอบ 13.00 น. ทุกวัน</span>
           <button class="btn-sm hidden" id="f-push-now" style="margin-left:10px">⟳ ส่งทันที (admin)</button></h2>
         <div id="f-queue"><div class="sub">กำลังโหลด...</div></div>
       </div>
@@ -544,10 +548,7 @@ tbody tr:hover{background:#FAFCFA}
           <div class="fld"><label>รหัสผ่านชั่วคราว</label><input type="text" id="u-pass" style="width:170px"></div>
           <div class="fld"><label>บทบาท</label><select id="u-role">
             <option value="rpst">เจ้าหน้าที่ รพ.สต.</option>
-            <option value="outreach">ทีมออกหน่วย รพ.สวี</option>
-            <option value="hospital">พยาบาลจัดการคลินิก</option>
-            <option value="clinic_nurse">พยาบาลประจำคลินิก</option>
-            <option value="pharmacist">เภสัชกร</option>
+            <option value="hospital">พยาบาล / เภสัชกร รพ.สวี</option>
             <option value="admin">ผู้ดูแลระบบ</option></select></div>
           <div class="fld"><label>รพ.สต.</label><select id="u-hcode"></select></div>
           <button class="btn-primary" id="btn-u-add">สร้างบัญชี</button>
@@ -804,8 +805,8 @@ const DISCHARGE_REASON = ['ควบคุมโรคได้ดี ส่ง�
 const TODO = ['new','acknowledged','scheduled'];
 const LAB = { bp:'ความดัน', fbs:'FBS', dtx:'DTX', hba1c:'HbA1c', chol:'Chol',
   ldl:'LDL', hdl:'HDL', tg:'TG', egfr:'eGFR', cr:'Creatinine', k:'Potassium' };
-const ROLE_LABEL = { admin:'ผู้ดูแลระบบ', pharmacist:'เภสัชกร', outreach:'ทีมออกหน่วย รพ.สวี',
-  hospital:'พยาบาลจัดการคลินิก', clinic_nurse:'พยาบาลประจำคลินิก', rpst:'เจ้าหน้าที่ รพ.สต.' };
+const ROLE_LABEL = { admin:'ผู้ดูแลระบบ', hospital:'พยาบาล / เภสัชกร รพ.สวี', rpst:'เจ้าหน้าที่ รพ.สต.' };
+const roleLabel = r => ROLE_LABEL[normRole(r)] || r || '-';
 const MED_ACTION = { continue:'จ่ายต่อ', adjust:'ปรับขนาด/วิธีใช้', stop:'หยุดยา', add:'ยาใหม่' };
 const STOP_REASON = ['ควบคุมโรคได้แล้ว','ผลข้างเคียง','เปลี่ยนไปใช้ยาตัวอื่น',
   'ผู้ป่วยไม่ให้ความร่วมมือ','แพทย์สั่งหยุด','อื่น ๆ'];
@@ -815,7 +816,7 @@ const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออ
   open_round:'เปิดรอบนัด', view_dashboard:'เปิดแดชบอร์ด', view_log:'เปิดบันทึกการเข้าถึง',
   edit_outreach:'แก้ไขวันนัด', request_sync:'สั่ง sync ข้อมูล', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
   edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.',
-  record_visit:'บันทึกการให้บริการ', view_clinical:'เปิดดูยา/แล็บ (ออกหน่วย)', reassign_patient:'ย้าย รพ.สต. ปลายทาง', find_referral:'ค้นหาการส่งตัว', block_patient:'ลบผู้ป่วยออกจากระบบ', unblock_patient:'ยกเลิกการลบผู้ป่วย', edit_clinic_scope:'แก้ขอบเขตคลินิก', add_manual_patient:'เพิ่มผู้ป่วยเอง', delete_manual_patient:'ลบผู้ป่วยที่เพิ่มเอง', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
+  record_visit:'บันทึกการให้บริการ', view_clinical:'เปิดดูยา/แล็บ (ออกหน่วย)', reassign_patient:'ย้าย รพ.สต. ปลายทาง', find_referral:'ค้นหาการส่งตัว', nurse_send:'ส่งตัวผู้ป่วย (พยาบาล)', nurse_send_cancel:'ยกเลิกการส่งตัว', print_appt_slip:'พิมพ์ใบนัด', confirm_nurse_date:'ยืนยันวันนัดที่ รพ.สวี นัดไว้', block_patient:'ลบผู้ป่วยออกจากระบบ', unblock_patient:'ยกเลิกการลบผู้ป่วย', edit_clinic_scope:'แก้ขอบเขตคลินิก', add_manual_patient:'เพิ่มผู้ป่วยเอง', delete_manual_patient:'ลบผู้ป่วยที่เพิ่มเอง', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
   approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
   reveal_sensitive:'เปิดดูข้อมูลส่วนบุคคล', add_patient_request:'ขอเพิ่มผู้ป่วย',
   approve_add_patient:'อนุมัติเพิ่มผู้ป่วย', edit_rpst:'แก้ไขหน่วยบริการ',
@@ -876,15 +877,18 @@ function thDate(iso){
 const todayISO = () => new Date().toISOString().slice(0,10);
 const dayDiff = (a,b) => Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000);
 const daysFrom = iso => iso ? dayDiff(todayISO(), iso) : null;
-const isPharm=()=>PROFILE?.role==='pharmacist';
-const isAdmin=()=>PROFILE?.role==='admin'||isPharm(),  // เภสัชกรทำได้เหมือน admin ทุกอย่าง
-      // พยาบาลประจำคลินิก ใช้สิทธิ์ชุดเดียวกับพยาบาลจัดการคลินิก
-      isHospital=()=>PROFILE?.role==='hospital'||PROFILE?.role==='clinic_nurse',
-      isRpst=()=>PROFILE?.role==='rpst';
-const isOutreach=()=>PROFILE?.role==='outreach';
-const seesAll=()=>isAdmin()||isHospital()||isOutreach();
-const canEdit=()=>isAdmin()||isRpst()||isOutreach();
-const canRecord=()=>isAdmin()||isRpst()||isOutreach();
+/* บทบาทเหลือ 3 แบบ: admin / hospital (พยาบาล-เภสัชกร รพ.สวี รวมทีมออกหน่วย) / rpst
+   role เดิม (pharmacist, clinic_nurse, outreach) ถือเป็น hospital อัตโนมัติ — admin แก้เป็นค่าใหม่ได้ในหน้าจัดการผู้ใช้ */
+const normRole = r => r==='admin' ? 'admin' : r==='rpst' ? 'rpst'
+  : ['hospital','pharmacist','clinic_nurse','outreach'].includes(r) ? 'hospital' : (r||'');
+const myRole = () => normRole(PROFILE?.role);
+const isAdmin=()=>myRole()==='admin',
+      isHospital=()=>myRole()==='hospital',
+      isRpst=()=>myRole()==='rpst';
+const isOutreach=()=>isHospital();   // ทีมออกหน่วยรวมอยู่ในบทบาทพยาบาล/เภสัชกรแล้ว
+const seesAll=()=>isAdmin()||isHospital();
+const canEdit=()=>isAdmin()||isRpst()||isHospital();
+const canRecord=()=>isAdmin()||isRpst()||isHospital();
 const canDirectAdd=()=>isAdmin()||isHospital();     // ฝั่ง รพ. เพิ่มผู้ป่วยตรงได้ ไม่ต้องรออนุมัติ
 const canDischarge=()=>isAdmin()||isHospital();
 const myHcode=()=>(PROFILE?.hcode||'').trim();
@@ -1070,7 +1074,7 @@ const TABS = [
   {id:'user', label:'จัดการผู้ใช้',   adminOnly:1},
   {id:'clinics', label:'คลินิกโรคเรื้อรัง', seesAll:1},
   {id:'intake', label:'รับข้อมูล NCDs', hospOnly:1},
-  {id:'find', label:'🔍 เช็คผู้ป่วยที่ส่งต่อ', hospOnly:1},
+  {id:'find', label:'🔍 เช็ค / ส่งตัวผู้ป่วย', hospOnly:1},
   {id:'adjreport', label:'รายงานปรับยา', seesAll:1},
   {id:'drugcat', label:'บัญชียา รพ.สต.', seesAll:1},
   {id:'drug', label:'วิธีใช้ยา',      seesAll:1},
@@ -1114,7 +1118,7 @@ function openTab(id){
   if(id==='batch') renderBatch();
   if(id==='dash')  { renderDash(); audit('view_dashboard'); }
   if(id==='user')  { loadUsers(); loadPending(); renderScopeAdmin(); }
-  if(id==='find')  { loadFindQueue(); setTimeout(()=>$('f-hn')?.focus(), 50); }
+  if(id==='find')  { loadFindQueue(); renderSentList(); setTimeout(()=>$('f-hn')?.focus(), 50); }
   if(id==='remission') renderRemission();
   if(id==='drugsum')   renderDrugSum();
   if(id==='clinics') renderClinicMenu();
@@ -1128,7 +1132,7 @@ function openTab(id){
 /* ================= START ================= */
 async function startApp(){
   $('who-name').textContent = PROFILE.full_name || ME.email;
-  $('who-role').textContent = (ROLE_LABEL[PROFILE.role]||PROFILE.role) +
+  $('who-role').textContent = roleLabel(PROFILE.role) +
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   buildNav();
   await audit('login');
@@ -1138,7 +1142,7 @@ async function startApp(){
     loadPending();
     setInterval(loadPending, 120000);   // เช็คคำขอใหม่ทุก 2 นาที แอดมินจะได้ไม่พลาด
   }
-  $('who-role').textContent = (ROLE_LABEL[PROFILE.role]||PROFILE.role) +
+  $('who-role').textContent = roleLabel(PROFILE.role) +
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   if(seesAll()){
     $('sel-hcode').classList.remove('hidden');
@@ -1294,6 +1298,7 @@ function renderList(){
           ${p.moo?` · หมู่ ${esc(p.moo)} ${esc(p.tambon||'')}`:''}
           ${r.case_type==='data_only'?'<span class="pill pill-rem">Remission</span>':''}
           ${r.manual?'<span class="pill pill-warn" title="รพ.สต. เพิ่มเอง ไม่ได้มาจาก HOSxP">เพิ่มเอง</span>':''}
+          ${r.source==='nurse'&&stOf(r)==='new'&&r.workflow?.proposed_date?`<span class="pill pill-warn" title="พยาบาล รพ.สวี นัดคนไข้ไว้แล้ว รอ รพ.สต. ยืนยัน">รพ.สวี นัด ${thDate(r.workflow.proposed_date)} — รอยืนยัน</span>`:''}
           ${r.hcode_conflict?'<span class="pill pill-warn">ปลายทางขัดแย้ง</span>':''}
           ${r.hcode_source==='address_guess'?'<span class="pill pill-warn" title="HOSxP ไม่ได้ระบุ รพ.สต. ปลายทาง ระบบเดาจากที่อยู่ผู้ป่วย ถ้าไม่ใช่ให้กด ไม่ใช่คนของเรา">ปลายทางจากที่อยู่ — รอยืนยัน</span>':''}</div>
         ${clinicText(r)?`<div class="clin">${esc(clinicText(r))}</div>`:''}</td>
@@ -1377,11 +1382,14 @@ function openDetail(id){
     <div class="reveal-warn">ข้อมูลบางส่วนถูกซ่อนเพื่อคุ้มครองความเป็นส่วนตัว การเปิดดูจะถูกบันทึก</div>
     <div class="sub">${refTag(r)} · ${esc(p.sex||'')} ${esc(p.age??'')} ปี · ${esc(p.pttype_name||'')}
       <span class="tag" style="background:${SC[st]}1a;color:${SC[st]};margin-left:6px">${STATUS[st]||st}</span></div>
-    ${canEdit() && ['new','acknowledged','not_mine'].includes(st) && r.case_type!=='data_only' ? `
+    ${(isRpst()||isAdmin()) && ['new','acknowledged','not_mine'].includes(st) && r.case_type!=='data_only' ? `
     <div class="sec" style="border:2px solid var(--accent);background:#fff">
       <div class="st" style="font-size:15px;color:var(--accent-deep)">ตัดสินใจรับผู้ป่วยรายนี้</div>
+      ${r.workflow?.proposed_date?`<div class="msg info" style="margin:6px 0">${esc(r.workflow.proposed_by||'รพ.สวี')} นัดคนไข้ไว้แล้ว
+        วันที่ <b>${thDate(r.workflow.proposed_date)}</b> (บอกคนไข้แล้ว)${r.nurse_note?`<div class="sub">หมายเหตุ: ${esc(r.nurse_note)}</div>`:''}</div>`:''}
       <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px">
-        ${st==='new'?`<button class="btn-primary" id="dc-ack" style="font-size:16px;padding:12px 20px">✓ รับตัว</button>`:''}
+        ${st==='new'&&r.workflow?.proposed_date?`<button class="btn-primary" id="dc-okdate" style="font-size:16px;padding:12px 20px;background:#1F7A4D">✓ รับตัว ยืนยันนัด ${thDate(r.workflow.proposed_date)}</button>`:''}
+        ${st==='new'&&!r.workflow?.proposed_date?`<button class="btn-primary" id="dc-ack" style="font-size:16px;padding:12px 20px">✓ รับตัว</button>`:''}
         <button class="btn-primary" id="dc-sched" style="font-size:16px;padding:12px 20px;background:#3E6E8E">📅 รับตัวและนัด</button>
         <button class="btn-ghost" id="dc-reject" style="font-size:16px;padding:12px 20px;color:#6B4C9A;border-color:#6B4C9A">✗ ไม่รับ — ไม่ใช่คนของเรา</button>
       </div>
@@ -1406,7 +1414,7 @@ function openDetail(id){
         <tr><td>ปลายทาง</td><td>${esc(r.hcode_name||r.hcode||'-')}
           ${r.hcode_source==='address_guess'
             ? '<span class="pill pill-warn">ปลายทางจากที่อยู่ — รอยืนยัน</span><div class="sub">HOSxP ไม่ได้ระบุ รพ.สต. ปลายทาง ถ้าไม่ใช่คนในพื้นที่ให้กด "ไม่ใช่คนของเรา"</div>'
-            : `<span class="pill pill-rem">${esc(({referred:'HOSxP ส่งต่อ',status2:'HOSxP สถานะส่งต่อ',admin:'admin ย้าย',manual:'เพิ่มเอง',request:'คำขอดึงข้อมูล'})[r.hcode_source]||r.hcode_source||'')}</span>`}
+            : `<span class="pill pill-rem">${esc(({referred:'HOSxP ส่งต่อ',status2:'HOSxP สถานะส่งต่อ',admin:'admin ย้าย',manual:'เพิ่มเอง',request:'คำขอดึงข้อมูล',nurse:'พยาบาล รพ.สวี ส่งตัว'})[r.hcode_source]||r.hcode_source||'')}</span>`}
           ${r.hcode_conflict?'<span class="pill pill-warn">ขัดแย้ง</span>':''}</td></tr>
         <tr><td>วันนัด</td><td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'ยังไม่นัด'}</td></tr>
         ${r.workflow?.note?`<tr><td>บันทึก</td><td>${esc(r.workflow.note)}</td></tr>`:''}
@@ -1460,6 +1468,8 @@ function openDetail(id){
     catch(e){ $('dc-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}</div>`; }
   };
   $('dc-ack')?.addEventListener('click', ()=>decide('acknowledged', {}, 'รับตัวแล้ว'));
+  $('dc-okdate')?.addEventListener('click', ()=>decide('scheduled', {appoint_date:r.workflow.proposed_date},
+    'รับตัวและยืนยันนัด '+thDate(r.workflow.proposed_date)+' แล้ว — รพ.สวี เห็นสถานะยืนยันทันที'));
   $('dc-sched')?.addEventListener('click', ()=>{ show('dc-sched-box',true); show('dc-reject-box',false); wireApPick('dc-ap-pick','dc-ap'); });
   $('dc-reject')?.addEventListener('click', ()=>{ show('dc-reject-box',true); show('dc-sched-box',false); $('dc-why').focus(); });
   $('dc-sched-ok')?.addEventListener('click', ()=>{
@@ -2750,9 +2760,14 @@ async function findReferral(){
               <tr><td>ปลายทาง</td><td><b>${esc(r.hcode_name||rpstName(r.hcode)||'-')}</b></td></tr>
               <tr><td>วันที่ส่งข้อมูล</td><td>${thDate(r.refer_date)}${r.case_type==='data_only'?' <span class="pill pill-rem">Remission</span>':''}</td></tr>
               <tr><td>คลินิก</td><td>${esc(clinicText(r)||'-')}</td></tr>
-              <tr><td>วันนัด รพ.สต.</td><td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'ยังไม่นัด'}</td></tr>
+              <tr><td>วันนัด รพ.สต.</td><td>${r.workflow?.appoint_date?`<b>${thDate(r.workflow.appoint_date)}</b>`:'ยังไม่นัด'} ${confirmTag(r)}</td></tr>
               ${r.workflow?.note?`<tr><td>บันทึก รพ.สต.</td><td>${esc(r.workflow.note)}</td></tr>`:''}
-            </table></div>`; }).join('');
+            </table>
+            ${r.workflow?.appoint_date?`<button class="btn-sm grey" data-fslip="${esc(r.id)}" style="margin-top:6px">🖨 ใบนัด</button>`:''}</div>`; }).join('') +
+        (refs.every(r=>['discharged','cancelled','returned','not_mine'].includes(stOf(r))) && canNurseSend()
+          ? `<div class="sub" style="margin:10px 0 4px">รายการเดิมปิดไปแล้ว — ถ้าต้องการส่งตัวรอบใหม่ กรอกด้านล่าง</div><div id="f-hx"></div><div id="f-form"></div>` : '');
+      $('f-result').querySelectorAll('[data-fslip]').forEach(b=>b.addEventListener('click', ()=>printApptSlip(FIND_CACHE[b.dataset.fslip])));
+      if($('f-form')) renderNurseSend(hn);
       $('f-result').querySelectorAll('.btn-eye').forEach(b=>b.addEventListener('click', async ()=>{
         const v = await revealField(b.dataset.eye, b.dataset.ef);
         b.previousElementSibling.textContent = v||'-'; b.style.display='none'; }));
@@ -2770,92 +2785,252 @@ async function findReferral(){
   }catch(e){ $('f-result').innerHTML=`<div class="msg err">ค้นหาไม่สำเร็จ: ${esc(e.code||e.message)}</div>`; }
 }
 
-/* ยังไม่อยู่ในระบบส่งต่อ → ถาม HOSxP ผ่านเครื่อง pusher (sync_watch) ว่าติ๊กส่ง รพ.สต. ไว้แล้วหรือยัง
-   ตอบภายในราว 20 วินาที ถ้าเครื่อง pusher ออฟไลน์จะข้ามไปให้เพิ่มเข้าคิวได้เลย */
+/* ยังไม่อยู่ในระบบส่งต่อ → แสดงแบบฟอร์ม "ส่งตัว" ทันที (ไม่ต้องรอเครื่อง pusher)
+   พร้อมกันนั้นถาม HOSxP ผ่านเครื่อง pusher (sync_watch) ถ้าออนไลน์ — คำตอบจะขึ้นด้านบนแบบฟอร์มเมื่อได้ */
 let LOOKUP_UNSUB = null;
+const watcherOnline = async () => {
+  try{
+    const d = await getDoc(doc(db,'sync_control','watcher'));
+    const t = d.exists() ? d.data().last_seen : null;
+    return !!t && (Date.now()-new Date(String(t).replace(' ','T')+'+07:00').getTime())/60000 < 3;
+  }catch(e){ return null; }   // อ่านไม่ได้ (rules เก่า) = ไม่รู้ ลองถามไปก่อน
+};
 async function checkHosxp(hn, last){
   LOOKUP_UNSUB?.(); LOOKUP_UNSUB=null;
-  $('f-result').innerHTML = `<div class="msg info" style="font-size:16px"><b>ยังไม่มีในระบบส่งต่อ</b> — กำลังตรวจใน HOSxP ว่าส่งต่อไว้แล้วหรือยัง...
-    <div class="sub" style="margin-top:4px">ใช้เวลาไม่เกิน 30 วินาที</div></div>`;
+  $('f-result').innerHTML = `<div id="f-hx"></div>
+    ${last?`<div class="sub" style="margin:6px 0">เคยขอผ่านหน้านี้: ${reqTag(last.status)} ${esc(last.result_note||'')}</div>`:''}
+    <div id="f-form"></div>`;
+  renderNurseSend(hn);
+  const on = await watcherOnline();
+  if(on===false){
+    $('f-hx').innerHTML = `<div class="msg amber" style="font-size:15px"><div><b>ยังไม่มีในระบบส่งต่อ — HN ${esc(hn)}</b>
+      <div style="font-size:13.5px;margin-top:4px">เครื่องเชื่อม HOSxP ปิดอยู่ จึงตรวจใน HOSxP ไม่ได้ตอนนี้ —
+        <b>ส่งตัวด้านล่างได้เลย</b> รพ.สต. เห็นทันที ส่วนยา/แล็บจาก HOSxP จะตามมาเองเมื่อเครื่องเปิด</div></div></div>`;
+    return;
+  }
+  $('f-hx').innerHTML = `<div class="msg info" style="font-size:15px"><div><b>ยังไม่มีในระบบส่งต่อ — กำลังตรวจใน HOSxP...</b>
+    <div class="sub">ไม่ต้องรอ กรอกแบบฟอร์มด้านล่างไปก่อนได้</div></div></div>`;
   let ref;
   try{
     ref = await addDoc(collection(db,'hn_lookup'), {hn, status:'pending', requested_uid:ME.uid,
       requested_by:PROFILE.full_name||ME.email, requested_at:serverTimestamp()});
-  }catch(e){ return showNotInSystem(hn, last, null, 'ถาม HOSxP ไม่ได้ ('+(e.code||e.message)+')'); }
+  }catch(e){ return showNotInSystem(hn, null, 'ถาม HOSxP ไม่ได้ ('+(e.code||e.message)+')'); }
   let done=false;
   const timer = setTimeout(()=>{ if(done) return; done=true; LOOKUP_UNSUB?.();
-    showNotInSystem(hn, last, null, 'เครื่อง pusher ไม่ตอบ (อาจออฟไลน์) จึงตรวจใน HOSxP ไม่ได้'); }, 45000);
+    showNotInSystem(hn, null, 'เครื่องเชื่อม HOSxP ไม่ตอบ จึงตรวจใน HOSxP ไม่ได้ — ส่งตัวได้เลย ข้อมูลยา/แล็บจะตามมาเมื่อเครื่องเปิด'); }, 45000);
   LOOKUP_UNSUB = onSnapshot(ref, d=>{
     const x=d.data(); if(!x || x.status==='pending' || done) return;
     done=true; clearTimeout(timer); LOOKUP_UNSUB?.();
-    showNotInSystem(hn, last, x, x.status==='error'?x.message:null);
+    showNotInSystem(hn, x, x.status==='error'?x.message:null);
   }, ()=>{});
 }
 const SEND_STATE = {
   will_send:['มีข้อมูลแล้ว กำลังถูกส่งออก','#B8860B'], pushed:['เคยส่งไปแล้ว','#3E6E8E'],
   out_of_scope:['คลินิกนอกขอบเขตการส่ง','#8B2020'], hcode_out:['ปลายทางไม่อยู่ในเครือข่าย','#8B2020'], no_date:['ติ๊กส่งแต่ไม่มีวันที่','#8B2020'],
   too_old:['เปลี่ยนสถานะไว้นานแล้ว ไม่ถูกดึงอัตโนมัติ','#8B2020']};
-function showNotInSystem(hn, last, ans, err){
+/* ผลตรวจ HOSxP — เขียนเฉพาะกล่องด้านบน (f-hx) ไม่ล้างแบบฟอร์มที่พยาบาลกำลังกรอก */
+function showNotInSystem(hn, ans, err){
+  if(!$('f-hx')) return;
   const v = ans?.verdict;
   const sends = (ans?.sends||[]).map(x=>{ const [t,c]=SEND_STATE[x.state]||[x.state,'#888'];
     return `<tr><td>${thDate(x.date)}</td><td>${esc(x.pcu_name||x.hcode||'-')}</td><td>${esc(x.clinic_name||'-')}</td>
       <td><span class="tag" style="background:${c}1a;color:${c}">${esc(t)}</span></td></tr>`; }).join('');
   const sendTbl = sends ? `<div class="tbl-wrap" style="margin-top:8px"><table><thead><tr><th>วันที่ส่ง (HOSxP)</th><th>ปลายทาง</th><th>คลินิก</th><th>สถานะ</th></tr></thead><tbody>${sends}</tbody></table></div>` : '';
-  let head, canAdd = true;
-  if(v==='will_send'){
-    head = `<div class="msg amber" style="font-size:17px"><b>⏳ มีข้อมูลแล้ว กำลังถูกส่งออก</b>
-      <div style="margin-top:4px;font-size:14px">HN ${esc(hn)} บันทึกส่งต่อใน HOSxP แล้ว${(ans?.sends||[]).some(x=>x.via==='status2')?' (สถานะ "ส่งต่อรับรักษาที่อื่น")':''} จะถึง รพ.สต. ในรอบ 13.00 น.
-        ${isAdmin()?'หรือกด "ส่งทันที" ด้านล่าง':'หรือเมื่อ admin กดส่งทันที'} — ไม่ต้องเพิ่มซ้ำ</div></div>`;
-    canAdd = false;
-  } else if(v==='pushed'){
-    head = `<div class="msg amber" style="font-size:16px"><b>เคยส่งไป รพ.สต. แล้ว แต่ตอนนี้ไม่อยู่ในระบบ</b>
-      <div style="font-size:14px;margin-top:4px">อาจถูก admin ลบออก/ย้ายปลายทาง หรือจำหน่ายไปแล้ว — ติดต่อ admin ก่อนเพิ่มใหม่</div></div>`;
-    canAdd = false;
-  } else if(v==='out_of_scope'){
-    head = `<div class="msg err" style="font-size:16px"><b>ส่งต่อใน HOSxP แล้ว แต่คลินิกนี้ไม่อยู่ในขอบเขตที่ส่งออก</b></div>`;
-    canAdd = false;
-  } else if(v==='hcode_out' || v==='no_date'){
-    head = `<div class="msg err" style="font-size:16px"><b>${v==='no_date'?'ติ๊กส่ง รพ.สต. ใน HOSxP แล้ว แต่ไม่ได้ใส่วันที่ส่ง':'ปลายทางใน HOSxP ไม่ใช่ รพ.สต. ในเครือข่าย'}</b>
-      <div style="font-size:14px;margin-top:4px">แก้ใน HOSxP (หน้าทะเบียนคลินิก) หรือเพิ่มเข้าคิวด้านล่าง</div></div>`;
-  } else if(v==='too_old'){
-    head = `<div class="msg amber" style="font-size:16px"><b>เปลี่ยนสถานะเป็น "ส่งต่อรับรักษาที่อื่น" ไว้นานแล้ว</b>
-      <div style="font-size:14px;margin-top:4px">ระบบดึงอัตโนมัติเฉพาะรายที่เพิ่งเปลี่ยนสถานะ ถ้ายังต้องส่งให้ รพ.สต. ให้เพิ่มเข้าคิวด้านล่าง</div></div>`;
-  } else if(v==='not_found'){
-    head = `<div class="msg err" style="font-size:16px"><b>ไม่พบ HN ${esc(hn)} ใน HOSxP</b> — ตรวจเลข HN อีกครั้ง</div>`;
-    canAdd = false;
-  } else {
-    head = `<div class="msg amber" style="font-size:16px"><b>ยังไม่มีข้อมูลการส่งต่อ</b> — HN ${esc(hn)}
-      ${v==='no_send_flag'?'<div style="font-size:14px;margin-top:4px">ใน HOSxP ยังไม่ได้ติ๊กส่ง รพ.สต.</div>':''}
-      ${err?`<div class="sub" style="margin-top:4px">${esc(err)}</div>`:''}</div>`;
+  const box = (cls, title, sub) => `<div class="msg ${cls}" style="font-size:15px"><div><b>${title}</b>${sub?`<div style="font-size:13.5px;margin-top:4px">${sub}</div>`:''}</div></div>`;
+  let head;
+  if(v==='will_send')      head = box('amber','HOSxP บันทึกส่งต่อไว้แล้ว — ข้อมูลกำลังจะถูกส่งออก',
+      'ส่งตัวด้านล่างเพื่อนัดวันให้คนไข้ได้เลย ระบบจะรวมข้อมูลจาก HOSxP เข้าใบเดียวกันเอง ไม่เกิดรายการซ้ำ');
+  else if(v==='pushed')    head = box('amber','เคยส่งไป รพ.สต. แล้ว แต่ตอนนี้ไม่อยู่ในระบบ',
+      'อาจถูก admin ลบออก/จำหน่ายไปแล้ว ถ้าตั้งใจส่งรอบใหม่ส่งด้านล่างได้');
+  else if(v==='out_of_scope') head = box('err','ใน HOSxP ส่งต่อจากคลินิกที่ไม่อยู่ในขอบเขต',
+      'ส่งได้เฉพาะผู้ป่วยคลินิกโรคเรื้อรังที่เลือกไว้ ถ้าเป็นผู้ป่วยคลินิกในขอบเขตด้วย เลือกคลินิกนั้นในแบบฟอร์ม');
+  else if(v==='hcode_out') head = box('amber','ใน HOSxP ปลายทางไม่ใช่ รพ.สต. ในเครือข่าย', 'ถ้าคนไข้จะไปรับยาที่ รพ.สต. ให้ส่งตัวด้านล่าง');
+  else if(v==='no_date')   head = box('amber','ติ๊กส่ง รพ.สต. ใน HOSxP แต่ไม่ได้ใส่วันที่', 'ส่งตัวด้านล่างได้เลย');
+  else if(v==='too_old')   head = box('amber','ใน HOSxP เปลี่ยนสถานะเป็น "ส่งต่อรับรักษาที่อื่น" ไว้นานแล้ว', 'ถ้ายังต้องส่งให้ รพ.สต. ส่งตัวด้านล่าง');
+  else if(v==='not_found'){
+    head = box('err',`ไม่พบ HN ${esc(hn)} ใน HOSxP`,'ตรวจเลข HN อีกครั้ง — ปิดแบบฟอร์มไว้กันส่งผิดคน');
+    $('f-form').innerHTML = '';
   }
-  $('f-result').innerHTML = head + sendTbl +
-    (last?`<div class="sub" style="margin:6px 0">เคยขอผ่านหน้านี้: ${reqTag(last.status)} ${esc(last.result_note||'')}</div>`:'') +
-    (canAdd ? `<div class="sec"><div class="st">เพิ่มเข้าคิวส่งให้ รพ.สต.</div>
-      <div class="frm">
-        <div class="fld"><label>รพ.สต. ปลายทาง</label><select id="f-hcode" style="min-width:230px">
-          <option value="">-- เลือก --</option>${RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('')}</select></div>
-        <div class="fld grow"><label>หมายเหตุ</label><input type="text" id="f-note" placeholder="เช่น คนไข้ขอรับยาใกล้บ้าน"></div>
-        <button class="btn-primary" id="f-add">เพิ่มเข้าคิว</button>
-      </div>
-      <div class="sub" style="margin-top:6px">ข้อมูลจะถูกส่งตามรอบ <b>13.00 น.</b> · ส่งได้เฉพาะผู้ป่วยในคลินิกที่อยู่ในขอบเขต
-        (${esc(CLINIC_SCOPE.filter(c=>c!=='ข้อมูลทดสอบ').map(c=>CLINIC_LABEL[c]||c).join(', '))})</div>
-      <div id="f-msg" style="margin-top:8px"></div></div>` : '');
-  $('f-add')?.addEventListener('click', async ()=>{
-    const hc=$('f-hcode').value;
-    if(!hc){ $('f-msg').innerHTML='<div class="msg err">เลือก รพ.สต. ปลายทาง</div>'; return; }
-    $('f-add').disabled=true;
-    try{
-      await addDoc(collection(db,'add_requests'), {
-        hn, hcode:hc, hcode_name:rpstName(hc), reason:$('f-note').value.trim()||'เพิ่มจากหน้าเช็คผู้ป่วยที่ส่งต่อ',
-        source:'find', requested_by:PROFILE.full_name||ME.email, requested_by_uid:ME.uid,
-        requested_at:serverTimestamp(), status:'approved', approved_by:ME.email, approved_at:serverTimestamp()});
-      await audit('add_patient_request', hn, {hcode:hc, source:'find'});
-      $('f-result').innerHTML = `<div class="msg ok" style="font-size:16px"><b>เพิ่มเข้าคิวแล้ว</b> —
-        HN ${esc(hn)} → ${esc(rpstName(hc))}<div style="margin-top:4px">ข้อมูลจะถูกส่งตามรอบ 13.00 น.</div></div>`;
-      $('f-hn').value=''; loadFindQueue();
-    }catch(e){ $('f-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}${e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':''}</div>`; $('f-add').disabled=false; }
-  });
+  else head = box('amber',`ยังไม่มีข้อมูลการส่งต่อ — HN ${esc(hn)}`,
+      (v==='no_send_flag'?'ใน HOSxP ยังไม่ได้บันทึกส่ง รพ.สต. — ส่งตัวด้านล่างได้เลย':'') + (err?`<div class="sub">${esc(err)}</div>`:''));
+  $('f-hx').innerHTML = head + sendTbl;
+  // เติม รพ.สต. ที่ HOSxP ระบุไว้ ถ้าพยาบาลยังไม่ได้เลือก
+  const hc = (ans?.sends||[]).map(x=>x.hcode).find(h=>RPST.some(r=>r.hcode===h));
+  if(hc && $('ns-hcode') && !$('ns-hcode').value){ $('ns-hcode').value=hc; $('ns-hcode').dispatchEvent(new Event('change')); }
 }
+
+/* ================= พยาบาล/เภสัชกร ส่งตัวเอง (เอกสาร NRS_) =================
+   - สร้างใน Firestore ทันที รพ.สต. เห็นเลย ไม่ต้องรอเครื่อง pusher / รอบ 13.00 น.
+   - เลือก รพ.สต. + วันนัดจากรอบของ รพ.สต. นั้น → บอกคนไข้ได้เลย พิมพ์ใบนัดให้ได้
+   - รพ.สต. กด "ยืนยันวันนัด" → พยาบาลเห็นสถานะยืนยันในแท็บนี้
+   - push.php รอบถัดไปเติมยา/แล็บ/ที่อยู่จาก HOSxP ลงเอกสารเดิม และรวมการส่งตัวใน HOSxP ของ HN เดียวกันเข้าใบนี้
+   - เลขบัตรเก็บแค่ 4 ตัวท้าย */
+const canNurseSend = () => isHospital() || isAdmin();
+const hn9 = hn => { const d=String(hn).replace(/\D/g,''); return d.length<9 ? d.padStart(9,'0') : d; };
+function renderNurseSend(hn){
+  const el = $('f-form'); if(!el) return;
+  if(!canNurseSend()){ el.innerHTML=''; return; }
+  const F = (label, inner, grow) => `<div class="fld${grow?' grow':''}"><label>${label}</label>${inner}</div>`;
+  el.innerHTML = `<div class="sec" style="border:2px solid var(--accent);background:#fff">
+    <div class="st" style="font-size:16px;color:var(--accent-deep)">ส่งตัวผู้ป่วย HN ${esc(hn9(hn))} ไป รพ.สต. และนัดวัน</div>
+    <div class="frm" style="margin-top:6px">
+      ${F('รพ.สต. ปลายทาง *', `<select id="ns-hcode" style="min-width:240px;font-size:15px"><option value="">-- เลือก --</option>${
+        RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('')}</select>`)}
+      ${F('วันนัดที่ รพ.สต. * <span class="sub" style="font-weight:400">(บอกคนไข้ได้เลย)</span>',
+        `<input type="date" id="ns-ap" min="${todayISO()}" style="font-size:15px"><div class="ap-pick" id="ns-ap-pick"><span class="sub" style="font-size:12px">เลือก รพ.สต. ก่อน</span></div>`, 1)}
+    </div>
+    <div class="frm" style="margin-top:8px">
+      ${F('คำนำหน้า *', `<select id="ns-pname" style="width:100px">${['นาย','นาง','นางสาว','ด.ช.','ด.ญ.'].map(x=>`<option>${x}</option>`).join('')}</select>`)}
+      ${F('ชื่อ *', `<input type="text" id="ns-fname">`, 1)}
+      ${F('นามสกุล *', `<input type="text" id="ns-lname">`, 1)}
+      ${F('อายุ', `<input type="number" id="ns-age" min="0" max="120" style="width:70px">`)}
+    </div>
+    <div class="frm" style="margin-top:8px">
+      ${F('เลขบัตร 4 ตัวท้าย', `<input type="text" id="ns-cid4" inputmode="numeric" maxlength="4" style="width:80px" placeholder="xxxx">`)}
+      ${F('โทรศัพท์คนไข้', `<input type="text" id="ns-phone" inputmode="tel" style="width:140px" placeholder="08xxxxxxxx">`)}
+      ${F('หมายเหตุถึง รพ.สต.', `<input type="text" id="ns-note" placeholder="เช่น คุมความดันได้ดี ขอรับยาใกล้บ้าน">`, 1)}
+    </div>
+    <div style="margin-top:8px"><div class="sub" style="margin-bottom:4px">คลินิก * (เลือกได้หลายคลินิก)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px 16px">${manClinics().map(c=>
+        `<label style="display:flex;gap:5px;align-items:center;font-size:14px"><input type="checkbox" class="ns-clin" value="${esc(c)}"> ${esc(c)}</label>`).join('')}</div></div>
+    <div class="frm" style="margin-top:12px"><button class="btn-primary" id="ns-save" style="font-size:17px;padding:12px 26px">ส่งตัวและนัด</button></div>
+    <div class="sub" style="margin-top:6px">รพ.สต. เห็นทันทีโดยไม่ต้องรอรอบ sync · ยา/แล็บ/ที่อยู่จาก HOSxP จะเติมให้เองในรอบถัดไป ·
+      ถ้า HOSxP มีการส่งตัวคนนี้อยู่แล้ว ระบบจะรวมเป็นรายการเดียว</div>
+    <div id="ns-msg" style="margin-top:8px"></div></div>`;
+  const fillAp = () => {
+    const h=$('ns-hcode').value;
+    $('ns-ap-pick').innerHTML = h ? buildApPick(h, $('ns-ap').value) : '<span class="sub" style="font-size:12px">เลือก รพ.สต. ก่อน</span>';
+    wireApPick('ns-ap-pick','ns-ap');
+  };
+  $('ns-hcode').addEventListener('change', fillAp);
+  $('ns-ap').addEventListener('change', fillAp);
+  $('ns-cid4').addEventListener('input', e=>{ e.target.value=e.target.value.replace(/\D/g,'').slice(0,4); });
+  $('ns-save').addEventListener('click', ()=>saveNurseSend(hn));
+}
+async function saveNurseSend(hn){
+  const err = m => { $('ns-msg').innerHTML=`<div class="msg err">${esc(m)}</div>`; };
+  const h=$('ns-hcode').value, ap=$('ns-ap').value;
+  const pname=$('ns-pname').value, fname=$('ns-fname').value.trim(), lname=$('ns-lname').value.trim();
+  const cid4=$('ns-cid4').value.trim(), phone=$('ns-phone').value.replace(/\D/g,'');
+  const clinics=[...document.querySelectorAll('.ns-clin:checked')].map(x=>x.value);
+  if(!h) return err('เลือก รพ.สต. ปลายทาง');
+  if(!ap) return err('เลือกวันนัดที่ รพ.สต.');
+  if(ap < todayISO()) return err('วันนัดต้องไม่ใช่วันที่ผ่านมาแล้ว');
+  if(!fname || !lname) return err('กรอกชื่อและนามสกุล');
+  if(cid4 && !/^\d{4}$/.test(cid4)) return err('เลขบัตรใส่เฉพาะ 4 ตัวท้าย');
+  if(phone && phone.length<9) return err('เบอร์โทรไม่ครบ');
+  if(!clinics.length) return err('เลือกคลินิกอย่างน้อย 1 คลินิก');
+  const H = hn9(hn), id = `NRS_${H}_${todayISO().replace(/-/g,'')}`;
+  const onRound = OUTREACH.some(o=>o.hcode===h && o.date===ap);
+  if(!onRound && !confirm(`${thDate(ap)} ไม่ใช่วันคลินิกของ ${rpstName(h)} ในปฏิทิน\nยืนยันนัดวันนี้หรือไม่?`)) return;
+  $('ns-save').disabled=true;
+  try{
+    const ex = await getDoc(doc(db,'referrals',id));
+    if(ex.exists()){ $('ns-save').disabled=false; return err('วันนี้ส่งตัว HN นี้ไปแล้ว — ดูในรายการด้านล่าง'); }
+    const by = PROFILE.full_name||ME.email;
+    const data = {
+      doc_key:id, source:'nurse', case_type:'refill',
+      hn:H, refer_date:todayISO(), as_of_date:todayISO(),
+      hcode:h, hcode_name:rpstName(h), hcode_source:'nurse', hcode_conflict:false,
+      sent_clinic_name:clinics[0], clinics:clinics.map((c,i)=>`${i+1}:${c}`).join('|'), clinic_count:clinics.length,
+      refer_note:null, nurse_note:$('ns-note').value.trim()||null,
+      contact:{ phone:phone||null },
+      patient:{ full_name:`${pname}${fname} ${lname}`, pname, fname, lname,
+        sex:['นาย','ด.ช.'].includes(pname)?'ชาย':'หญิง',
+        age:$('ns-age').value!==''?parseInt($('ns-age').value):null,
+        cid_last4:cid4||null, phone:phone||null },
+      medications:[], labs:[],
+      workflow:{ status:'new', appoint_date:ap, proposed_date:ap, proposed_by:by,
+        note:null, updated_by:by, updated_at:serverTimestamp() },
+      created_uid:ME.uid, created_by:ME.email, created_by_name:by, created_at:serverTimestamp() };
+    await setDoc(doc(db,'referrals',id), data);
+    await audit('nurse_send', id, {hn:H, hcode:h, appoint_date:ap});
+    const r = {id, ...data, workflow:{...data.workflow}};
+    FIND_CACHE[id]=r; if(!LIST.some(x=>x.id===id)) LIST.push(r);
+    $('f-result').innerHTML = `<div class="msg ok" style="font-size:17px"><b>✓ ส่งตัวแล้ว</b> — ${esc(rpstName(h))}
+      <div style="font-size:22px;margin:8px 0;color:var(--accent-deep)">นัดวันที่ <b>${thDate(ap)}</b></div>
+      <div style="font-size:14px">รอ รพ.สต. ยืนยันวันนัด — ดูสถานะได้ในรายการ "ผู้ป่วยที่ส่งตัว" ด้านล่าง</div>
+      <button class="btn-primary" id="ns-print" style="margin-top:10px">🖨 พิมพ์ใบนัดให้คนไข้</button></div>`;
+    $('ns-print').addEventListener('click', ()=>printApptSlip(r));
+    $('f-hn').value=''; renderSentList();
+  }catch(e){
+    $('ns-save').disabled=false;
+    err('ส่งไม่สำเร็จ: '+(e.code||e.message)+(e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่ก่อน':''));
+  }
+}
+/* ใบนัดขนาดเล็กให้คนไข้ถือไป — ไม่มีเลขบัตร ไม่มีข้อมูลยา */
+function printApptSlip(r){
+  const u = RPST.find(x=>x.hcode===r.hcode)||{};
+  const ap = r.workflow?.appoint_date;
+  const w = window.open('', '_blank', 'width=420,height=600');
+  if(!w){ alert('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up ก่อน'); return; }
+  w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบนัด</title>
+    <style>body{font-family:'Sarabun','Tahoma',sans-serif;margin:0;padding:18px;color:#222}
+    .c{border:2px solid #222;border-radius:10px;padding:16px;max-width:340px}
+    h1{font-size:18px;margin:0 0 4px}.d{font-size:26px;font-weight:700;margin:10px 0}.s{font-size:13px;color:#555}
+    table{font-size:14px;border-collapse:collapse;margin-top:6px}td{padding:3px 6px 3px 0;vertical-align:top}
+    @media print{body{padding:0}}</style></head><body><div class="c">
+    <h1>ใบนัดรับยาต่อเนื่องใกล้บ้าน</h1><div class="s">โรงพยาบาลสวี ส่งต่อไป</div>
+    <div style="font-size:17px;font-weight:600;margin-top:8px">${esc(u.name||r.hcode_name||r.hcode)}</div>
+    <div class="d">${thDate(ap)}</div>
+    <table><tr><td>ชื่อ</td><td>${esc(r.patient?.full_name||'-')}</td></tr>
+      <tr><td>HN</td><td>${esc(r.hn)}</td></tr>
+      <tr><td>คลินิก</td><td>${esc(String(r.clinics||'').split('|').map(x=>x.replace(/^\d+:/,'')).join(', '))}</td></tr>
+      ${u.phone?`<tr><td>โทร รพ.สต.</td><td>${esc(u.phone)}</td></tr>`:''}</table>
+    <div class="s" style="margin-top:10px">นำบัตรประชาชนและยาเดิมที่เหลือไปด้วย · ถ้ามาไม่ได้โปรดโทรแจ้ง รพ.สต.</div>
+    <div class="s" style="margin-top:6px">ส่งตัวโดย ${esc(r.created_by_name||'-')} · ${thDate(r.refer_date)}</div>
+    </div><script>window.onload=()=>{window.print()}<\/script></body></html>`);
+  w.document.close();
+  audit('print_appt_slip', r.id, {hn:r.hn});
+}
+/* สถานะการยืนยันของ รพ.สต. สำหรับผู้ป่วยที่ รพ.สวี ส่งไป (ทั้งพยาบาลส่งเองและจาก HOSxP) */
+function confirmTag(r){
+  const st=stOf(r), w=r.workflow||{};
+  if(st==='new') return '<span class="tag" style="background:#B8860B1a;color:#B8860B">⏳ รอ รพ.สต. ยืนยัน</span>';
+  if(st==='not_mine') return '<span class="tag" style="background:#6B4C9A1a;color:#6B4C9A">✗ รพ.สต. แจ้งไม่ใช่คนในพื้นที่</span>';
+  if(st==='scheduled'||st==='acknowledged'){
+    if(w.proposed_date && w.appoint_date && w.appoint_date!==w.proposed_date)
+      return `<span class="tag" style="background:#8B20201a;color:#8B2020">✓ ยืนยัน แต่เปลี่ยนวันนัดเป็น ${thDate(w.appoint_date)}</span>`;
+    return st==='scheduled' ? '<span class="tag" style="background:#1F7A4D1a;color:#1F7A4D">✓ รพ.สต. ยืนยันวันนัดแล้ว</span>'
+                            : '<span class="tag" style="background:#3E6E8E1a;color:#3E6E8E">✓ รับตัวแล้ว ยังไม่นัด</span>';
+  }
+  return `<span class="tag" style="background:${SC[st]||'#888'}1a;color:${SC[st]||'#888'}">${esc(STATUS[st]||st)}</span>`;
+}
+function renderSentList(){
+  const el=$('f-sent'); if(!el) return;
+  const days = +($('f-sent-days')?.value||14), mine = $('f-sent-mine')?.checked;
+  const since = new Date(Date.now()-days*864e5).toISOString().slice(0,10);
+  const rows = LIST.filter(r=>r.case_type==='refill' && !r.manual && String(r.refer_date||'')>=since
+      && (!mine || r.created_uid===ME.uid))
+    .sort((a,b)=>String(b.refer_date).localeCompare(String(a.refer_date)));
+  const nWait = rows.filter(r=>stOf(r)==='new').length;
+  el.innerHTML = rows.length ? `<div class="sub" style="margin-bottom:6px">${rows.length} ราย · รอ รพ.สต. ยืนยัน <b>${nWait}</b> ราย</div>
+    <div class="tbl-wrap"><table><thead><tr><th>วันที่ส่ง</th><th>ผู้ป่วย</th><th>รพ.สต.</th><th>วันนัด</th><th>สถานะ</th><th>ที่มา</th><th></th></tr></thead><tbody>${
+    rows.map(r=>`<tr>
+      <td>${thDate(r.refer_date)}</td>
+      <td><span class="masked">${maskName(r.patient?.full_name)}</span> ${eyeBtn(r.id,'full_name','ชื่อ')}<div class="sub">HN ${esc(r.hn||'-')}</div></td>
+      <td>${esc(r.hcode_name||rpstName(r.hcode))}</td>
+      <td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'<span class="sub">ยังไม่นัด</span>'}</td>
+      <td>${confirmTag(r)}${stOf(r)==='not_mine'&&r.workflow?.note?`<div class="sub">${esc(r.workflow.note)}</div>`:''}</td>
+      <td class="sub">${r.source==='nurse'?`ส่งเอง · ${esc(r.created_by_name||'')}${r.synced_at?'':'<div style="color:var(--amber)">รอข้อมูล HOSxP</div>'}`:'HOSxP'}</td>
+      <td class="right" style="white-space:nowrap">${r.workflow?.appoint_date?`<button class="btn-sm grey" data-slip="${esc(r.id)}">ใบนัด</button>`:''}
+        ${r.source==='nurse'&&stOf(r)==='new'&&(r.created_uid===ME.uid||isAdmin())?` <button class="btn-sm red" data-nsdel="${esc(r.id)}">ยกเลิก</button>`:''}</td>
+    </tr>`).join('')}</tbody></table></div>` : '<div class="empty">ไม่มีผู้ป่วยที่ส่งตัวในช่วงนี้</div>';
+  el.querySelectorAll('.btn-eye').forEach(b=>b.addEventListener('click', async ()=>{
+    const v = await revealField(b.dataset.eye, b.dataset.ef);
+    b.previousElementSibling.textContent = v||'-'; b.style.display='none'; }));
+  el.querySelectorAll('[data-slip]').forEach(b=>b.addEventListener('click', ()=>{
+    const r=LIST.find(x=>x.id===b.dataset.slip); if(r) printApptSlip(r); }));
+  el.querySelectorAll('[data-nsdel]').forEach(b=>b.addEventListener('click', async ()=>{
+    if(!confirm('ยกเลิกการส่งตัวรายนี้? (ใช้เมื่อส่งผิดคน/ผิดหน่วย — รพ.สต. ยังไม่ได้ยืนยัน)')) return;
+    try{ await deleteDoc(doc(db,'referrals',b.dataset.nsdel)); await audit('nurse_send_cancel', b.dataset.nsdel);
+      LIST=LIST.filter(x=>x.id!==b.dataset.nsdel); renderSentList(); }
+    catch(e){ alert('ยกเลิกไม่สำเร็จ: '+(e.code||e.message)); }
+  }));
+}
+$('f-sent-days')?.addEventListener('change', renderSentList);
+$('f-sent-mine')?.addEventListener('change', renderSentList);
+$('f-sent-reload')?.addEventListener('click', async ()=>{ await loadList(); renderSentList(); });
 
 async function loadFindQueue(){
   show('f-push-now', isAdmin());
@@ -2965,8 +3140,8 @@ function renderPendingUsers(){
         ${(p.note||p.hcode_name)?`<div class="sub" style="margin-top:4px;max-width:260px">ผู้ขอเขียนว่า: <b>${esc(p.note||p.hcode_name)}</b></div>`:''}</td>
       <td><select data-prole="${esc(p.uid)}">
         ${Object.entries(ROLE_LABEL).map(([k,v])=>
-          `<option value="${k}"${k===(p.want_role||'rpst')?' selected':''}>${v}</option>`).join('')}</select>
-        ${p.want_role?`<div class="sub">ผู้ขอระบุ: ${esc(ROLE_LABEL[p.want_role]||p.want_role)}</div>`:''}
+          `<option value="${k}"${k===normRole(p.want_role||'rpst')?' selected':''}>${v}</option>`).join('')}</select>
+        ${p.want_role?`<div class="sub">ผู้ขอระบุ: ${esc(roleLabel(p.want_role))}</div>`:''}
         ${(!p.hcode&&p.hcode_name)?`<div class="sub" style="color:var(--amber)">พิมพ์เอง: ${esc(p.hcode_name)}</div>`:''}</td>
       <td class="right"><button class="btn-sm" data-appr="${esc(p.uid)}">อนุมัติ</button>
         <button class="btn-sm red" data-rej="${esc(p.uid)}">ปฏิเสธ</button></td>
@@ -2990,7 +3165,7 @@ function renderPendingUsers(){
         PENDING=PENDING.filter(x=>x.uid!==uid);
         renderPendingUsers(); await loadUsers();
         alert('อนุมัติ '+(p.full_name||p.email)+' เรียบร้อย\n\n'
-          +'บทบาท: '+(ROLE_LABEL[role]||role)
+          +'บทบาท: '+roleLabel(role)
           +(role==='rpst'?'\nหน่วยบริการ: '+rpstName(hcode):'')
           +'\n\nผู้ใช้เข้าระบบได้ทันที ถ้าเขาค้างอยู่หน้า "รอผู้ดูแลระบบอนุมัติ" '
           +'ระบบจะพาเข้าเองภายใน 20 วินาที หรือกดรีเฟรชหน้าเว็บก็ได้');
@@ -3139,12 +3314,13 @@ async function loadUsers(){
 }
 function renderUsers(){
   $('tb-user').innerHTML = USERS.length ? USERS
-    .sort((a,b)=>(a.role||'').localeCompare(b.role||''))
+    .sort((a,b)=>normRole(a.role).localeCompare(normRole(b.role)))
     .map(u=>`<tr>
       <td class="nm">${esc(u.full_name||'-')}<div class="sub">${esc(u.email||'')}</div></td>
       <td><select data-role="${esc(u.uid)}">
         ${Object.entries(ROLE_LABEL).map(([k,v])=>
-          `<option value="${k}"${u.role===k?' selected':''}>${v}</option>`).join('')}</select></td>
+          `<option value="${k}"${normRole(u.role)===k?' selected':''}>${v}</option>`).join('')}</select>
+        ${u.role && u.role!==normRole(u.role)?`<div class="sub" style="color:var(--amber)">บทบาทเดิม: ${esc(u.role)} — กดบันทึกเพื่อปรับเป็นแบบใหม่</div>`:''}</td>
       <td><select data-hc="${esc(u.uid)}"><option value="">(ไม่ผูก)</option>
         ${RPST.map(r=>`<option value="${esc(r.hcode)}"${u.hcode===r.hcode?' selected':''}>${esc(r.name)}</option>`).join('')}</select></td>
       <td class="sub mono" style="font-size:11px">${esc(u.uid)}</td>
@@ -4108,7 +4284,7 @@ function renderLog(){
     const t=l.ts?.toDate?l.ts.toDate():(l.client_time?new Date(l.client_time):null);
     const ts=t?`${thDate(t.toISOString().slice(0,10))} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`:'-';
     return `<tr><td class="sub">${ts}</td>
-      <td>${esc(l.name||l.email||'-')}<div class="sub">${esc(ROLE_LABEL[l.role]||l.role||'')}${l.hcode?' · '+esc(rpstName(l.hcode)):''}</div></td>
+      <td>${esc(l.name||l.email||'-')}<div class="sub">${esc(l.role?roleLabel(l.role):'')}${l.hcode?' · '+esc(rpstName(l.hcode)):''}</div></td>
       <td>${esc(ACTION_LABEL[l.action]||l.action)}</td>
       <td class="sub">${esc(l.target||'-')}</td>
       <td class="sub">${esc(l.detail?JSON.stringify(l.detail):'')}</td></tr>`;

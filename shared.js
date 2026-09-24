@@ -1,5 +1,5 @@
 // ============================================================
-// Sawee Rxfill — shared.js (v5.8.0)
+// Sawee Rxfill — shared.js (v5.9.0)
 // ไฟล์รวม: Firebase init, ค่าคงที่, utility functions
 // ใช้ร่วมกันทุกหน้า — ห้ามมี JSX (ไม่ผ่าน Babel)
 // ============================================================
@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '5.8.0';
+const APP_VERSION = '5.9.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -893,3 +893,134 @@ const classifyInvsDept = (r) => {
   return { kind: 'dept', reason: 'หน่วยงาน' };
 };
 const normalizeRpstName = (s) => normalizeForMatch(String(s || '').replace(/รพ\.?\s*สต\.?/g, '').replace(/โรงพยาบาลส่งเสริมสุขภาพตำบล/g, ''));
+
+
+// ─── ใบเบิกวัสดุ/เวชภัณฑ์ (หน่วยงาน/ห้องยา) v5.9 ──────────
+// สร้าง HTML ใบเบิกทางการ (TH Sarabun) แล้วสั่งพิมพ์ผ่าน iframe — ใช้ร่วมกันทั้ง internal.html และ app.html
+const INTERNAL_FORM_FONT_URL = 'https://raw.githubusercontent.com/sawee-hosp/sawee-vmi/refs/heads/main/font/THSarabunNew.ttf';
+const thaiDateLong = (ymd) => {
+  const d = parseYmd(ymd); if (!d) return '';
+  return d.getDate() + ' ' + THAI_MONTHS[d.getMonth()] + ' ' + (d.getFullYear() + 543);
+};
+const thaiDateParts = (ymd) => {
+  const d = parseYmd(ymd); if (!d) return { day: '', month: '', year: '' };
+  return { day: String(d.getDate()), month: THAI_MONTHS[d.getMonth()], year: String(d.getFullYear() + 543) };
+};
+const fiscalYearBEOfYmd = (ymd) => {
+  const d = parseYmd(ymd) || new Date();
+  return getFiscalInfo(d.getMonth() + 1, d.getFullYear()).fiscalYear;
+};
+const tsToYmd = (v) => { const ms = tsToMillis(v); return ms ? toYmd(new Date(ms)) : toYmd(new Date()); };
+// เลขที่ใบเบิกภายใน = ลำดับของหน่วยในปีงบประมาณ / ปีงบ (พ.ศ.) เหมือนหลักการของ รพ.สต.
+const nextInternalFormNo = (reqs, deptId, ymd, excludeId) => {
+  const fy = fiscalYearBEOfYmd(ymd);
+  const n = (reqs || []).filter(function (r) {
+    return String(r.deptId) === String(deptId) && r.status !== 'Cancelled' && r.id !== excludeId && Number(r.fiscal_year) === fy;
+  }).length + 1;
+  return { no: n + '/' + fy, fiscalYear: fy };
+};
+const internalFormNoFor = (req, reqs) => {
+  if (safeText(req && req.form_no)) return safeText(req.form_no);
+  const ymd = safeText(req && req.form_date) || tsToYmd(req && (req.submitted_at || req.created_at));
+  const fy = fiscalYearBEOfYmd(ymd);
+  const same = (reqs || []).filter(function (r) { return String(r.deptId) === String(req.deptId) && r.status !== 'Cancelled' && fiscalYearBEOfYmd(safeText(r.form_date) || tsToYmd(r.submitted_at || r.created_at)) === fy; })
+    .sort(function (a, b) { return tsToMillis(a.submitted_at || a.created_at) - tsToMillis(b.submitted_at || b.created_at); });
+  const idx = same.findIndex(function (r) { return r.id === req.id; });
+  return (idx >= 0 ? idx + 1 : same.length + 1) + '/' + fy;
+};
+const deptSentencePrefix = (name) => {
+  const n = safeText(name);
+  return /^ฝ่า[ยน]/.test(n) ? n : 'ฝ่าย' + n;
+};
+
+const buildInternalReqFormHtml = (opts) => {
+  const req = opts.req || {};
+  const isPharmacy = req.kind === 'pharmacy';
+  const types = opts.drugTypes || DEFAULT_DRUG_TYPES;
+  const locOf = opts.locOf || function () { return ''; };
+  const esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  const money = function (v) { return toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  const qty = function (q, pack) { const s = formatQty(q, pack); return s === '0' ? '-' : s; };
+  const parts = thaiDateParts(opts.formDate);
+  const items = (req.items || []).filter(function (it) { return toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty) > 0 || toNonNegativeNumber(it.dispenseQty) > 0; });
+  const groups = {};
+  items.forEach(function (it) { const k = safeText(it.type, '1') || '1'; (groups[k] = groups[k] || []).push(it); });
+  const typeKeys = Object.keys(groups).sort(function (a, b) { return Number(a) - Number(b); });
+  const colCount = isPharmacy ? 11 : 10;
+  let n = 0, total = 0;
+  const body = typeKeys.map(function (k) {
+    const rows = groups[k].map(function (it) {
+      n++;
+      const pack = safePackSize(it.packSize);
+      const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
+      const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
+      const value = (disp / pack) * toNonNegativeNumber(it.price);
+      total += value;
+      const remain = isPharmacy ? qty(Math.max(0, toNonNegativeNumber(it.onHand)), pack) : '';
+      return '<tr>' +
+        '<td class="c">' + n + '</td>' +
+        '<td class="l">' + esc(it.name) + '</td>' +
+        '<td class="c">' + esc(it.unit) + (pack > 1 ? '<div class="sm">(' + pack + ')</div>' : '') + '</td>' +
+        (isPharmacy ? '<td class="c">' + qty(it.usage, pack) + '</td>' : '') +
+        '<td class="c b">' + qty(req0, pack) + '</td>' +
+        '<td class="c b">' + qty(disp, pack) + '</td>' +
+        '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
+        '<td class="r">' + money(value) + '</td>' +
+        '<td class="c">' + remain + '</td>' +
+        '<td class="c mono">' + esc(it.drugId) + '</td>' +
+        '<td class="c loc">' + esc(locOf(it.drugId) || '') + '</td>' +
+        '</tr>';
+    }).join('');
+    return '<tr class="grp"><td colspan="' + colCount + '">' + esc(types[k] || ('หมวด ' + k)) + '</td></tr>' + rows;
+  }).join('');
+  const sign = function (label, name, pos) {
+    return '<div class="sig"><div style="white-space:nowrap">ลงชื่อ ................................ ' + label + '</div><div>(' + (name ? esc(name) : '................................') + ')</div>' + (pos ? '<div>' + esc(pos) + '</div>' : '<div>ตำแหน่ง ................................</div>') + '</div>';
+  };
+  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบเบิกวัสดุ/เวชภัณฑ์ ' + esc(opts.formNo) + '</title><style>' +
+    "@font-face{font-family:'THSarabunNew';src:url('" + INTERNAL_FORM_FONT_URL + "') format('truetype');font-weight:400}" +
+    "@font-face{font-family:'THSarabunNew';src:url('" + INTERNAL_FORM_FONT_URL + "') format('truetype');font-weight:700}" +
+    '@page{size:A4 portrait;margin:12mm 10mm 12mm 14mm}' +
+    "body{font-family:'THSarabunNew','TH SarabunPSK','TH Sarabun New',sans-serif;font-size:16pt;line-height:1.15;color:#000;margin:0}" +
+    'h1{text-align:center;font-size:26pt;font-weight:700;margin:0 0 4pt}' +
+    '.meta{text-align:right}.meta div{margin:0}.to{margin-top:8pt}.intro{text-indent:2.5cm;margin:4pt 0 8pt}' +
+    'table{width:100%;border-collapse:collapse;font-size:14pt}th,td{border:1px solid #000;padding:1pt 4pt;vertical-align:top}' +
+    'th{font-weight:700;text-align:center;background:#f2f2f2;line-height:1.05}' +
+    'tr{page-break-inside:avoid}thead{display:table-header-group}' +
+    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.l{text-align:left}.b{font-weight:700}.mono{font-size:12pt}' +
+    '.sm{font-size:11pt;line-height:1}.loc{font-size:11pt}.grp td{font-weight:700;background:#fafafa}' +
+    '.tot td{font-weight:700}.note{font-size:12pt;margin-top:3pt}' +
+    '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:18pt 30pt;margin-top:24pt;text-align:center;page-break-inside:avoid}' +
+    '</style></head><body>' +
+    '<h1>ใบเบิกวัสดุ/เวชภัณฑ์</h1>' +
+    '<div class="meta"><div>เลขที่ ' + esc(opts.formNo) + '</div><div>วันที่ ' + esc(parts.day) + ' เดือน ' + esc(parts.month) + ' ปี ' + esc(parts.year) + '</div></div>' +
+    '<div class="to">เรียน ผู้อำนวยการโรงพยาบาลสวี</div>' +
+    '<div class="intro">ด้วย' + esc(deptSentencePrefix(opts.deptName || req.dept_name)) + ' มีความประสงค์จะขอเบิกวัสดุ/เวชภัณฑ์ เพื่อใช้ในราชการดังรายการต่อไปนี้</div>' +
+    '<table><thead><tr>' +
+    '<th style="width:5%">ลำดับที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
+    (isPharmacy ? '<th style="width:8%">จำนวนที่ใช้</th>' : '') +
+    '<th style="width:8%">จำนวนเบิก</th><th style="width:8%">จำนวนจ่าย</th><th style="width:8%">ราคา/หน่วย</th><th style="width:10%">มูลค่า (บาท)</th>' +
+    '<th style="width:7%">คงเหลือ</th><th style="width:7%">รหัส</th><th style="width:7%">ตำแหน่งยา</th>' +
+    '</tr></thead><tbody>' + body +
+    '<tr class="tot"><td colspan="' + (isPharmacy ? 7 : 6) + '" class="r">รวม ' + n + ' รายการ</td><td class="r">' + money(total) + '</td><td colspan="3"></td></tr>' +
+    '</tbody></table>' +
+    '<div class="note">หมายเหตุ: จำนวนเต็มคือหน่วยเบิกหลัก เลขในวงเล็บคือหน่วยย่อยที่แตกออกจากหน่วยหลัก (ตามขนาดบรรจุในคอลัมน์รูปแบบยา)' + (req.note ? ' · ' + esc(req.note) : '') + '</div>' +
+    '<div class="sigs">' + sign('ผู้เบิก', req.created_by_name, req.created_by_position) + sign('ผู้อนุมัติ', '', '') + sign('ผู้จ่าย', req.approved_by_name, '') + sign('ผู้รับ', '', '') + '</div>' +
+    '</body></html>';
+};
+
+// พิมพ์ HTML ผ่าน iframe ที่ซ่อนไว้ (ไม่โดนบล็อก pop-up) รอฟอนต์โหลดก่อนสั่งพิมพ์
+const printHtmlDocument = (html) => new Promise(function (resolve) {
+  const f = document.createElement('iframe');
+  f.setAttribute('aria-hidden', 'true');
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(f);
+  const doc = f.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  const go = function () {
+    try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { console.warn(e); }
+    setTimeout(function () { f.remove(); resolve(); }, 1500);
+  };
+  const fontsReady = f.contentWindow.document.fonts && f.contentWindow.document.fonts.ready;
+  if (fontsReady) Promise.race([fontsReady, new Promise(function (r) { setTimeout(r, 2500); })]).then(function () { setTimeout(go, 100); });
+  else setTimeout(go, 800);
+});

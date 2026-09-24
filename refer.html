@@ -341,6 +341,7 @@ tbody tr:hover{background:#FAFCFA}
         <div style="flex:1"></div>
         <input type="text" id="q" placeholder="เลขบัตร ปชช. 4 ตัวท้าย (หรือ HN)" style="width:240px">
         <button class="btn-ghost" id="btn-reload">โหลดใหม่</button>
+        <button class="btn-ghost" id="btn-print-list" title="พิมพ์ / บันทึกเป็น PDF ตามตัวกรองที่เลือกอยู่">🖨 พิมพ์รายชื่อ</button>
         <button class="btn-sm" id="btn-add-pt" style="margin-left:auto">+ ขอเพิ่มผู้ป่วย</button>
       </div>
       <div id="batch-bar" class="msg ok hidden"></div>
@@ -577,7 +578,7 @@ tbody tr:hover{background:#FAFCFA}
         </div>
         <div class="tbl-wrap"><table>
           <thead><tr><th>ผู้ป่วย</th><th>รพ.สต.</th><th>สถานะ Remission</th>
-            <th>กิจกรรมที่ต้องคีย์</th><th>รับข้อมูลแล้ว</th><th></th></tr></thead>
+            <th>กิจกรรมที่ต้องคีย์</th><th>รับข้อมูลแล้ว</th><th style="min-width:220px">หมายเหตุ</th><th></th></tr></thead>
           <tbody id="tb-intake"></tbody>
         </table></div>
       </div>
@@ -734,7 +735,7 @@ const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออ
   open_round:'เปิดรอบนัด', view_dashboard:'เปิดแดชบอร์ด', view_log:'เปิดบันทึกการเข้าถึง',
   edit_outreach:'แก้ไขวันนัด', request_sync:'สั่ง sync ข้อมูล', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
   edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.',
-  record_visit:'บันทึกการให้บริการ', keyed_hosxp:'คีย์เข้า HOSxP แล้ว',
+  record_visit:'บันทึกการให้บริการ', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
   approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
   reveal_sensitive:'เปิดดูข้อมูลส่วนบุคคล', add_patient_request:'ขอเพิ่มผู้ป่วย',
   approve_add_patient:'อนุมัติเพิ่มผู้ป่วย', edit_rpst:'แก้ไขหน่วยบริการ',
@@ -2748,7 +2749,7 @@ function renderIntakeTable(){
   if(INTAKE_FILTER==='need') rows = rows.filter(r=>r.ncdr?.action_required && (r.intake?.status||'pending')!=='done');
   rows = rows.sort((a,b)=>String(a.hcode||'').localeCompare(String(b.hcode||'')));
   $('intake-status').textContent = `${rows.length} รายการ`;
-  if(!rows.length){ $('tb-intake').innerHTML='<tr><td colspan="6" class="empty">ไม่พบรายการ</td></tr>'; return; }
+  if(!rows.length){ $('tb-intake').innerHTML='<tr><td colspan="7" class="empty">ไม่พบรายการ</td></tr>'; return; }
   $('tb-intake').innerHTML = rows.map(r=>{
     const p=r.patient||{}, n=r.ncdr||{}, ik=r.intake||{};
     const done = ik.status==='done', rejected = ik.status==='rejected';
@@ -2761,32 +2762,54 @@ function renderIntakeTable(){
       <td>${n.action_required?`<span class="pill pill-warn">${esc(n.action_code||'ต้องคีย์')}</span>
           <div class="sub">${esc(n.action_reason||'')}</div>` : '<span class="sub">ไม่ต้องคีย์เพิ่ม</span>'}</td>
       <td>${done?`<span class="tag" style="background:#2e7d3220;color:#2e7d32">คีย์แล้ว</span>`
-          :rejected?`<span class="tag" style="background:#8886;color:#666">ไม่ใช่คนของเรา</span><div class="sub">${esc(ik.reason||'')}</div>`
-          :'<span class="sub">ยังไม่คีย์</span>'}</td>
-      <td class="right">
+          :rejected?`<span class="tag" style="background:#8886;color:#666">ไม่ใช่คนของเรา</span>`
+          :'<span class="sub">ยังไม่คีย์</span>'}
+        ${ik.by?`<div class="sub">${esc(ik.by)}</div>`:''}</td>
+      <td><textarea class="ik-note" data-ik="${esc(r.id)}" rows="2" maxlength="300"
+            style="width:100%;font:inherit;font-size:13px;padding:5px 7px;border:1px solid var(--line);border-radius:6px"
+            placeholder="เช่น คีย์ 1I20 แล้ว VN..., โทรยืนยันกับ รพ.สต. แล้ว">${esc(ik.note||ik.reason||'')}</textarea>
+        ${(done||rejected)?`<button class="btn-sm grey" style="margin-top:4px" data-ik-save="${esc(r.id)}">บันทึกหมายเหตุ</button>`:''}</td>
+      <td class="right" style="white-space:nowrap">
         ${!done?`<button class="btn-sm" data-intake-done="${esc(r.id)}">คีย์แล้ว</button>`:''}
         ${!rejected?`<button class="btn-sm grey" data-intake-reject="${esc(r.id)}">ไม่ใช่คนของเรา</button>`:''}
       </td></tr>`;
   }).join('');
+  const noteOf = id => ($('tb-intake').querySelector(`.ik-note[data-ik="${CSS.escape(id)}"]`)?.value||'').trim();
   $('tb-intake').querySelectorAll('[data-intake-done]').forEach(b=>
-    b.addEventListener('click', ()=>setIntakeStatus(b.dataset.intakeDone,'done')));
+    b.addEventListener('click', ()=>setIntakeStatus(b.dataset.intakeDone,'done', noteOf(b.dataset.intakeDone))));
   $('tb-intake').querySelectorAll('[data-intake-reject]').forEach(b=>
     b.addEventListener('click', ()=>{
-      const reason = prompt('เหตุผลที่ไม่ใช่คนของเรา (ไม่บังคับ):','') || '';
-      setIntakeStatus(b.dataset.intakeReject,'rejected',reason);
+      const id=b.dataset.intakeReject;
+      let reason = noteOf(id);
+      if(!reason) reason = prompt('เหตุผลที่ไม่ใช่คนของเรา (ไม่บังคับ):','') || '';
+      setIntakeStatus(id,'rejected',reason);
+    }));
+  $('tb-intake').querySelectorAll('[data-ik-save]').forEach(b=>
+    b.addEventListener('click', async ()=>{
+      const id=b.dataset.ikSave, note=noteOf(id);
+      b.disabled=true;
+      try{
+        await updateDoc(doc(db,'referrals',id), {'intake.note':note||null, 'intake.note_by':PROFILE.full_name||ME.email,
+          'intake.note_at':serverTimestamp()});
+        await audit('ncdr_keyin_note', id, {note});
+        const r=LIST.find(x=>x.id===id); if(r) r.intake={...(r.intake||{}), note:note||null};
+        b.textContent='บันทึกแล้ว ✓'; setTimeout(()=>{ b.textContent='บันทึกหมายเหตุ'; b.disabled=false; },1400);
+      }catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.code||e.message)); b.disabled=false; }
     }));
 }
 
 async function setIntakeStatus(id, status, reason){
   const patch = {
     'intake.status': status, 'intake.by': PROFILE.full_name||ME.email,
-    'intake.at': serverTimestamp(), 'intake.reason': reason||null,
+    'intake.at': serverTimestamp(), 'intake.reason': status==='rejected' ? (reason||null) : null,
+    'intake.note': reason||null,
     'intake.queued': true,   // push.php รอบถัดไปจะยิงแจ้ง ncdr_app แล้วเคลียร์ flag นี้
   };
   await updateDoc(doc(db,'referrals',id), patch);
   await audit(status==='done' ? 'ncdr_keyin_done' : 'ncdr_keyin_rejected', id, {reason});
   const r = LIST.find(x=>x.id===id);
-  if(r){ r.intake = {...(r.intake||{}), status, by:PROFILE.full_name||ME.email, reason:reason||null, queued:true}; }
+  if(r){ r.intake = {...(r.intake||{}), status, by:PROFILE.full_name||ME.email,
+    reason: status==='rejected'?(reason||null):null, note:reason||null, queued:true}; }
   renderIntakeTable();
 }
 
@@ -2802,6 +2825,52 @@ async function loadIntakeUnmatched(){
       <td>${thDate(r.last_visit)}</td></tr>`).join('') : '';
   }catch(e){ /* ยังไม่มี collection นี้ก็ไม่เป็นไร */ }
 }
+
+/* ================= พิมพ์รายชื่อผู้ป่วย (PDF) =================
+   พิมพ์ตามตัวกรองที่เลือกอยู่ในหน้ารายชื่อ มีที่อยู่ (ข้อมูลอ่อนไหว) จึงบันทึก log ทุกครั้ง
+   ท้ายทุกหน้ามีชื่อผู้พิมพ์และเวลาพิมพ์ (ใช้ tfoot ให้ซ้ำทุกหน้ากระดาษ) */
+$('btn-print-list')?.addEventListener('click', async ()=>{
+  const rows = filtered();
+  if(!rows.length){ alert('ไม่มีรายชื่อตามตัวกรองนี้'); return; }
+  if(!confirm(`พิมพ์รายชื่อ ${rows.length} คน (มีที่อยู่ผู้ป่วย)\nการพิมพ์จะถูกบันทึกในบันทึกการเข้าถึง ต้องการพิมพ์ต่อไหม?`)) return;
+  const now = new Date(), be = now.getFullYear()+543;
+  const stamp = `${now.getDate()}/${now.getMonth()+1}/${be} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')} น.`;
+  const who = PROFILE?.full_name || ME.email;
+  const unit = isRpst() ? rpstName(myHcode()) : (VIEW_HCODE ? rpstName(VIEW_HCODE) : 'ทุก รพ.สต.');
+  const fLabel = FILTER==='todo' ? 'ที่ต้องดำเนินการ' : FILTER==='all' ? 'ทั้งหมด' : (STATUS[FILTER]||FILTER);
+  const medN = r => (r.medications||[]).filter(m=>(m.days_before??0)<=180).length;
+  const addr = p => p.address_full || [p.addr_no, p.moo?'ม.'+p.moo:'', p.tambon?'ต.'+p.tambon:'', p.ampur?'อ.'+p.ampur:''].filter(Boolean).join(' ') || '-';
+  $('print-area').innerHTML = `
+    <style>
+      @page{size:A4 landscape;margin:10mm}
+      .pl{width:100%;border-collapse:collapse;font-size:11.5px}
+      .pl th,.pl td{border:1px solid #444;padding:4px 5px;vertical-align:top;text-align:left}
+      .pl thead th{background:#eee}
+      .pl tr{page-break-inside:avoid}
+      .pl tfoot td{border:none;border-top:1px solid #000;font-size:11px;padding-top:6px}
+      .pl .c{text-align:center}.pl .r{text-align:right}
+    </style>
+    <div class="doc-header">
+      <h1>รายชื่อผู้ป่วยส่งต่อ — ${esc(unit)}</h1>
+      <div class="sub2">โรงพยาบาลสวี จังหวัดชุมพร · ตัวกรอง: ${esc(fLabel)}${CLINIC_FILTER?' · คลินิก '+esc(CLINIC_FILTER):''} · ${rows.length} คน</div>
+    </div>
+    <table class="pl">
+      <thead><tr><th class="c" style="width:28px">ที่</th><th style="width:80px">HN</th><th style="width:62px">เลขบัตร<br>4 ตัวท้าย</th>
+        <th class="c" style="width:38px">อายุ</th><th class="c" style="width:38px">เพศ</th><th>คลินิก</th><th>ที่อยู่</th>
+        ${seesAll()&&!VIEW_HCODE?'<th style="width:110px">รพ.สต.</th>':''}<th class="r" style="width:44px">จำนวนยา</th><th style="width:78px">วันส่งข้อมูล</th></tr></thead>
+      <tbody>${rows.map((r,i)=>{ const p=r.patient||{}; return `<tr>
+        <td class="c">${i+1}</td><td>${esc(r.hn||'-')}</td><td class="c">${esc(p.cid_last4||'-')}</td>
+        <td class="c">${esc(p.age??'-')}</td><td class="c">${esc(p.sex||'-')}</td>
+        <td>${esc(clinicText(r)||'-')}</td><td>${esc(addr(p))}</td>
+        ${seesAll()&&!VIEW_HCODE?`<td>${esc(r.hcode_name||rpstName(r.hcode)||'-')}</td>`:''}
+        <td class="r">${medN(r)}</td><td>${thDate(r.refer_date)}</td></tr>`; }).join('')}</tbody>
+      <tfoot><tr><td colspan="${seesAll()&&!VIEW_HCODE?10:9}">
+        พิมพ์โดย ${esc(who)} · ${stamp} · เอกสารนี้มีข้อมูลส่วนบุคคล ใช้เพื่อการดูแลผู้ป่วยเท่านั้น ห้ามเผยแพร่</td></tr></tfoot>
+    </table>`;
+  await audit('print_patient_list', unit, {count:rows.length, filter:FILTER, clinic:CLINIC_FILTER||null,
+    fields:['hn','cid_last4','age','sex','clinic','address','hcode','med_count','refer_date']});
+  window.print();
+});
 
 /* ================= รายงานปรับยา (ฝั่ง รพ.) ================= */
 async function renderAdjReport(){

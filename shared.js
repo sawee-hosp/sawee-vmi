@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.0.0';
+const APP_VERSION = '6.1.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -302,7 +302,8 @@ const isDrugDiscontinued = (drug) => {
   if (!drug) return false;
   const raw = getDrugStatusText(drug).normalize('NFKC').trim().toLowerCase();
   const compact = raw.replace(/\s+/g, '');
-  if (compact.includes('ยกเลิกการใช้') || compact.includes('ยกเลิกใช้') || compact === 'discontinued' || compact === 'inactive' || compact === 'cancelled' || compact === 'canceled') return true;
+  if (drug.discontinued_all === true) return true;
+  if (compact.includes('ยกเลิกการใช้') || compact.includes('ยกเลิกใช้') || compact.includes('ยกเลิกรพ') || compact === 'discontinued' || compact === 'inactive' || compact === 'cancelled' || compact === 'canceled') return true;
   const activeValue = drug?.is_active ?? drug?.active;
   if (activeValue === false || String(activeValue).trim().toLowerCase() === 'false' || String(activeValue).trim() === '0') return true;
   return false;
@@ -310,9 +311,25 @@ const isDrugDiscontinued = (drug) => {
 
 const normalizeDrugMasterStatus = (value) => {
   const raw = safeText(value).normalize('NFKC').trim().toLowerCase().replace(/\s+/g, '');
+  if (raw.includes('ยกเลิกรพ')) return DRUG_LOCK_STATUS.rpst;
   if (raw.includes('ยกเลิกการใช้') || raw.includes('ยกเลิกใช้') || raw === 'discontinued' || raw === 'inactive' || raw === 'cancelled' || raw === 'canceled' || raw === 'false' || raw === '0') return 'ยกเลิกใช้';
   return 'Active';
 };
+
+// สถานะยา 3 ระดับ (v6.1)
+//  active = เบิกได้ทุกหน่วย
+//  rpst   = "ยกเลิก รพ.สต." ล็อกเฉพาะใบเบิก รพ.สต. (ห้องยา/หน่วยงานใน รพ. ยังเบิกได้) — ค่าเดิม 'ยกเลิกใช้' ที่ไม่มี discontinued_all นับเป็นระดับนี้
+//  all    = "ยกเลิกใช้" ไม่มียาให้ใช้จริง ล็อกทุกหน่วย (status 'ยกเลิกใช้' + discontinued_all: true)
+const DRUG_LOCK_LABELS = { active: 'ใช้งาน', rpst: 'ยกเลิก รพ.สต.', all: 'ยกเลิกใช้' };
+const DRUG_LOCK_STATUS = { active: 'Active', rpst: 'ยกเลิก รพ.สต.', all: 'ยกเลิกใช้' };
+const isDrugDiscontinuedAll = (drug) => !!drug && drug.discontinued_all === true;
+const getDrugLockLevel = (drug) => isDrugDiscontinuedAll(drug) ? 'all' : (isDrugDiscontinued(drug) ? 'rpst' : 'active');
+const drugLockPatch = (level) => {
+  const lv = level === 'discontinued' ? 'rpst' : (DRUG_LOCK_STATUS[level] ? level : 'active');
+  return { status: DRUG_LOCK_STATUS[lv], discontinued_all: lv === 'all' };
+};
+// ป้ายสถานะของรายการในใบเบิก (ใช้ข้อมูล master ปัจจุบันก่อน ถ้าไม่มีใช้ค่าที่บันทึกในรายการ)
+const drugLockLabelOf = (drug, item) => DRUG_LOCK_LABELS[drug ? getDrugLockLevel(drug) : (item && item.discontinuedAll ? 'all' : 'rpst')];
 
 // ─── Dispense & Pack Rules ────────────────────────────────
 const getDispenseStep = (item) => {
@@ -604,6 +621,7 @@ const drugSnapshot = (drug, fallback) => {
     maximumQty: getMaximumQty(drug || fallback),
     isDisabledForHospital: false,
     isDiscontinued: drug ? isDrugDiscontinued(drug) : !!fallback.isDiscontinued,
+    discontinuedAll: drug ? isDrugDiscontinuedAll(drug) : !!fallback.discontinuedAll,
     drugStatus: drug ? getDrugStatusText(drug) : safeText(fallback.drugStatus)
   };
 };

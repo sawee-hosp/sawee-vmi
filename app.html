@@ -212,11 +212,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.0.0"></script>
+  <script src="shared.js?v=6.1.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.0.0';
+      var need = '6.1.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -2295,7 +2295,7 @@ const CreateReqView = ({ ctx, round = null }) => {
          if(!manualAddSearch) return;
          const drug = ctx.findDrug(manualAddSearch);
          if(!drug) return ctx.showToast('ไม่พบรหัสยานี้ในระบบ', 'error');
-         if (isDrugDiscontinued(drug)) return ctx.showToast(`${drug.drug_name} มีสถานะ "ยกเลิกใช้" ไม่สามารถเพิ่มเข้ามาเพื่อเบิกได้`, 'error');
+         if (isDrugDiscontinued(drug)) return ctx.showToast(`${drug.drug_name} มีสถานะ "${DRUG_LOCK_LABELS[getDrugLockLevel(drug)]}" ไม่สามารถเพิ่มเข้ามาเพื่อเบิกได้`, 'error');
          const existing = items.find(i => String(i.drugId) === String(drug.drug_id));
          if(existing) {
            ctx.showToast('มีรายการนี้ในใบเบิกอยู่แล้ว ระบบจะเลื่อนไปยังรายการนั้น');
@@ -2793,7 +2793,7 @@ const CreateReqView = ({ ctx, round = null }) => {
             <summary className="font-bold text-slate-600 cursor-pointer select-none"><i className="fa-solid fa-plus mr-2 text-emerald-600"></i>เพิ่มรายการยาที่ไม่อยู่ในใบเบิก</summary>
             <div className="flex gap-2 mt-3 pb-1">
               <input list="all-drugs" className="border border-slate-200 rounded-lg p-2 flex-1 outline-none focus:border-emerald-400" placeholder="พิมพ์ชื่อหรือรหัสยา..." value={manualAddSearch} onChange={e=>setManualAddSearch(e.target.value)} />
-              <datalist id="all-drugs">{ctx.appDb.drugs.map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type]}]{isDrugDiscontinued(d)?' — ยกเลิกใช้':''}</option>)}</datalist>
+              <datalist id="all-drugs">{ctx.appDb.drugs.map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type]}]{isDrugDiscontinued(d)?` — ${DRUG_LOCK_LABELS[getDrugLockLevel(d)]}`:''}</option>)}</datalist>
               <button onClick={handleManualAdd} className="bg-emerald-600 text-white px-4 rounded-lg font-bold">เลือก</button>
             </div>
           </details>
@@ -2858,7 +2858,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                             {item.name}
                             {!isDiscontinued && !isDisabled && badge?.type === 'more' && <span className="no-print ml-1 text-[10px] font-bold text-red-600 border border-red-200 bg-red-50 px-1 rounded">ขอเพิ่ม</span>}
                             {!isDiscontinued && !isDisabled && badge?.type === 'less' && <span className="no-print ml-1 text-[10px] font-bold text-blue-600 border border-blue-200 bg-blue-50 px-1 rounded">ขอลด</span>}
-                            {isDiscontinued && <span className="ml-1 text-[9px] font-bold text-slate-700 border border-slate-400 bg-slate-100 rounded px-1">ยกเลิกใช้</span>}
+                            {isDiscontinued && <span className="ml-1 text-[9px] font-bold text-slate-700 border border-slate-400 bg-slate-100 rounded px-1">{drugLockLabelOf(drug, item)}</span>}
                            
                             {isVaccine && <span className="ml-1 text-[9px] font-bold text-red-600">ไม่ร่วมระบบเบิก</span>}
                             {priceChange && !isVaccine && <span className="no-print ml-1 text-[9px] font-black text-amber-800 border border-amber-300 bg-amber-50 rounded px-1" title={`ใบก่อน ${priceChange.month}/${priceChange.year+543}: ${formatUnitPrice(priceChange.price)} → ปัจจุบัน ${formatUnitPrice(priceChange.current)}`}>ราคาเปลี่ยน {priceChange.pct>=0?'+':''}{priceChange.pct.toFixed(1)}%</span>}
@@ -3054,7 +3054,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                                     </div>
                                  )}
                                  <datalist id="drug-list">
-                                    {[...ctx.appDb.drugs].sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]{isDrugDiscontinued(d)?' — ยกเลิกใช้':''}</option>)}
+                                    {[...ctx.appDb.drugs].sort(sortDrugs).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name} [{d.drug_id}]{isDrugDiscontinued(d)?` — ${DRUG_LOCK_LABELS[getDrugLockLevel(d)]}`:''}</option>)}
                                  </datalist>
                               </td>
                               <td className="p-3">
@@ -3152,6 +3152,42 @@ const CreateReqView = ({ ctx, round = null }) => {
       );
     };
 
+// ===== v6.1 ตำแหน่งผู้ลงนามท้ายใบเบิก รพ.สต. (แก้ได้ต่อใบ และตั้งเป็นค่าประจำ รพ.สต.) =====
+    const SIGN_ROLE_HINTS = ['ผู้เบิก', 'ผู้บังคับบัญชา รพ.สต.', 'ผู้อนุมัติต้นสังกัด (สสอ. / อบจ.)', 'ผู้อนุมัติ', 'ผู้จ่าย', 'ผู้รับ'];
+    const defaultRpstSignRoles = (hosp) => {
+      const name = safeText(safeText(hosp?.hospital_name).replace(/^(โรงพยาบาลส่งเสริมสุขภาพตำบล|รพ\.?\s*สต\.?)/, ''));
+      return ['ผู้เบิก', `ผอ.รพ.สต.${name}`, hosp?.affiliation === 'OPT' ? 'ปฏิบัติราชการแทน นายก อบจ.ชุมพร' : 'สาธารณสุขอำเภอสวี', 'ผู้อนุมัติ', 'ผู้จ่าย', 'ผู้รับ'];
+    };
+    const pickSignRoles = (v) => Array.isArray(v) && v.length === SIGN_ROLE_HINTS.length && v.some(x => safeText(x)) ? v.map(x => safeText(x)) : null;
+    const SignRolesModal = ({ initial, defaults, onClose, onSave }) => {
+      const [rows, setRows] = useState(() => initial.slice());
+      const [asDefault, setAsDefault] = useState(true);
+      const [busy, setBusy] = useState(false);
+      const submit = async () => { setBusy(true); try { await onSave(rows, asDefault); } catch (e) { alert('บันทึกไม่สำเร็จ: ' + (e?.message || e)); } finally { setBusy(false); } };
+      return (
+        <Modal isOpen onClose={() => !busy && onClose()} title="แก้ไขตำแหน่งผู้ลงนามท้ายใบเบิก" maxWidth="max-w-2xl">
+          <div className="space-y-3">
+            <p className="text-sm text-slate-500">แก้ได้ทุกเมื่อ แม้ใบจะล็อกจำนวนแล้ว (ไม่กระทบรายการยา) · ขึ้นบรรทัดใหม่ได้ เช่น ใส่ชื่อ (นาย ก.) บรรทัดแรก แล้วตำแหน่งบรรทัดถัดไป</p>
+            {rows.map((v, i) => (
+              <label key={i} className="block">
+                <span className="text-xs font-bold text-slate-500">แถวที่ {i + 1} · {SIGN_ROLE_HINTS[i]}</span>
+                <textarea id={`sign-role-${i}`} rows={v.includes('\n') ? 2 : 1} value={v} onChange={e => setRows(r => r.map((x, j) => j === i ? e.target.value : x))} placeholder={defaults[i]}
+                  className="w-full mt-1 p-2.5 border rounded-xl text-sm resize-y focus:ring-2 focus:ring-indigo-300 outline-none" />
+              </label>
+            ))}
+            <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600"><input id="sign-as-default" type="checkbox" checked={asDefault} onChange={e => setAsDefault(e.target.checked)} className="w-4 h-4" /> ใช้เป็นค่าประจำของ รพ.สต. นี้ในใบถัดไปด้วย</label>
+            <div className="flex flex-wrap justify-between gap-2 pt-3 border-t">
+              <button onClick={() => setRows(defaults.slice())} disabled={busy} className="px-4 py-2 rounded-xl bg-white border font-bold text-slate-600"><i className="fa-solid fa-rotate-left mr-1"></i>คืนค่าเริ่มต้น</button>
+              <div className="flex gap-2">
+                <button onClick={onClose} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                <button id="sign-save" onClick={submit} disabled={busy} className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold">{busy ? 'กำลังบันทึก...' : 'บันทึก'}</button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      );
+    };
+
 const ViewReqView = ({ ctx }) => {
       const req = ctx.findReq(ctx.currentReqId);
       const [isApproving, setIsApproving] = useState(false);
@@ -3179,6 +3215,7 @@ const ViewReqView = ({ ctx }) => {
       const [reqName, setReqName] = useState(req?.created_by_name || '');
       const [reqPosition, setReqPosition] = useState(req?.created_by_position || userInfo?.position || 'เจ้าหน้าที่');
       const [fiscalTermDraft, setFiscalTermDraft] = useState(() => req ? getEffectiveFiscalTerm(req, ctx.appDb.requisitions) : 1);
+      const [showSignEdit, setShowSignEdit] = useState(false);
       const [isSavingReqNo, setIsSavingReqNo] = useState(false);
       
       const [manualAddSearch, setManualAddSearch] = useState('');
@@ -3594,7 +3631,7 @@ const ViewReqView = ({ ctx }) => {
          if(!selected) return ctx.showToast('กรุณาเลือกยาที่ต้องการเพิ่ม', 'error');
          const drug = ctx.findDrug(selected) || ctx.appDb.drugs.find(d => safeText(d.drug_name).toLowerCase() === selected.toLowerCase());
          if(!drug) return ctx.showToast('ไม่พบยานี้ใน Master Drug กรุณาเลือกจากรายการ', 'error');
-         if(isDrugDiscontinued(drug)) return ctx.showToast(`${drug.drug_name} มีสถานะ "ยกเลิกใช้" ไม่สามารถเพิ่มเข้ามาเพื่อเบิกได้`, 'error');
+         if(isDrugDiscontinued(drug)) return ctx.showToast(`${drug.drug_name} มีสถานะ "${DRUG_LOCK_LABELS[getDrugLockLevel(drug)]}" ไม่สามารถเพิ่มเข้ามาเพื่อเบิกได้`, 'error');
          if(editableItems.find(i => String(i.drugId) === String(drug.drug_id))) return ctx.showToast('มีรายการนี้ในใบเบิกอยู่แล้ว', 'error');
          if(String(drug.type || '') === '6') return ctx.showToast('วัคซีนเป็นรายการไม่ร่วมระบบเบิก จึงไม่สามารถเพิ่มจำนวนเบิกผ่านเมนูนี้ได้', 'error');
 
@@ -4148,7 +4185,24 @@ const ViewReqView = ({ ctx }) => {
       let grandTotalPrice = 0;
       let globalItemIndex = 0;
 
-      const directorText = hosp?.affiliation === 'OPT' ? `ผอ.${hospNameClean}` : `ผอ.รพ.สต.${hospNameClean}`;
+      // ตำแหน่งผู้ลงนามท้ายใบ: ใบนี้ → ค่าประจำ รพ.สต. → ค่าเริ่มต้น (แก้ได้เสมอแม้ใบถูกล็อก เพราะไม่กระทบจำนวนยา)
+      const signDefaults = defaultRpstSignRoles(hosp);
+      const signRoles = pickSignRoles(req.sign_roles) || pickSignRoles(hosp?.sign_roles) || signDefaults;
+      const canEditSign = isAdmin || String(ctx.currentUser?.hospital_id || '') === String(req.hospitalId);
+      const saveSignRoles = async (roles, asHospitalDefault) => {
+        const clean = roles.map(r => safeText(r).slice(0, 120));
+        const stamp = firebase.firestore.FieldValue.serverTimestamp();
+        await db.collection('requisitions').doc(String(req.id)).update({ sign_roles: clean, sign_roles_updated_at: stamp, sign_roles_updated_by: safeText(ctx.currentUser?.name) });
+        if (asHospitalDefault && hosp?.hospital_id) {
+          try { await db.collection('master_hospitals').doc(String(hosp.hospital_id)).update({ sign_roles: clean, sign_roles_updated_at: stamp }); }
+          catch (e) { ctx.showToast('บันทึกในใบนี้แล้ว แต่ตั้งเป็นค่าประจำ รพ.สต. ไม่สำเร็จ: ' + (e?.message || e) + ' (ตรวจว่า deploy กฎ v6.1 แล้ว)', 'error'); }
+        }
+        ctx.setAppDb(prev => ({ ...prev,
+          requisitions: (prev.requisitions || []).map(r => String(r.id) === String(req.id) ? { ...r, sign_roles: clean } : r),
+          hospitals: asHospitalDefault ? (prev.hospitals || []).map(h => String(h.hospital_id) === String(hosp?.hospital_id) ? { ...h, sign_roles: clean } : h) : prev.hospitals }));
+        ctx.showToast('บันทึกตำแหน่งผู้ลงนามแล้ว');
+        setShowSignEdit(false);
+      };
 
       return (
         <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print-safe-wrapper print:p-0 print:border-none print:shadow-none w-full relative">
@@ -4355,7 +4409,7 @@ const ViewReqView = ({ ctx }) => {
                                      {/* ⭐️ ป้าย (ขอเพิ่ม) สีแดง */}
                                      {!isDiscontinued && !isDisabled && it.requestMore > 0 && <span className="text-red-600 font-bold ml-1 text-[11px] border border-red-200 bg-red-50 px-1 rounded">ขอเพิ่ม</span>}
                                      {!isDiscontinued && !isDisabled && it.requestLess > 0 && <span className="text-blue-600 font-bold ml-1 text-[11px] border border-blue-200 bg-blue-50 px-1 rounded">ขอลด</span>}
-                                     {isDiscontinued && <span className="text-slate-700 font-bold ml-1 text-[9px] border border-slate-400 bg-slate-100 rounded px-1">ยกเลิกใช้</span>}
+                                     {isDiscontinued && <span className="text-slate-700 font-bold ml-1 text-[9px] border border-slate-400 bg-slate-100 rounded px-1">{drugLockLabelOf(drug, it)}</span>}
                                      {isVaccine && <span className="text-red-600 font-bold ml-1 text-[9px] border border-red-300 bg-red-50 rounded px-1">ไม่ร่วมระบบเบิก</span>}
                                      {it.maximumApplied && getMaximumQty(it)>0 && !isVaccine && !isDiscontinued && <span className="text-amber-800 font-black ml-1 text-[9px] border border-amber-400 bg-amber-100 rounded px-1">จ่ายตามยอดสูงสุด</span>}
                                      
@@ -4390,8 +4444,8 @@ const ViewReqView = ({ ctx }) => {
                                      <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : (isDisabled || isDiscontinued) ? '-' : formatUnitPrice(it.price)}</span>
                                   </td>
                                   <td className="text-right pr-1 font-semibold">
-                                     <span className="no-print">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDiscontinued ? 'ยกเลิกใช้' : itemValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
-                                     <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDiscontinued ? 'ยกเลิกใช้' : itemValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+                                     <span className="no-print">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDiscontinued ? drugLockLabelOf(drug, it) : itemValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+                                     <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDiscontinued ? drugLockLabelOf(drug, it) : itemValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
                                   </td>
                                   <td></td>
                                   <td className="text-center font-mono text-gray-600">{it.drugId}</td>
@@ -4432,20 +4486,18 @@ const ViewReqView = ({ ctx }) => {
                 </table>
              </div>
 
-             <div className="flex flex-col text-[9pt] px-4 w-full break-inside-avoid mt-4 print:mt-4">
-                 {[
-                     `ผู้เบิก`,
-                     directorText,
-                     hosp?.affiliation === 'OPT' ? 'รักษาการแทน นายก อบจ.ชุมพร' : 'สาธารณสุขอำเภอสวี',
-                     `ผู้อนุมัติ`,
-                     `ผู้จ่าย`,
-                     `ผู้รับ`
-                 ].map((role, idx) => (
+             {canEditSign && (
+                 <div className="no-print flex justify-end mb-1">
+                     <button id="edit-sign-roles" onClick={() => setShowSignEdit(true)} className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-100"><i className="fa-solid fa-signature mr-1"></i>แก้ไขตำแหน่งผู้ลงนาม</button>
+                 </div>
+             )}
+             <div className="flex flex-col text-[9pt] px-4 w-full break-inside-avoid mt-4 print:mt-4" id="sign-block">
+                 {signRoles.map((role, idx) => (
                      <div key={idx} className="flex w-full mb-1 break-inside-avoid text-[9pt] justify-between">
                          <div className="w-1/2 flex items-end pl-8">
-                             <span className="w-9">ลงชื่อ</span>
-                             <span>.................................................</span>
-                             <span className="ml-2 w-40">{role}</span>
+                             <span className="w-9 shrink-0">ลงชื่อ</span>
+                             <span className="shrink-0">.................................................</span>
+                             <span className="ml-2 min-w-[10rem] whitespace-pre-line leading-tight">{role}</span>
                          </div>
                          <div className="w-1/2 flex items-end justify-center">
                              <span className="mr-2 text-right">วันที่</span>
@@ -4459,6 +4511,7 @@ const ViewReqView = ({ ctx }) => {
                  พิมพ์เมื่อ: {new Date().toLocaleString('th-TH')}
              </div>
           </div>
+          {showSignEdit && <SignRolesModal initial={signRoles} defaults={signDefaults} onClose={() => setShowSignEdit(false)} onSave={saveSignRoles} />}
           {showInvsModal && invsPreflight && (
             <Modal title="ตรวจสอบก่อนส่งเข้า INVS (Admin)" isOpen={true} onClose={()=>!isInvsBusy && setShowInvsModal(false)} maxWidth="max-w-6xl">
               <div className="space-y-4">
@@ -6376,7 +6429,7 @@ const AdminConfigView = ({ ctx }) => {
              drug_id: safeText(data.drug_id), drug_name: safeText(data.drug_name), type: safeText(data.type, '1') || '1',
              pack_size: packSize, usage_multiplier: Math.max(1, toNonNegativeNumber(data.usage_multiplier, 1)), dispense_step: lockedDispenseStep, maximum_qty: maximumQty,
              price: toNonNegativeNumber(data.price), unit_id: safeText(data.unit_id), unpacked, fuzzy: finalFuzzy,
-             status: data.status === 'discontinued' ? 'ยกเลิกใช้' : 'Active',
+             ...drugLockPatch(data.status),
              needs_vmi_setup: false,
              app_master_reviewed_at: firebase.firestore.FieldValue.serverTimestamp(),
              schema_version: APP_SCHEMA_VERSION
@@ -6420,7 +6473,7 @@ const AdminConfigView = ({ ctx }) => {
         let patch = {};
         try {
           if (field === 'status') {
-            patch.status = rawValue === 'discontinued' ? 'ยกเลิกใช้' : 'Active';
+            Object.assign(patch, drugLockPatch(rawValue));
           } else if (field === 'usage_multiplier') {
             patch.usage_multiplier = Math.max(1, toNonNegativeNumber(rawValue, 1));
           } else if (field === 'unit_id') {
@@ -6551,7 +6604,10 @@ const AdminConfigView = ({ ctx }) => {
                   : 0;
                 const existingDrug = ctx.findDrug(row.drug_id);
                 const incomingStatus = safeText(row.status || row.drug_status || row.use_status || row.active || row.is_active);
-                const status = incomingStatus ? normalizeDrugMasterStatus(incomingStatus) : (isDrugDiscontinued(existingDrug) ? 'ยกเลิกใช้' : 'Active');
+                const existingLevel = getDrugLockLevel(existingDrug);
+                const status = incomingStatus ? normalizeDrugMasterStatus(incomingStatus) : DRUG_LOCK_STATUS[existingLevel];
+                // ระดับ "ยกเลิกใช้ (ทุกหน่วย)" ตั้งได้จากหน้าแอดมินเท่านั้น: คงไว้ถ้าไฟล์ไม่ได้บอกว่าใช้งาน
+                const discontinuedAll = existingLevel === 'all' && status !== 'Active';
                 return {
                   type: 'set', ref: db.collection('master_drugs').doc(row.drug_id),
                   data: {
@@ -6560,7 +6616,7 @@ const AdminConfigView = ({ ctx }) => {
                     usage_multiplier: Math.max(1, toNonNegativeNumber(row.usage_multiplier, 1)), dispense_step: lockedDispenseStep,
                     maximum_qty: normalizeMaximumQty(row.maximum_qty ?? row.maximum ?? row.max_qty, {pack_size:packSize,unpacked:isUnpacked,dispense_step:lockedDispenseStep}),
                     fuzzy: cleanFuzzyAliases(row.fuzzy, row.drug_name).join(','),
-                    status,
+                    status, discontinued_all: discontinuedAll,
                     schema_version: APP_SCHEMA_VERSION
                   }
                 };
@@ -6629,7 +6685,7 @@ const AdminConfigView = ({ ctx }) => {
                       <td className="p-4 font-mono text-purple-600 text-xs">{d.hosxp_code || <span className="text-slate-300">-</span>}{d.invs_location ? <div className="font-sans font-bold text-teal-700 mt-1" title="ตำแหน่งยาใน INVS"><i className="fa-solid fa-location-dot mr-1"></i>{d.invs_location}</div> : null}{d.invs_keywords ? <div className="font-sans text-slate-400 mt-0.5" title="คำค้นหาใน INVS">{d.invs_keywords}</div> : null}</td>
                       <td className="p-4 font-bold text-slate-600">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type] || DEFAULT_DRUG_TYPES['1']}</td>
                       <td className="p-4 font-bold text-slate-800"><div>{d.drug_name}</div>{d.needs_vmi_setup && <div className="mt-1"><span className="bg-amber-100 text-amber-800 border border-amber-200 rounded px-2 py-0.5 text-[10px] font-black">ใหม่จาก INVS • รอตั้งค่า VMI</span></div>}{safeText(d.master_sync_source)==='INVS' && <div className="text-[9px] text-emerald-600 mt-1">INVS Master Sync</div>}</td>
-                      <td className="p-3 text-center"><select value={isDrugDiscontinued(d)?'discontinued':'active'} onChange={e=>handleInlineDrugUpdate(d,'status',e.target.value)} className={`w-[105px] rounded-lg border px-2 py-1.5 text-[11px] font-black outline-none ${isDrugDiscontinued(d)?'bg-slate-700 text-white border-slate-700':'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><option value="active">Active</option><option value="discontinued">ยกเลิกใช้</option></select></td>
+                      <td className="p-3 text-center"><select aria-label={`สถานะ ${d.drug_name}`} value={getDrugLockLevel(d)} onChange={e=>handleInlineDrugUpdate(d,'status',e.target.value)} className={`w-[118px] rounded-lg border px-2 py-1.5 text-[11px] font-black outline-none ${getDrugLockLevel(d)==='all'?'bg-slate-700 text-white border-slate-700':getDrugLockLevel(d)==='rpst'?'bg-amber-50 text-amber-800 border-amber-300':'bg-emerald-50 text-emerald-700 border-emerald-200'}`}><option value="active">Active</option><option value="rpst">ยกเลิก รพ.สต.</option><option value="all">ยกเลิกใช้</option></select></td>
                       <td className="p-4 whitespace-normal">
                         <div className="flex flex-wrap gap-1 max-w-[250px]">
                            {/* ⭐️ แสดง Fuzzy แบบป้ายในตาราง */}
@@ -6852,9 +6908,10 @@ const AdminConfigView = ({ ctx }) => {
                       
                       <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                         <label className="text-sm font-bold text-slate-700 block mb-1">สถานะการใช้ยา</label>
-                        <select name="status" defaultValue={isDrugDiscontinued(editTarget.data) ? 'discontinued' : 'active'} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold">
+                        <select name="status" defaultValue={getDrugLockLevel(editTarget.data)} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold">
                           <option value="active">Active — ใช้งาน/เบิกได้ทุก รพ.สต.</option>
-                          <option value="discontinued">ยกเลิกใช้ — แสดงยอดใช้ได้ แต่จำนวนจ่ายเป็น 0</option>
+                          <option value="rpst">ยกเลิก รพ.สต. — ล็อกเฉพาะใบเบิก รพ.สต. (ห้องยา/หน่วยงานใน รพ. ยังเบิกได้)</option>
+                          <option value="all">ยกเลิกใช้ — ไม่มียาให้ใช้แล้ว ล็อกทุกหน่วย</option>
                         </select>
                         <p className="text-[10px] text-slate-500 mt-1">สถานะนี้ใช้ร่วมกันทุก รพ.สต. ไม่มีการเปิด/ปิดยาแยกรายหน่วยงาน</p>
                       </div>
@@ -8052,7 +8109,8 @@ const AdminConfigView = ({ ctx }) => {
       const disp = toNonNegativeNumber(it.dispenseQty ?? req);
       return { req, disp };
     };
-    const summaryValue = (it, qty) => (isNonBillableInRequisition(it) ? 0 : (qty / safePackSize(it.packSize)) * toNonNegativeNumber(it.price));
+    // รพ.สต.: ยาวัคซีน/ยกเลิกไม่คิดมูลค่า · ภายใน รพ.: ไม่คิดเฉพาะวัคซีนและยา "ยกเลิกใช้" ทุกหน่วย
+    const summaryValue = (it, qty, src) => ((src === 'rpst' ? isNonBillableInRequisition(it) : (String(it.type) === '6' || !!it.discontinuedAll)) ? 0 : (qty / safePackSize(it.packSize)) * toNonNegativeNumber(it.price));
     const downloadCsv = (filename, rows) => {
       const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
       const blob = new Blob(['﻿' + rows.map(r => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
@@ -8112,7 +8170,7 @@ const AdminConfigView = ({ ctx }) => {
       }, [docs, fy]);
       const shownRounds = roundNo === 'all' ? roundCols : roundCols.filter(r => roundNo === 'none' ? r === 0 : r === Number(roundNo));
 
-      const docValue = (d) => d.items.reduce((s, it) => { const q = summaryQty(it, d.src); return s + summaryValue(it, d.status === 'Completed' ? q.disp : q.req); }, 0);
+      const docValue = (d) => d.items.reduce((s, it) => { const q = summaryQty(it, d.src); return s + summaryValue(it, d.status === 'Completed' ? q.disp : q.req, d.src); }, 0);
       const unitRows = useMemo(() => {
         const m = new Map();
         filtered.forEach(d => {
@@ -8145,7 +8203,7 @@ const AdminConfigView = ({ ctx }) => {
           const drug = ctx.findDrug(id);
           if (!m.has(id)) m.set(id, { id, name: drug?.drug_name || it.name || id, unit: it.unit || ctx.findUnitName(drug), pack: safePackSize(it.packSize ?? drug?.pack_size), type: it.type || drug?.type, byType: { rpst: 0, dept: 0, pharmacy: 0 }, req: 0, qty: 0, value: 0, units: new Set() });
           const r = m.get(id);
-          r.byType[d.type] += qty; r.req += q.req; r.qty += qty; r.value += summaryValue(it, qty); r.units.add(d.unitKey);
+          r.byType[d.type] += qty; r.req += q.req; r.qty += qty; r.value += summaryValue(it, qty, d.src); r.units.add(d.unitKey);
         }));
         const k = normalizeForMatch(drugSearch);
         return [...m.values()].filter(r => !k || normalizeForMatch(r.name + ' ' + r.id).includes(k)).sort((a, b) => b.value - a.value);

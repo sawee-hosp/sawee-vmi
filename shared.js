@@ -1,5 +1,5 @@
 // ============================================================
-// Sawee Rxfill — shared.js (v5.9.0)
+// Sawee Rxfill — shared.js (v6.0.0)
 // ไฟล์รวม: Firebase init, ค่าคงที่, utility functions
 // ใช้ร่วมกันทุกหน้า — ห้ามมี JSX (ไม่ผ่าน Babel)
 // ============================================================
@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '5.9.0';
+const APP_VERSION = '6.0.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -648,19 +648,39 @@ const getReqPermissions = (req, user, opts) => {
 };
 
 // ─── INVS Bridge ──────────────────────────────────────────
+// Bridge หลายตำแหน่ง: เครื่องนี้ (127.0.0.1) ก่อน ถ้าไม่มีให้ใช้เครื่อง XAMPP กลางในวง LAN
+const INVS_BRIDGE_LAN_URL = 'http://192.168.40.90/SaweeRefill/invs_api.php';
+const INVS_BRIDGE_URLS = [INVS_BRIDGE_URL, INVS_BRIDGE_LAN_URL];
+const bridgeFetch = async (url, init) => {
+  const isLoopback = /^http:\/\/(127\.0\.0\.1|localhost)/.test(url);
+  // Chrome (Local Network Access) ต้องระบุ targetAddressSpace เพื่อเรียก IP ในวง LAN จากหน้า https
+  try { return await fetch(url, Object.assign({}, init, { targetAddressSpace: isLoopback ? 'loopback' : 'local' })); }
+  catch (e) { if (e && e.name === 'TypeError' && /targetAddressSpace|enum/i.test(String(e.message))) return await fetch(url, init); throw e; }
+};
 const callInvsBridge = async (action, requisitionId, extra) => {
   if (!auth.currentUser) throw new Error('กรุณา Login ใหม่ก่อนเชื่อม INVS');
   const idToken = await auth.currentUser.getIdToken(true);
-  var response;
-  try {
-    response = await fetch(INVS_BRIDGE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
-      body: JSON.stringify(Object.assign({}, extra || {}, { action: action, requisition_id: requisitionId, firebase_id_token: idToken }))
-    });
-  } catch (networkErr) {
-    var e = new Error('ติดต่อ INVS Bridge ไม่ได้ กรุณาเปิด XAMPP Apache และตรวจ http://127.0.0.1/SaweeRefill/invs_api.php?action=health');
-    e.cause = networkErr;
+  const init = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
+    body: JSON.stringify(Object.assign({}, extra || {}, { action: action, requisition_id: requisitionId, firebase_id_token: idToken }))
+  };
+  var preferred = 0;
+  try { preferred = Number(sessionStorage.getItem('rxfill_bridge_idx') || 0) || 0; } catch (e) { /* storage blocked */ }
+  const order = [preferred].concat(INVS_BRIDGE_URLS.map(function (_, i) { return i; }).filter(function (i) { return i !== preferred; }));
+  var response = null, usedUrl = '', lastErr = null;
+  for (var k = 0; k < order.length; k++) {
+    const url = INVS_BRIDGE_URLS[order[k]];
+    try {
+      response = await bridgeFetch(url, init);
+      usedUrl = url;
+      try { sessionStorage.setItem('rxfill_bridge_idx', String(order[k])); } catch (e) { /* ignore */ }
+      break;
+    } catch (networkErr) { lastErr = networkErr; response = null; }
+  }
+  if (!response) {
+    var e = new Error('ติดต่อ INVS Bridge ไม่ได้ทั้งเครื่องนี้ (127.0.0.1) และเครื่องกลาง (192.168.40.90) — ตรวจว่าเปิด XAMPP Apache แล้ว และถ้าใช้เครื่องกลาง ให้อนุญาต "เนื้อหาที่ไม่ปลอดภัย (Insecure content)" สำหรับเว็บนี้ใน Chrome');
+    e.cause = lastErr;
     throw e;
   }
   var data = null;
@@ -674,8 +694,10 @@ const callInvsBridge = async (action, requisitionId, extra) => {
     var err = new Error(message);
     err.payload = data;
     err.httpStatus = response.status;
+    err.bridgeUrl = usedUrl;
     throw err;
   }
+  data._bridge_url = usedUrl;
   return data;
 };
 
@@ -844,16 +866,33 @@ const buildHosxpIndex = (drugs) => {
 // ปริมาณที่แนะนำให้เบิก (ห้องยา)
 //   dailyAvg = usage / days,  target = dailyAvg × coverDays
 //   need     = target − onHand − inTransit  → ปัดขึ้นตามรอบจ่าย/แพ็ค, ไม่เกิน Maximum
+// ปริมาณที่แนะนำให้เบิก (ห้องยา)
+//   เครดิต = คงเหลือจากใบก่อน − ยอดใช้รอบนี้ (onHand)
+//   ถ้าเครดิต + ค้างรับ พอใช้ถึงรอบหน้า (dailyAvg × roundDays) → แนะนำ "ข้ามรอบนี้"
+//   ถ้าต้องเบิกแต่มูลค่าน้อยกว่า minOrderValue และยังพอใช้ ≥ ครึ่งรอบ → แนะนำ "รวบไปรอบหน้า"
+//   ไม่งั้นเบิกให้ถึงเป้า (dailyAvg × coverDays) ปัดขึ้นตามแพ็ค — การปัดแพ็คทำให้ยาหมุนช้าได้ยอดควบหลายรอบเอง
 const calcPharmacySuggestion = (p) => {
   const days = Math.max(1, toNonNegativeNumber(p.days, 1));
   const usage = toNonNegativeNumber(p.usage);
   const cover = Math.max(1, toNonNegativeNumber(p.coverDays, INTERNAL_DEFAULT_COVER_DAYS));
+  const roundDays = Math.max(1, toNonNegativeNumber(p.roundDays, cover));
   const dailyAvg = usage / days;
   const target = Math.ceil(dailyAvg * cover - 0.000001);
-  const need = Math.max(0, target - toNonNegativeNumber(p.onHand) - toNonNegativeNumber(p.inTransit));
+  const available = toNonNegativeNumber(p.onHand) + toNonNegativeNumber(p.inTransit);
+  const roundNeed = dailyAvg * roundDays;
   const item = p.item || {};
-  const suggested = need > 0 ? roundDispenseQty(need, item) : 0;
-  return { dailyAvg: dailyAvg, target: target, need: need, suggested: suggested };
+  const pack = safePackSize(item.packSize);
+  const need = Math.max(0, target - available);
+  let suggested = need > 0 ? roundDispenseQty(need, item) : 0;
+  let skipReason = '';
+  if (usage > 0 && suggested > 0 && available >= roundNeed) { suggested = 0; skipReason = 'พอใช้ถึงรอบหน้า'; }
+  const minValue = toNonNegativeNumber(p.minOrderValue);
+  if (suggested > 0 && minValue > 0 && available >= roundNeed / 2) {
+    const value = (suggested / pack) * toNonNegativeNumber(item.price);
+    if (value < minValue) { suggested = 0; skipReason = 'ยอดน้อย รวบไปรอบหน้า'; }
+  }
+  const coverRounds = roundNeed > 0 ? (available + suggested) / roundNeed : 0;
+  return { dailyAvg: dailyAvg, target: target, need: need, suggested: suggested, skip: !!skipReason, skipReason: skipReason, roundNeed: roundNeed, coverRounds: coverRounds };
 };
 
 const buildInternalReqId = (deptId) => {
@@ -940,71 +979,91 @@ const buildInternalReqFormHtml = (opts) => {
   const locOf = opts.locOf || function () { return ''; };
   const esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   const money = function (v) { return toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
-  const qty = function (q, pack) { const s = formatQty(q, pack); return s === '0' ? '-' : s; };
+  const qty = function (q, pack) { const s = formatQty(q, pack); return s === '0' ? '0' : s; };
   const parts = thaiDateParts(opts.formDate);
   const items = (req.items || []).filter(function (it) { return toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty) > 0 || toNonNegativeNumber(it.dispenseQty) > 0; });
+  // จัดกลุ่มตามหมวด แล้วเรียงตามตำแหน่งยา (ไม่มีตำแหน่งไว้ท้าย) เพื่อให้ผู้จัดยาเดินหยิบตามลำดับ
   const groups = {};
   items.forEach(function (it) { const k = safeText(it.type, '1') || '1'; (groups[k] = groups[k] || []).push(it); });
+  const byLoc = function (a, b) {
+    const la = safeText(locOf(a.drugId)), lb = safeText(locOf(b.drugId));
+    if (!la !== !lb) return la ? -1 : 1;
+    return la.localeCompare(lb, 'th', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'th');
+  };
   const typeKeys = Object.keys(groups).sort(function (a, b) { return Number(a) - Number(b); });
-  const colCount = isPharmacy ? 11 : 10;
+  const colCount = isPharmacy ? 10 : 9;
+  const valueOf = function (it) {
+    const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
+    const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
+    return (disp / safePackSize(it.packSize)) * toNonNegativeNumber(it.price);
+  };
   let n = 0, total = 0;
   const body = typeKeys.map(function (k) {
-    const rows = groups[k].map(function (it) {
+    const list = groups[k].slice().sort(byLoc);
+    const subtotal = list.reduce(function (s, it) { return s + valueOf(it); }, 0);
+    total += subtotal;
+    const rows = list.map(function (it) {
       n++;
       const pack = safePackSize(it.packSize);
       const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
       const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
-      const value = (disp / pack) * toNonNegativeNumber(it.price);
-      total += value;
-      const remain = isPharmacy ? qty(Math.max(0, toNonNegativeNumber(it.onHand)), pack) : '';
       return '<tr>' +
         '<td class="c">' + n + '</td>' +
-        '<td class="l">' + esc(it.name) + '</td>' +
-        '<td class="c">' + esc(it.unit) + (pack > 1 ? '<div class="sm">(' + pack + ')</div>' : '') + '</td>' +
+        '<td class="name">' + esc(it.name) + '</td>' +
+        '<td class="c muted">' + esc(it.unit) + (pack > 1 ? '<div class="xs">บรรจุ ' + pack + '</div>' : '') + '</td>' +
         (isPharmacy ? '<td class="c">' + qty(it.usage, pack) + '</td>' : '') +
-        '<td class="c b">' + qty(req0, pack) + '</td>' +
+        '<td class="c">' + qty(req0, pack) + '</td>' +
         '<td class="c b">' + qty(disp, pack) + '</td>' +
         '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
-        '<td class="r">' + money(value) + '</td>' +
-        '<td class="c">' + remain + '</td>' +
-        '<td class="c mono">' + esc(it.drugId) + '</td>' +
-        '<td class="c loc">' + esc(locOf(it.drugId) || '') + '</td>' +
+        '<td class="r b">' + money(valueOf(it)) + '</td>' +
+        '<td class="c">' + (isPharmacy ? qty(Math.max(0, toNonNegativeNumber(it.onHand)), pack) : '') + '</td>' +
+        '<td class="c code">' + esc(it.drugId) + '</td>' +
         '</tr>';
     }).join('');
-    return '<tr class="grp"><td colspan="' + colCount + '">' + esc(types[k] || ('หมวด ' + k)) + '</td></tr>' + rows;
+    return '<tr class="grp"><td colspan="' + colCount + '"><span>' + esc(types[k] || ('หมวด ' + k)) + '</span><span class="sub">' + money(subtotal) + ' บาท</span></td></tr>' + rows;
   }).join('');
+  const now = new Date();
+  const printedAt = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds());
   const sign = function (label, name, pos) {
-    return '<div class="sig"><div style="white-space:nowrap">ลงชื่อ ................................ ' + label + '</div><div>(' + (name ? esc(name) : '................................') + ')</div>' + (pos ? '<div>' + esc(pos) + '</div>' : '<div>ตำแหน่ง ................................</div>') + '</div>';
+    return '<div class="sig"><div class="nw">ลงชื่อ ................................ ' + label + '</div><div>(' + (name ? esc(name) : '................................') + ')</div>' + (pos ? '<div>' + esc(pos) + '</div>' : '<div>ตำแหน่ง ................................</div>') + '</div>';
   };
-  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบเบิกวัสดุ/เวชภัณฑ์ ' + esc(opts.formNo) + '</title><style>' +
-    "@font-face{font-family:'THSarabunNew';src:url('" + INTERNAL_FORM_FONT_URL + "') format('truetype');font-weight:400}" +
-    "@font-face{font-family:'THSarabunNew';src:url('" + INTERNAL_FORM_FONT_URL + "') format('truetype');font-weight:700}" +
-    '@page{size:A4 portrait;margin:12mm 10mm 12mm 14mm}' +
-    "body{font-family:'THSarabunNew','TH SarabunPSK','TH Sarabun New',sans-serif;font-size:16pt;line-height:1.15;color:#000;margin:0}" +
-    'h1{text-align:center;font-size:26pt;font-weight:700;margin:0 0 4pt}' +
-    '.meta{text-align:right}.meta div{margin:0}.to{margin-top:8pt}.intro{text-indent:2.5cm;margin:4pt 0 8pt}' +
-    'table{width:100%;border-collapse:collapse;font-size:14pt}th,td{border:1px solid #000;padding:1pt 4pt;vertical-align:top}' +
-    'th{font-weight:700;text-align:center;background:#f2f2f2;line-height:1.05}' +
-    'tr{page-break-inside:avoid}thead{display:table-header-group}' +
-    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.l{text-align:left}.b{font-weight:700}.mono{font-size:12pt}' +
-    '.sm{font-size:11pt;line-height:1}.loc{font-size:11pt}.grp td{font-weight:700;background:#fafafa}' +
-    '.tot td{font-weight:700}.note{font-size:12pt;margin-top:3pt}' +
-    '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:18pt 30pt;margin-top:24pt;text-align:center;page-break-inside:avoid}' +
+  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบเบิกวัสดุ/เวชภัณฑ์ ' + esc(opts.formNo) + '</title>' +
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
+    '<style>' +
+    '@page{size:A4 portrait;margin:12mm 10mm 14mm 10mm}' +
+    "*{box-sizing:border-box}body{font-family:'Sarabun','Tahoma',sans-serif;font-size:12.5px;line-height:1.45;color:#111;margin:0}" +
+    'h1{text-align:center;font-size:19px;font-weight:700;margin:0 0 6px}' +
+    '.meta{text-align:right}.meta b{display:inline-block;min-width:3.5em;text-align:center;border-bottom:1px dotted #555;font-weight:700}' +
+    '.to{margin-top:6px}.intro{text-indent:2.5em;margin:2px 0 8px}.intro b{font-weight:700}' +
+    'table{width:100%;border-collapse:collapse}' +
+    '.items{font-size:10.5px}.items th,.items td{border:1px solid #444;padding:3px 4px;vertical-align:middle}' +
+    '.items th{background:#eee;font-weight:700;text-align:center;line-height:1.25}' +
+    '.items tr{page-break-inside:avoid}.items thead{display:table-header-group}' +
+    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.muted{color:#333}' +
+    ".code{font-family:Consolas,'Courier New',monospace;font-size:9.5px;color:#555}.xs{font-size:8.5px;color:#666;line-height:1.1}" +
+    '.grp td{background:#f2f2f2;font-weight:700}.grp .sub{float:right}' +
+    '.note td{font-size:10.5px}.note b{font-weight:700}' +
+    '.totals{margin-top:10px;font-size:12px}.totals td{border:1px solid #444;padding:5px 8px}.totals th{border:1px solid #444;background:#eee;font-weight:700;text-align:center;width:50%;padding:5px 8px}' +
+    '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
+    '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:22px;text-align:center;page-break-inside:avoid;font-size:12.5px}.nw{white-space:nowrap}' +
+    '.stamp{position:fixed;right:0;bottom:-8mm;font-size:9px;color:#666}' +
     '</style></head><body>' +
     '<h1>ใบเบิกวัสดุ/เวชภัณฑ์</h1>' +
-    '<div class="meta"><div>เลขที่ ' + esc(opts.formNo) + '</div><div>วันที่ ' + esc(parts.day) + ' เดือน ' + esc(parts.month) + ' ปี ' + esc(parts.year) + '</div></div>' +
+    '<div class="meta"><div>เลขที่ <b>' + esc(opts.formNo) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +
     '<div class="to">เรียน ผู้อำนวยการโรงพยาบาลสวี</div>' +
-    '<div class="intro">ด้วย' + esc(deptSentencePrefix(opts.deptName || req.dept_name)) + ' มีความประสงค์จะขอเบิกวัสดุ/เวชภัณฑ์ เพื่อใช้ในราชการดังรายการต่อไปนี้</div>' +
-    '<table><thead><tr>' +
-    '<th style="width:5%">ลำดับที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
-    (isPharmacy ? '<th style="width:8%">จำนวนที่ใช้</th>' : '') +
-    '<th style="width:8%">จำนวนเบิก</th><th style="width:8%">จำนวนจ่าย</th><th style="width:8%">ราคา/หน่วย</th><th style="width:10%">มูลค่า (บาท)</th>' +
-    '<th style="width:7%">คงเหลือ</th><th style="width:7%">รหัส</th><th style="width:7%">ตำแหน่งยา</th>' +
+    '<div class="intro">ด้วย<b>' + esc(deptSentencePrefix(opts.deptName || req.dept_name)) + '</b> มีความประสงค์จะขอเบิกวัสดุ/เวชภัณฑ์ เพื่อใช้ในราชการดังรายการต่อไปนี้</div>' +
+    '<table class="items"><thead><tr>' +
+    '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
+    (isPharmacy ? '<th style="width:8%">จำนวน<br>ที่ใช้</th>' : '') +
+    '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:7%">ราคา/<br>หน่วย</th><th style="width:10%">มูลค่า<br>(บาท)</th>' +
+    '<th style="width:7%">' + (isPharmacy ? 'เครดิต<br>คงเหลือ' : 'คง<br>เหลือ') + '</th><th style="width:7%">รหัส</th>' +
     '</tr></thead><tbody>' + body +
-    '<tr class="tot"><td colspan="' + (isPharmacy ? 7 : 6) + '" class="r">รวม ' + n + ' รายการ</td><td class="r">' + money(total) + '</td><td colspan="3"></td></tr>' +
+    '<tr class="note"><td colspan="' + colCount + '"><b>หมายเหตุ:</b> ข้อมูลยา จำนวนเต็มคือจำนวนหน่วยเบิกหลัก และเลขในวงเล็บคือจำนวนที่แตกออกจากหน่วยเบิกหลักตามขนาดบรรจุ' + (req.note ? ' · ' + esc(req.note) : '') + '</td></tr>' +
     '</tbody></table>' +
-    '<div class="note">หมายเหตุ: จำนวนเต็มคือหน่วยเบิกหลัก เลขในวงเล็บคือหน่วยย่อยที่แตกออกจากหน่วยหลัก (ตามขนาดบรรจุในคอลัมน์รูปแบบยา)' + (req.note ? ' · ' + esc(req.note) : '') + '</div>' +
+    '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + n + ' รายการ</td></tr><tr><th>รวมเป็นเงินทั้งสิ้น:</th><td class="big">' + money(total) + ' บาท</td></tr></table>' +
     '<div class="sigs">' + sign('ผู้เบิก', req.created_by_name, req.created_by_position) + sign('ผู้อนุมัติ', '', '') + sign('ผู้จ่าย', req.approved_by_name, '') + sign('ผู้รับ', '', '') + '</div>' +
+    '<div class="stamp">พิมพ์เมื่อ: ' + printedAt + '</div>' +
     '</body></html>';
 };
 
@@ -1024,3 +1083,28 @@ const printHtmlDocument = (html) => new Promise(function (resolve) {
   if (fontsReady) Promise.race([fontsReady, new Promise(function (r) { setTimeout(r, 2500); })]).then(function () { setTimeout(go, 100); });
   else setTimeout(go, 800);
 });
+
+// ─── รอบเบิก (แอดมินกำหนด) v6.0 ─────────────────────────
+// req_rounds/{id}: { fiscal_year, round_no, round_date (YYYY-MM-DD), scope: 'all'|'rpst'|'internal', note, active }
+const ROUND_SCOPE_LABELS = { all: 'ทุกหน่วย', rpst: 'รพ.สต.', internal: 'หน่วยงานใน รพ.' };
+const roundAppliesTo = (r, scope) => r && r.active !== false && (safeText(r.scope, 'all') === 'all' || safeText(r.scope) === scope);
+const roundsFor = (rounds, scope, fiscalYear) => (rounds || [])
+  .filter(function (r) { return roundAppliesTo(r, scope) && (!fiscalYear || Number(r.fiscal_year) === Number(fiscalYear)); })
+  .sort(function (a, b) { return String(a.round_date).localeCompare(String(b.round_date)) || Number(a.round_no) - Number(b.round_no); });
+const roundLabel = (r) => r ? ('รอบที่ ' + r.round_no + '/' + r.fiscal_year + ' · ' + thaiDateLong(r.round_date)) : '';
+const roundFormNo = (r) => r ? (r.round_no + '/' + r.fiscal_year) : '';
+// รอบที่ควรเลือกเป็นค่าเริ่มต้น: รอบแรกที่วันที่ยังไม่ผ่าน (หรือรอบล่าสุดถ้าผ่านหมดแล้ว)
+const pickDefaultRound = (list, todayYmd) => {
+  const t = todayYmd || toYmd(new Date());
+  return (list || []).find(function (r) { return String(r.round_date) >= t; }) || (list || [])[(list || []).length - 1] || null;
+};
+// จำนวนวันจากรอบนี้ถึงรอบถัดไป (ใช้คำนวณ "พอถึงรอบหน้า")
+const daysToNextRound = (list, round, fallback) => {
+  if (!round) return fallback;
+  const sorted = (list || []).slice().sort(function (a, b) { return String(a.round_date).localeCompare(String(b.round_date)); });
+  const i = sorted.findIndex(function (r) { return r.id === round.id; });
+  const next = i >= 0 ? sorted[i + 1] : null;
+  if (!next) return fallback;
+  const d = daysBetweenInclusive(round.round_date, next.round_date) - 1;
+  return d > 0 ? d : fallback;
+};

@@ -212,11 +212,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=5.9.0"></script>
+  <script src="shared.js?v=6.0.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '5.9.0';
+      var need = '6.0.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1813,12 +1813,15 @@ const ReturnDrugView = ({ ctx }) => {
       );
     };
 
-const CreateReqView = ({ ctx }) => {
+const CreateReqView = ({ ctx, round = null }) => {
       const hospId = ctx.targetUploadHosp || ctx.currentUser.hospital_id; 
       const isAdmin = ctx.currentUser.role === 'admin';
       const today = new Date();
       const hasExistingReq = !!ctx.editReqId;
       const editingReq = ctx.editReqId ? ctx.findReq(ctx.editReqId) : null;
+      // v6.0 รอบเบิกที่แอดมินกำหนด: เลขใบ/วันที่ในใบเบิกยึดตามรอบ ไม่ขึ้นกับวันที่กรอก
+      const activeRound = round || (editingReq?.round_id ? { id: editingReq.round_id, round_no: editingReq.round_no ?? editingReq.fiscal_term, round_date: editingReq.round_date, fiscal_year: editingReq.fiscal_year } : null);
+      const roundFields = activeRound ? { round_id: String(activeRound.id), round_no: toNonNegativeInt(activeRound.round_no, 1), round_date: safeText(activeRound.round_date) } : {};
 
       // วันที่ 20-31 ของเดือน M = ใบเติมยาสำหรับรอบเดือน M+1
       // ถ้าเปิดใบเดิม ให้ยึด month/year ที่บันทึกในใบเดิม ไม่เลื่อนไปตามวันที่ปัจจุบัน
@@ -1829,7 +1832,7 @@ const CreateReqView = ({ ctx }) => {
       const currentYear = editingReq ? Number(editingReq.year) : autoRoundPeriod.year;
       const usagePeriodEnd = getPreviousCalendarPeriod(currentMonth, currentYear);
       const uploadPeriodLabel = getUploadPeriodLabel(usagePeriodEnd.month, usagePeriodEnd.year);
-      const requisitionFiscalYear = getFiscalInfo(currentMonth, currentYear).fiscalYear;
+      const requisitionFiscalYear = activeRound && Number(activeRound.fiscal_year) ? Number(activeRound.fiscal_year) : getFiscalInfo(currentMonth, currentYear).fiscalYear;
       
       const isOutOfPeriod = !isAdmin && (today.getDate() < 20 || today.getDate() > 31);
       const existingReqForMonth = ctx.appDb.requisitions.find(r =>
@@ -1848,7 +1851,7 @@ const CreateReqView = ({ ctx }) => {
       const dirtyRef = useRef(false);
       const [pendingLeaveAction, setPendingLeaveAction] = useState(null);
       const [requisitionTerm, setRequisitionTerm] = useState(() =>
-        editingReq
+        activeRound ? Math.max(1, toNonNegativeInt(activeRound.round_no, 1)) : editingReq
           ? getEffectiveFiscalTerm(editingReq, ctx.appDb.requisitions)
           : getNextFiscalTerm(hospId, currentMonth, currentYear, ctx.appDb.requisitions)
       );
@@ -1882,11 +1885,13 @@ const CreateReqView = ({ ctx }) => {
       }, [editingReq?.id, editingReq?.is_printed]);
 
       useEffect(() => {
-        const nextTerm = editingReq
+        const nextTerm = activeRound
+          ? Math.max(1, toNonNegativeInt(activeRound.round_no, 1))
+          : editingReq
           ? getEffectiveFiscalTerm(editingReq, ctx.appDb.requisitions)
           : getNextFiscalTerm(hospId, currentMonth, currentYear, ctx.appDb.requisitions);
         setRequisitionTerm(nextTerm);
-      }, [editingReq?.id, hospId, currentMonth, currentYear]);
+      }, [editingReq?.id, hospId, currentMonth, currentYear, activeRound?.id, activeRound?.round_no]);
 
       const [items, setItems] = useState(() => {
         if (!ctx.appDb || !ctx.appDb.parLevels) return [];
@@ -2325,7 +2330,7 @@ const CreateReqView = ({ ctx }) => {
          let savedReqForLocal = null;
          let uploadedThisSave = false;
          const resolvedFiscalTerm = Math.max(1, toNonNegativeInt(requisitionTerm, 1));
-         const resolvedFiscalYear = getFiscalInfo(currentMonth, currentYear).fiscalYear;
+         const resolvedFiscalYear = requisitionFiscalYear;
          const resolvedRequisitionNo = formatRequisitionNo(resolvedFiscalTerm, resolvedFiscalYear);
          try {
            const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: safeText(i.rawName), usage: toNonNegativeNumber(i.usage) }));
@@ -2425,6 +2430,7 @@ const CreateReqView = ({ ctx }) => {
                    fiscal_year: resolvedFiscalYear,
                    fiscal_term: resolvedFiscalTerm,
                    requisition_no: resolvedRequisitionNo,
+                   ...roundFields,
                    revision: toNonNegativeInt(current.revision, 0) + 1,
                    schema_version: APP_SCHEMA_VERSION
                  };
@@ -2443,7 +2449,7 @@ const CreateReqView = ({ ctx }) => {
                ...(editingReq || {}),
                id: ctx.editReqId, hospitalId: hospId, month: currentMonth, year: currentYear,
                status: finalStatus, excel_url: fileUrl || editingReq?.excel_url || '',
-               fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo,
+               fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo, ...roundFields,
                items: sanitizedItems, skipped_items: skipped,
                updated_at: firebase.firestore.Timestamp.now(),
                revision: toNonNegativeInt(editingReq?.revision, 0) + 1, schema_version: APP_SCHEMA_VERSION
@@ -2469,6 +2475,10 @@ const CreateReqView = ({ ctx }) => {
                throw err;
              }
              if (duplicateReq) throw new Error(`เดือน ${currentMonth}/${currentYear} มีใบเบิกอยู่แล้ว (${duplicateReq.id}) กรุณาเปิดใบเดิมเพื่อแก้ไข หรือลบใบเดิมก่อน`);
+             if (activeRound) {
+               const dupRound = (ctx.appDb.requisitions || []).find(r => String(r.hospitalId) === String(hospId) && r.round_id === activeRound.id && !String(r.id || '').startsWith('HIST-'));
+               if (dupRound) throw new Error(`รอบที่ ${roundFormNo(activeRound)} มีใบเบิกของ รพ.สต. นี้อยู่แล้ว (${dupRound.id})`);
+             }
 
              const newId = buildRequisitionId(hospId, currentMonth, currentYear);
              const reqRef = db.collection('requisitions').doc(newId);
@@ -2479,6 +2489,7 @@ const CreateReqView = ({ ctx }) => {
                fiscal_year: resolvedFiscalYear,
                fiscal_term: resolvedFiscalTerm,
                requisition_no: resolvedRequisitionNo,
+               ...roundFields,
                status: finalStatus,
                is_printed: false,
                excel_url: fileUrl || '',
@@ -2506,7 +2517,7 @@ const CreateReqView = ({ ctx }) => {
 
              savedReqForLocal = {
                id: newId, hospitalId: hospId, month: currentMonth, year: currentYear, status: finalStatus,
-               fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo,
+               fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo, ...roundFields,
                is_printed: false, excel_url: fileUrl || '', items: sanitizedItems, skipped_items: skipped,
                created_by_uid: ctx.currentUser?.uid || '', created_by_name: ctx.currentUser?.name || 'System',
                created_by_position: ctx.currentUser?.position || 'เจ้าหน้าที่',
@@ -2747,11 +2758,18 @@ const CreateReqView = ({ ctx }) => {
             )}
             {(excelFile || uploadedExcelUrl || editingReq?.excel_url) && <span className="text-xs text-emerald-700"><i className="fa-solid fa-circle-check mr-1"></i>มีไฟล์ รบ.301</span>}
             <button onClick={refreshInvsPriceForRequisition} disabled={isRefreshingInvsPrice} className="h-9 px-3 rounded-lg border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 font-bold text-xs disabled:opacity-50" title="โหลดราคา Pack และหน่วยปัจจุบันจาก INVS Master Sync"><i className={`fa-solid ${isRefreshingInvsPrice?'fa-spinner fa-spin':'fa-arrows-rotate'} mr-1`}></i>{isRefreshingInvsPrice?'กำลังรีเฟรช':'รีเฟรชข้อมูล INVS'}</button>
+            {activeRound ? (
+            <div className="h-9 px-3 rounded-lg border border-indigo-200 bg-indigo-50 flex items-center gap-2 text-xs text-indigo-800" title="เลขใบและวันที่ตามรอบเบิกที่แอดมินกำหนด">
+              <span className="font-bold">เลขใบเบิก</span><span className="font-black text-sm">{roundFormNo({ round_no: requisitionTerm, fiscal_year: requisitionFiscalYear })}</span>
+              {activeRound.round_date && <span className="text-indigo-600">ลงวันที่ {thaiDateLong(activeRound.round_date)}</span>}
+            </div>
+            ) : (
             <div className="h-9 px-3 rounded-lg border border-indigo-200 bg-indigo-50 flex items-center gap-1 text-xs text-indigo-800" title={requisitionFiscalYear <= RXFILL_TRANSITION_FISCAL_YEAR ? 'ปีเริ่มระบบ: ค่าเริ่มต้นตามลำดับเดือนงบ และแก้เลขได้' : 'เลข run ตามใบเบิกจริงของ รพ.สต. และ reset ทุกปีงบประมาณ'}>
               <span className="font-bold">เลขใบเบิก</span>
               <input type="number" min="1" step="1" value={requisitionTerm} onChange={e=>{setRequisitionTerm(Math.max(1,toNonNegativeInt(e.target.value,1)));markDirty();}} className="w-14 h-7 rounded border border-indigo-200 bg-white text-center font-black outline-none focus:ring-2 focus:ring-indigo-400" />
               <span className="font-black">/{requisitionFiscalYear}</span>
             </div>
+            )}
 
             <div className="flex-1 min-w-[120px]"></div>
             <div className="relative min-w-[220px] max-w-sm flex-1">
@@ -2785,7 +2803,7 @@ const CreateReqView = ({ ctx }) => {
             <div className="print-header mb-5 text-center">
               <div className="text-left text-[14px] leading-relaxed">
                 <div className="text-center"><OfficialFormTitle name={ctx.currentUser?.name} position={ctx.currentUser?.position} hospitalName={ctx.findHospital(hospId)?.hospital_name || hospId} /></div>
-                <p className="mt-4">มีความประสงค์เบิกเวชภัณฑ์ ประจำเดือน <FormBlank>{THAI_MONTHS[currentMonth-1]} {currentYear+543}</FormBlank> เลขใบเบิก <FormBlank>{Math.max(1,toNonNegativeInt(requisitionTerm,1))}/{requisitionFiscalYear}</FormBlank> ดังนี้</p>
+                <p className="mt-4">มีความประสงค์เบิกเวชภัณฑ์ ประจำเดือน <FormBlank>{THAI_MONTHS[currentMonth-1]} {currentYear+543}</FormBlank> เลขใบเบิก <FormBlank>{Math.max(1,toNonNegativeInt(requisitionTerm,1))}/{requisitionFiscalYear}</FormBlank>{activeRound?.round_date ? <> ลงวันที่ <FormBlank>{thaiDateLong(activeRound.round_date)}</FormBlank></> : null} ดังนี้</p>
               </div>
             </div>
 
@@ -4273,7 +4291,7 @@ const ViewReqView = ({ ctx }) => {
                 <div className="text-left text-[14px] leading-relaxed">
                    <div className="text-center"><OfficialFormTitle name={reqName} position={reqPosition} hospitalName={hosp?.hospital_name} /></div>
                    <p className="mt-4">งบที่ได้รับจัดสรรปี <FormBlank>{fiscalYear}</FormBlank> เป็นเงิน <FormBlank wide /> บาท ได้เบิกเวชภัณฑ์ ปีนี้ ไปแล้วมูลค่า <FormBlank wide /> บาท</p>
-                   <p>มีความประสงค์เบิกเวชภัณฑ์ปี <FormBlank>{fiscalYear}</FormBlank> ครั้งที่ <FormBlank>{term}</FormBlank> ดังนี้</p>
+                   <p>มีความประสงค์เบิกเวชภัณฑ์ปี <FormBlank>{fiscalYear}</FormBlank> ครั้งที่ <FormBlank>{term}</FormBlank>{req.round_date ? <> ลงวันที่ <FormBlank>{thaiDateLong(req.round_date)}</FormBlank></> : null} ดังนี้</p>
                 </div>
              </div>
 
@@ -6760,6 +6778,7 @@ const AdminConfigView = ({ ctx }) => {
             <TabBtn id="units" icon="fa-box" label="หน่วยนับ" />
             <TabBtn id="hospitals" icon="fa-hospital" label="รพ.สต." />
             <TabBtn id="depts" icon="fa-building-user" label="หน่วยงาน/ห้องยา" />
+            <TabBtn id="rounds" icon="fa-calendar-days" label="รอบเบิก" />
             <TabBtn id="approve_stock" icon="fa-check-to-slot" label="อนุมัติปรับสต๊อก" />
             <TabBtn id="users" icon="fa-users" label="ผู้ใช้งาน" />
             <TabBtn id="raw_db" icon="fa-table" label="ฐานข้อมูลดิบ (Raw DB)" />
@@ -6772,6 +6791,7 @@ const AdminConfigView = ({ ctx }) => {
             {activeTab === 'units' && <UnitManager ctx={ctx} setEditTarget={setEditTarget} setIsSaving={setIsSaving} executeDelete={executeDelete} />}
             {activeTab === 'hospitals' && <HospitalManager ctx={ctx} setEditTarget={setEditTarget} executeDelete={executeDelete} />}
             {activeTab === 'depts' && <DeptManager ctx={ctx} />}
+            {activeTab === 'rounds' && <RoundManager ctx={ctx} />}
             {activeTab === 'approve_stock' && ApproveStockManager()}
             {activeTab === 'users' && UserManager()}
             {activeTab === 'raw_db' && <RawDBManager />}
@@ -7662,6 +7682,8 @@ const AdminConfigView = ({ ctx }) => {
             dept_id: id, dept_name: safeText(fd.dept_name), kind: fd.kind === 'pharmacy' ? 'pharmacy' : 'dept',
             invs_dept_id: safeText(fd.invs_dept_id), invs_stock_id: safeText(fd.invs_stock_id),
             cover_days: Math.max(1, toNonNegativeInt(fd.cover_days, INTERNAL_DEFAULT_COVER_DAYS)),
+            round_days: Math.max(1, toNonNegativeInt(fd.round_days, 30)),
+            min_order_value: toNonNegativeNumber(fd.min_order_value, 100),
             active: fd.active === 'on', updated_at: firebase.firestore.FieldValue.serverTimestamp()
           };
           const batch = db.batch();
@@ -7691,7 +7713,7 @@ const AdminConfigView = ({ ctx }) => {
           </div>
           <div className="overflow-x-auto border rounded-xl">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">รหัส</th><th className="p-3 text-left">ชื่อ</th><th className="p-3 text-left">ประเภท</th><th className="p-3 text-left">INVS Dept / Stock</th><th className="p-3 text-right">สำรอง (วัน)</th><th className="p-3 text-left">ผู้ใช้ที่ลงทะเบียน</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th></tr></thead>
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">รหัส</th><th className="p-3 text-left">ชื่อ</th><th className="p-3 text-left">ประเภท</th><th className="p-3 text-left">INVS Dept / Stock</th><th className="p-3 text-right">สำรอง / รอบ (วัน)</th><th className="p-3 text-left">ผู้ใช้ที่ลงทะเบียน</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th></tr></thead>
               <tbody>
                 {!rows.length && <tr><td colSpan="8" className="p-8 text-center text-slate-400">ยังไม่มีหน่วยงาน — เพิ่ม "ห้องยา" อย่างน้อย 1 รายการเพื่อใช้หน้าเบิกยาห้องยา</td></tr>}
                 {rows.map(r => (
@@ -7700,7 +7722,7 @@ const AdminConfigView = ({ ctx }) => {
                     <td className="p-3 font-bold">{r.dept_name}</td>
                     <td className="p-3"><span className={`text-xs font-bold px-2 py-1 rounded ${r.kind === 'pharmacy' ? 'bg-purple-100 text-purple-700' : 'bg-sky-100 text-sky-700'}`}>{INTERNAL_KIND_LABELS[r.kind] || 'หน่วยงาน'}</span></td>
                     <td className="p-3 font-mono text-xs">{r.invs_dept_id || <span className="text-red-500 font-sans font-bold">ยังไม่ตั้ง</span>} / {r.invs_stock_id || 'ค่าเริ่มต้น'}</td>
-                    <td className="p-3 text-right">{r.kind === 'pharmacy' ? (r.cover_days || INTERNAL_DEFAULT_COVER_DAYS) : '-'}</td>
+                    <td className="p-3 text-right">{r.kind === 'pharmacy' ? `${r.cover_days || INTERNAL_DEFAULT_COVER_DAYS} / ${r.round_days || 30}` : '-'}{r.kind === 'pharmacy' && <div className="text-[10px] text-slate-400">ขั้นต่ำ {r.min_order_value ?? 100} บ.</div>}</td>
                     <td className="p-3 text-xs text-slate-600">{usersOf(r.dept_id).length ? usersOf(r.dept_id).map(u => u.name).join(', ') : <span className="text-slate-300">-</span>}{r.invs_supply_officer ? <div className="text-[10px] text-slate-400">INVS: {r.invs_supply_officer}</div> : null}</td>
                     <td className="p-3">{r.active === false ? <span className="text-slate-400">ปิดใช้</span> : <span className="text-emerald-600 font-bold">ใช้งาน</span>}</td>
                     <td className="p-3 text-right whitespace-nowrap">
@@ -7760,6 +7782,10 @@ const AdminConfigView = ({ ctx }) => {
                   <label className="block"><span className="text-sm font-bold text-slate-600">INVS Stock ID</span><input name="invs_stock_id" defaultValue={edit.invs_stock_id || ''} placeholder="เว้นว่าง = ค่าใน config" className="w-full p-3 border rounded-xl mt-1 font-mono" /></label>
                 </div>
                 <label className="block"><span className="text-sm font-bold text-slate-600">สำรองกี่วัน (ค่าเริ่มต้นของห้องยา)</span><input name="cover_days" type="number" min="1" max="365" defaultValue={edit.cover_days || INTERNAL_DEFAULT_COVER_DAYS} className="w-full p-3 border rounded-xl mt-1" /></label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block"><span className="text-sm font-bold text-slate-600">รอบเบิกห่างกัน (วัน)</span><input name="round_days" type="number" min="1" max="365" defaultValue={edit.round_days || 30} className="w-full p-3 border rounded-xl mt-1" /><span className="text-[11px] text-slate-400">ใช้เมื่อยังไม่มีรอบเบิกถัดไปในระบบ</span></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">มูลค่าขั้นต่ำต่อรายการ (บาท)</span><input name="min_order_value" type="number" min="0" step="1" defaultValue={edit.min_order_value ?? 100} className="w-full p-3 border rounded-xl mt-1" /><span className="text-[11px] text-slate-400">ห้องยา: ต่ำกว่านี้และยังพอใช้ จะแนะนำให้รวบไปรอบหน้า</span></label>
+                </div>
                 <label className="inline-flex items-center gap-2 font-bold text-slate-600"><input type="checkbox" name="active" defaultChecked={edit.active !== false} className="w-4 h-4" /> เปิดให้ลงทะเบียน/ใช้งาน</label>
                 <div className="flex justify-end gap-2 pt-2 border-t">
                   <button type="button" onClick={() => setEdit(null)} className="px-5 py-2.5 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
@@ -7772,6 +7798,523 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+
+    // ===== v6.0 รอบเบิก: แอดมินกำหนดเลขรอบ/วันที่ต่อปีงบ (ใช้ทั้ง รพ.สต. และหน่วยงานใน รพ.) =====
+    const roundDocId = (r) => `${r.fiscal_year}-${r.scope || 'all'}-${pad2(r.round_no)}`;
+    const fiscalStartYmd = (fyBE) => `${Number(fyBE) - 543 - 1}-10-01`;
+    const genRoundDates = (g) => {
+      const out = []; const d0 = parseYmd(g.start); if (!d0) return out;
+      const n = Math.min(60, Math.max(1, toNonNegativeInt(g.count, 12)));
+      for (let i = 0; i < n; i++) {
+        let d;
+        if (g.mode === 'monthly') { const y = d0.getFullYear(), m = d0.getMonth() + i; const last = new Date(y, m + 1, 0).getDate(); d = new Date(y, m, Math.min(d0.getDate(), last)); }
+        else { d = new Date(d0); d.setDate(d.getDate() + i * Math.max(1, toNonNegativeInt(g.every, 14))); }
+        out.push(toYmd(d));
+      }
+      return out;
+    };
+
+    const RoundManager = ({ ctx }) => {
+      const todayYmd = toYmd(new Date());
+      const [fy, setFy] = useState(() => fiscalYearBEOfYmd(todayYmd));
+      const [rows, setRows] = useState(null);
+      const [edit, setEdit] = useState(null);
+      const [gen, setGen] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const load = async () => {
+        try { const s = await db.collection('req_rounds').get(); setRows(s.docs.map(d => ({ id: d.id, ...d.data() }))); }
+        catch (e) { setRows([]); ctx.showToast('โหลดรอบเบิกไม่สำเร็จ: ' + (e?.message || e) + ' — deploy กฎ Firestore v6.0 แล้วหรือยัง', 'error'); }
+      };
+      useEffect(() => { load(); }, []);
+      const list = useMemo(() => (rows || []).filter(r => Number(r.fiscal_year) === Number(fy))
+        .sort((a, b) => String(a.round_date).localeCompare(String(b.round_date)) || Number(a.round_no) - Number(b.round_no)), [rows, fy]);
+      const years = useMemo(() => { const s = new Set([fy - 1, fy, fy + 1]); (rows || []).forEach(r => Number(r.fiscal_year) && s.add(Number(r.fiscal_year))); return [...s].sort(); }, [rows, fy]);
+      const usedCount = (r) => (ctx.appDb.requisitions || []).filter(q => q.round_id === r.id).length;
+      const conflictOf = (cand, ignoreId) => (rows || []).find(r => r.id !== ignoreId && r.active !== false && Number(r.fiscal_year) === Number(cand.fiscal_year)
+        && Number(r.round_no) === Number(cand.round_no) && (safeText(r.scope, 'all') === 'all' || cand.scope === 'all' || r.scope === cand.scope));
+      const afterSave = async () => { await load(); await ctx.refreshData(); };
+      const nextNo = (scope) => 1 + Math.max(0, ...list.filter(r => safeText(r.scope, 'all') === scope || scope === 'all' || safeText(r.scope, 'all') === 'all').map(r => toNonNegativeInt(r.round_no)));
+
+      const saveOne = async (e) => {
+        e.preventDefault();
+        const fd = Object.fromEntries(new FormData(e.target));
+        const cand = { fiscal_year: toNonNegativeInt(fd.fiscal_year), round_no: toNonNegativeInt(fd.round_no), round_date: safeText(fd.round_date),
+          scope: ['all', 'rpst', 'internal'].includes(fd.scope) ? fd.scope : 'all', note: safeText(fd.note), active: fd.active === 'on' };
+        if (!cand.fiscal_year || !cand.round_no || !parseYmd(cand.round_date)) return ctx.showToast('กรอกปีงบ รอบที่ และวันที่ให้ครบ', 'error');
+        const c = cand.active && conflictOf(cand, edit.id);
+        if (c) return ctx.showToast(`รอบที่ ${cand.round_no}/${cand.fiscal_year} ซ้ำกับรอบที่มีอยู่ (${ROUND_SCOPE_LABELS[safeText(c.scope, 'all')]} · ${thaiDateLong(c.round_date)})`, 'error');
+        const id = edit.id || roundDocId(cand);
+        setBusy(true);
+        try {
+          const batch = db.batch();
+          batch.set(db.collection('req_rounds').doc(id), { ...cand, updated_at: firebase.firestore.FieldValue.serverTimestamp(), ...(edit.id ? {} : { created_at: firebase.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
+          addAuditToBatch(batch, ctx.currentUser, 'ADMIN_SAVE', 'req_rounds', id, cand);
+          await batch.commit();
+          ctx.showToast(`บันทึกรอบที่ ${roundFormNo(cand)} แล้ว`); setEdit(null); await afterSave();
+        } catch (err) { ctx.showToast('บันทึกไม่สำเร็จ: ' + err.message, 'error'); } finally { setBusy(false); }
+      };
+      const toggleActive = async (r) => {
+        try { await db.collection('req_rounds').doc(r.id).set({ active: r.active === false, updated_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); await afterSave(); }
+        catch (e) { ctx.showToast(e.message, 'error'); }
+      };
+      const remove = (r) => ctx.setConfirmDialog({
+        title: `ลบรอบที่ ${roundFormNo(r)}?`,
+        message: `${thaiDateLong(r.round_date)}${usedCount(r) ? ` — มีใบเบิก รพ.สต. ใช้รอบนี้ ${usedCount(r)} ใบ (ใบเดิมยังเก็บเลข/วันที่ไว้เหมือนเดิม)` : ''}`,
+        iconColor: 'text-red-500', confirmBtnClass: 'bg-red-500 hover:bg-red-600',
+        onConfirm: async () => { try { await db.collection('req_rounds').doc(r.id).delete(); await writeAuditLog(ctx.currentUser, 'ADMIN_DELETE', 'req_rounds', r.id, {}); await afterSave(); ctx.showToast('ลบแล้ว'); } catch (e) { ctx.showToast(e.message, 'error'); } }
+      });
+
+      const genPreview = useMemo(() => {
+        if (!gen) return [];
+        const start = Math.max(1, toNonNegativeInt(gen.first_no, 1));
+        return genRoundDates(gen).map((d, i) => {
+          const cand = { fiscal_year: toNonNegativeInt(gen.fiscal_year), round_no: start + i, round_date: d, scope: gen.scope, note: '', active: true };
+          return { ...cand, conflict: conflictOf(cand, null) };
+        });
+      }, [gen, rows]);
+      const saveGen = async () => {
+        const ok = genPreview.filter(p => !p.conflict);
+        if (!ok.length) return ctx.showToast('ทุกรอบซ้ำกับที่มีอยู่แล้ว', 'error');
+        setBusy(true);
+        try {
+          const ops = ok.map(({ conflict, ...cand }) => ({ type: 'set', ref: db.collection('req_rounds').doc(roundDocId(cand)), data: { ...cand, created_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() }, options: { merge: true } }));
+          await executeBatchChunks(ops);
+          await writeAuditLog(ctx.currentUser, 'REQ_ROUNDS_GENERATE', 'req_rounds', 'BATCH', { fiscal_year: gen.fiscal_year, scope: gen.scope, count: ok.length });
+          ctx.showToast(`สร้างรอบเบิก ${ok.length} รอบแล้ว${ok.length < genPreview.length ? ` (ข้ามที่ซ้ำ ${genPreview.length - ok.length})` : ''}`);
+          setFy(toNonNegativeInt(gen.fiscal_year)); setGen(null); await afterSave();
+        } catch (e) { ctx.showToast('สร้างไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(false); }
+      };
+
+      const scopeBadge = (sc) => {
+        const k = safeText(sc, 'all');
+        const cls = k === 'rpst' ? 'bg-emerald-100 text-emerald-800' : k === 'internal' ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-700';
+        return <span className={`text-xs font-bold px-2 py-0.5 rounded ${cls}`}>{ROUND_SCOPE_LABELS[k] || k}</span>;
+      };
+
+      return (
+        <div className="p-6">
+          <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
+            <div>
+              <h3 className="font-bold text-lg">รอบเบิกประจำปีงบประมาณ</h3>
+              <p className="text-sm text-slate-500 max-w-2xl">ก่อนกรอกใบเบิก ผู้ใช้ต้องเลือกรอบก่อน · ใบเบิกจะใช้ <b>เลขที่ = รอบที่/ปีงบ</b> และ <b>วันที่ = วันที่ของรอบ</b> เสมอ ไม่ว่าจะกรอกวันไหน · 1 หน่วยเบิกได้ 1 ใบต่อรอบ</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm font-bold text-slate-600" htmlFor="round-fy">ปีงบ</label>
+              <select id="round-fy" value={fy} onChange={e => setFy(Number(e.target.value))} className="border rounded-xl p-2 font-bold">{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
+              <button onClick={() => setGen({ fiscal_year: fy, scope: 'all', mode: 'monthly', start: fiscalStartYmd(fy), count: 12, every: 14, first_no: 1 })} className="bg-cyan-600 text-white px-4 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-wand-magic-sparkles mr-1"></i> สร้างทั้งปี</button>
+              <button onClick={() => setEdit({ fiscal_year: fy, round_no: nextNo('all'), round_date: todayYmd, scope: 'all', note: '', active: true })} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-plus mr-1"></i> เพิ่มรอบ</button>
+            </div>
+          </div>
+          <div className="overflow-x-auto border rounded-xl">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr>
+                <th className="p-3 text-left">รอบที่</th><th className="p-3 text-left">วันที่ในใบเบิก</th><th className="p-3 text-left">ใช้กับ</th><th className="p-3 text-left">หมายเหตุ</th><th className="p-3 text-right">ใบ รพ.สต.</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th>
+              </tr></thead>
+              <tbody>
+                {rows === null && <tr><td colSpan="7" className="p-8 text-center"><div className="loader mx-auto"></div></td></tr>}
+                {rows !== null && !list.length && <tr><td colSpan="7" className="p-8 text-center text-slate-400">ยังไม่มีรอบเบิกของปีงบ {fy} — กด "สร้างทั้งปี" เพื่อสร้างรอบรายเดือนทีเดียว 12 รอบ</td></tr>}
+                {list.map(r => {
+                  const past = String(r.round_date) < todayYmd;
+                  return (
+                    <tr key={r.id} className={`border-t ${r.active === false ? 'text-slate-400' : ''}`}>
+                      <td className="p-3 font-extrabold text-slate-800 tabular-nums">{roundFormNo(r)}</td>
+                      <td className="p-3">{thaiDateLong(r.round_date)} {past ? <span className="text-[10px] text-slate-400 ml-1">ผ่านแล้ว</span> : null}</td>
+                      <td className="p-3">{scopeBadge(r.scope)}</td>
+                      <td className="p-3 text-xs text-slate-500">{r.note || '-'}</td>
+                      <td className="p-3 text-right tabular-nums">{usedCount(r) || '-'}</td>
+                      <td className="p-3"><button onClick={() => toggleActive(r)} className={`text-xs font-bold px-2 py-1 rounded ${r.active === false ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>{r.active === false ? 'ปิด' : 'เปิดใช้'}</button></td>
+                      <td className="p-3 text-right whitespace-nowrap">
+                        <button onClick={() => setEdit({ ...r })} className="text-indigo-600 font-bold mr-3">แก้ไข</button>
+                        <button onClick={() => remove(r)} className="text-red-500 font-bold">ลบ</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <Modal isOpen={!!edit} onClose={() => !busy && setEdit(null)} title={edit?.id ? `แก้ไขรอบที่ ${roundFormNo(edit)}` : 'เพิ่มรอบเบิก'} maxWidth="max-w-lg">
+            {edit && (
+              <form onSubmit={saveOne} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block"><span className="text-sm font-bold text-slate-600">ปีงบประมาณ (พ.ศ.)</span><input id="round-edit-fy" name="fiscal_year" type="number" min="2560" max="2700" defaultValue={edit.fiscal_year} required className="w-full p-3 border rounded-xl mt-1" /></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">รอบที่</span><input id="round-edit-no" name="round_no" type="number" min="1" max="99" defaultValue={edit.round_no} required className="w-full p-3 border rounded-xl mt-1" /></label>
+                </div>
+                <label className="block"><span className="text-sm font-bold text-slate-600">วันที่ในใบเบิก</span><input id="round-edit-date" name="round_date" type="date" defaultValue={edit.round_date} required className="w-full p-3 border rounded-xl mt-1" /></label>
+                <label className="block"><span className="text-sm font-bold text-slate-600">ใช้กับ</span>
+                  <select id="round-edit-scope" name="scope" defaultValue={safeText(edit.scope, 'all')} className="w-full p-3 border rounded-xl mt-1">
+                    <option value="all">ทุกหน่วย (รพ.สต. และหน่วยงานใน รพ.)</option><option value="rpst">รพ.สต. เท่านั้น</option><option value="internal">หน่วยงาน/ห้องยา ใน รพ. เท่านั้น</option>
+                  </select></label>
+                <label className="block"><span className="text-sm font-bold text-slate-600">หมายเหตุ</span><input name="note" defaultValue={edit.note || ''} placeholder="เช่น รอบพิเศษก่อนปีใหม่" className="w-full p-3 border rounded-xl mt-1" /></label>
+                <label className="inline-flex items-center gap-2 font-bold text-slate-600"><input type="checkbox" name="active" defaultChecked={edit.active !== false} className="w-4 h-4" /> เปิดให้เลือกได้</label>
+                <div className="flex justify-end gap-2 pt-2 border-t">
+                  <button type="button" onClick={() => setEdit(null)} className="px-5 py-2.5 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                  <button type="submit" disabled={busy} className="px-6 py-2.5 rounded-xl bg-emerald-600 text-white font-bold">{busy ? 'กำลังบันทึก...' : 'บันทึก'}</button>
+                </div>
+              </form>
+            )}
+          </Modal>
+
+          <Modal isOpen={!!gen} onClose={() => !busy && setGen(null)} title="สร้างรอบเบิกทั้งปีงบ" maxWidth="max-w-3xl">
+            {gen && (
+              <div className="space-y-4">
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <label className="block"><span className="text-sm font-bold text-slate-600">ปีงบ (พ.ศ.)</span><input id="gen-fy" type="number" value={gen.fiscal_year} onChange={e => { const v = toNonNegativeInt(e.target.value); setGen(g => ({ ...g, fiscal_year: v, start: v > 2500 ? fiscalStartYmd(v) : g.start })); }} className="w-full p-2.5 border rounded-xl mt-1" /></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">ใช้กับ</span>
+                    <select id="gen-scope" value={gen.scope} onChange={e => setGen(g => ({ ...g, scope: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1"><option value="all">ทุกหน่วย</option><option value="rpst">รพ.สต.</option><option value="internal">หน่วยงานใน รพ.</option></select></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">เริ่มนับรอบที่</span><input type="number" min="1" value={gen.first_no} onChange={e => setGen(g => ({ ...g, first_no: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1" /></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">วันที่รอบแรก</span><input id="gen-start" type="date" value={gen.start} onChange={e => setGen(g => ({ ...g, start: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1" /><span className="text-[11px] text-slate-400">{thaiDateLong(gen.start)}</span></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">ความถี่</span>
+                    <select id="gen-mode" value={gen.mode} onChange={e => setGen(g => ({ ...g, mode: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1"><option value="monthly">ทุกเดือน (วันที่เดิม)</option><option value="days">ทุก ๆ N วัน</option></select></label>
+                  {gen.mode === 'days'
+                    ? <label className="block"><span className="text-sm font-bold text-slate-600">ห่างกัน (วัน)</span><input type="number" min="1" value={gen.every} onChange={e => setGen(g => ({ ...g, every: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1" /></label>
+                    : <div></div>}
+                  <label className="block"><span className="text-sm font-bold text-slate-600">จำนวนรอบ</span><input id="gen-count" type="number" min="1" max="60" value={gen.count} onChange={e => setGen(g => ({ ...g, count: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1" /></label>
+                </div>
+                <div className="border rounded-xl max-h-[40vh] overflow-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-xs text-slate-500 sticky top-0"><tr><th className="p-2 text-left">รอบที่</th><th className="p-2 text-left">วันที่</th><th className="p-2 text-left">ผล</th></tr></thead>
+                    <tbody>{genPreview.map(p => (
+                      <tr key={p.round_no} className={`border-t ${p.conflict ? 'text-slate-400' : ''}`}>
+                        <td className="p-2 font-bold tabular-nums">{roundFormNo(p)}</td><td className="p-2">{thaiDateLong(p.round_date)}</td>
+                        <td className="p-2 text-xs">{p.conflict ? `ข้าม — ซ้ำกับรอบเดิม (${thaiDateLong(p.conflict.round_date)})` : <span className="text-emerald-700 font-bold">สร้างใหม่</span>}</td>
+                      </tr>))}</tbody>
+                  </table>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setGen(null)} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                  <button id="gen-save" onClick={saveGen} disabled={busy} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-bold">{busy ? 'กำลังสร้าง...' : `สร้าง ${genPreview.filter(p => !p.conflict).length} รอบ`}</button>
+                </div>
+              </div>
+            )}
+          </Modal>
+        </div>
+      );
+    };
+
+    // ขั้นที่ 1 ของการเบิก รพ.สต.: เลือกรอบเบิกก่อนกรอก
+    const RpstRoundPick = ({ ctx, hospId, rounds, onPick }) => {
+      const today = toYmd(new Date());
+      const usedBy = (r) => (ctx.appDb.requisitions || []).find(q => String(q.hospitalId) === String(hospId) && q.round_id === r.id && !String(q.id || '').startsWith('HIST-'));
+      const [sel, setSel] = useState(() => pickDefaultRound(rounds.filter(r => !usedBy(r)), today)?.id || '');
+      const chosen = rounds.find(r => r.id === sel && !usedBy(r));
+      const hospName = ctx.findHospital(hospId)?.hospital_name || hospId;
+      return (
+        <div className="space-y-5 animate-fade-in max-w-5xl">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+            <div className="text-xs font-bold text-emerald-700 tracking-wide">ขั้นที่ 1 จาก 2 · {hospName}</div>
+            <h2 className="text-2xl font-extrabold text-slate-800">เลือกรอบเบิก</h2>
+            <p className="text-sm text-slate-500 mt-1">เลขใบเบิกและวันที่ในใบจะเป็นไปตามรอบที่เลือก ไม่ว่าจะกรอกวันไหน · 1 รอบ เบิกได้ 1 ใบ</p>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3" role="radiogroup" aria-label="รอบเบิก">
+            {rounds.map(r => {
+              const used = usedBy(r); const past = String(r.round_date) < today; const on = sel === r.id && !used;
+              return (
+                <div key={r.id} role="radio" aria-checked={on} tabIndex={used ? -1 : 0}
+                  onClick={() => !used && setSel(r.id)} onKeyDown={e => { if (!used && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSel(r.id); } }}
+                  className={`rounded-xl border p-4 transition ${used ? 'bg-slate-50 border-slate-200' : on ? 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200 cursor-pointer' : 'bg-white border-slate-200 hover:border-emerald-300 cursor-pointer'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-lg font-extrabold text-slate-800">รอบที่ {r.round_no}<span className="text-sm text-slate-400">/{r.fiscal_year}</span></span>
+                    {used ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600">มีใบแล้ว</span> : past ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">เลยวันแล้ว</span> : null}
+                  </div>
+                  <div className="text-sm text-slate-600 mt-1">{thaiDateLong(r.round_date)}</div>
+                  {r.note && <div className="text-xs text-slate-400 mt-1">{r.note}</div>}
+                  {used && <button onClick={() => { ctx.setCurrentReqId(used.id); ctx.setCurrentView('view_req'); }} className="mt-2 text-xs font-bold text-emerald-700 hover:underline">เปิดใบเดิม</button>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button id="rpst-round-go" onClick={() => chosen && onPick(chosen)} disabled={!chosen} className="px-6 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40"><i className="fa-solid fa-arrow-right mr-2"></i>เริ่มกรอกใบเบิก{chosen ? ` · ${roundFormNo(chosen)}` : ''}</button>
+            {chosen && <span className="text-sm text-slate-500">เลขใบเบิก <b>{roundFormNo(chosen)}</b> ลงวันที่ <b>{thaiDateLong(chosen.round_date)}</b></span>}
+          </div>
+        </div>
+      );
+    };
+
+    // ครอบหน้าเบิกของ รพ.สต.: ถ้าแอดมินตั้งรอบเบิกไว้ ต้องเลือกรอบก่อน (แก้ไขใบเดิมไม่ต้องเลือกซ้ำ)
+    const CreateReqGate = ({ ctx }) => {
+      const hospId = ctx.targetUploadHosp || ctx.currentUser.hospital_id;
+      const key = `${hospId}|${ctx.editReqId || ''}`;
+      const [picked, setPicked] = useState({ key: '', round: undefined });
+      const fyNow = fiscalYearBEOfYmd(toYmd(new Date()));
+      const rounds = useMemo(() => roundsFor(ctx.appDb.rounds, 'rpst').filter(r => Number(r.fiscal_year) >= fyNow - 1 && Number(r.fiscal_year) <= fyNow + 1), [ctx.appDb.rounds, fyNow]);
+      const round = picked.key === key ? picked.round : undefined;
+      if (ctx.editReqId || !rounds.length || round !== undefined) return <CreateReqView ctx={ctx} round={round || null} />;
+      return <RpstRoundPick ctx={ctx} hospId={hospId} rounds={rounds} onPick={r => setPicked({ key, round: r })} />;
+    };
+
+    // ===== v6.0 สรุปการเบิก (แอดมิน): แยกตามหน่วยงาน × รอบ และแยกตามรายการยา =====
+    const SUMMARY_UNIT_TYPES = { rpst: 'รพ.สต.', dept: 'หน่วยงาน', pharmacy: 'ห้องยา' };
+    const summaryQty = (it, src) => {
+      const req = toNonNegativeNumber(src === 'rpst' ? (it.finalRequestedQty ?? it.dispenseQty) : (it.requestQty ?? it.dispenseQty));
+      const disp = toNonNegativeNumber(it.dispenseQty ?? req);
+      return { req, disp };
+    };
+    const summaryValue = (it, qty) => (isNonBillableInRequisition(it) ? 0 : (qty / safePackSize(it.packSize)) * toNonNegativeNumber(it.price));
+    const downloadCsv = (filename, rows) => {
+      const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      const blob = new Blob(['﻿' + rows.map(r => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    };
+
+    const ReqSummaryView = ({ ctx }) => {
+      const fyNow = fiscalYearBEOfYmd(toYmd(new Date()));
+      const [internalReqs, setInternalReqs] = useState(null);
+      const [loadErr, setLoadErr] = useState('');
+      const [fy, setFy] = useState(fyNow);
+      const [roundNo, setRoundNo] = useState('all');
+      const [statusMode, setStatusMode] = useState('completed');
+      const [typeFilter, setTypeFilter] = useState('all');
+      const [tab, setTab] = useState('units');
+      const [metric, setMetric] = useState('value');
+      const [drugSearch, setDrugSearch] = useState('');
+      useEffect(() => {
+        let alive = true;
+        db.collection('internal_requisitions').get()
+          .then(s => { if (alive) setInternalReqs(s.docs.map(d => ({ id: d.id, ...d.data() }))); })
+          .catch(e => { if (alive) { setInternalReqs([]); setLoadErr(e?.message || String(e)); } });
+        return () => { alive = false; };
+      }, []);
+      const deptById = useMemo(() => new Map((ctx.appDb.depts || []).map(d => [String(d.dept_id), d])), [ctx.appDb.depts]);
+
+      // รวมใบเบิกทั้ง รพ.สต. และภายใน รพ. เป็นรูปแบบเดียวกัน
+      const docs = useMemo(() => {
+        const out = [];
+        (ctx.appDb.requisitions || []).forEach(r => {
+          if (String(r.id || '').startsWith('HIST-') || ['Draft', 'Cancelled'].includes(r.status)) return;
+          const h = ctx.findHospital(r.hospitalId);
+          out.push({ id: r.id, src: 'rpst', type: 'rpst', unitKey: 'H:' + r.hospitalId, unitName: h?.hospital_name || r.hospitalId, status: r.status,
+            fy: Number(r.fiscal_year) || getFiscalInfo(Number(r.month), Number(r.year)).fiscalYear,
+            round: toNonNegativeInt(r.round_no ?? r.fiscal_term) || null, date: r.round_date || '', items: r.items || [] });
+        });
+        (internalReqs || []).forEach(r => {
+          if (r.status === 'Cancelled') return;
+          const d = deptById.get(String(r.deptId));
+          const type = (r.kind || d?.kind) === 'pharmacy' ? 'pharmacy' : 'dept';
+          out.push({ id: r.id, src: 'internal', type, unitKey: 'D:' + r.deptId, unitName: r.dept_name || d?.dept_name || r.deptId, status: r.status,
+            fy: Number(r.fiscal_year) || fiscalYearBEOfYmd(r.form_date || tsToYmd(r.created_at)),
+            round: toNonNegativeInt(r.round_no) || null, date: r.round_date || r.form_date || '', items: r.items || [] });
+        });
+        return out;
+      }, [ctx.appDb.requisitions, ctx.appDb.hospitals, internalReqs, deptById]);
+
+      const years = useMemo(() => [...new Set([fyNow, ...docs.map(d => d.fy).filter(Boolean)])].sort((a, b) => b - a), [docs, fyNow]);
+      const filtered = useMemo(() => docs.filter(d => d.fy === Number(fy)
+        && (typeFilter === 'all' || d.type === typeFilter)
+        && (roundNo === 'all' || (roundNo === 'none' ? !d.round : d.round === Number(roundNo)))
+        && (statusMode === 'all' || d.status === 'Completed')), [docs, fy, typeFilter, roundNo, statusMode]);
+      const roundCols = useMemo(() => {
+        const s = new Set(docs.filter(d => d.fy === Number(fy)).map(d => d.round || 0));
+        return [...s].sort((a, b) => (a || 999) - (b || 999));
+      }, [docs, fy]);
+      const shownRounds = roundNo === 'all' ? roundCols : roundCols.filter(r => roundNo === 'none' ? r === 0 : r === Number(roundNo));
+
+      const docValue = (d) => d.items.reduce((s, it) => { const q = summaryQty(it, d.src); return s + summaryValue(it, d.status === 'Completed' ? q.disp : q.req); }, 0);
+      const unitRows = useMemo(() => {
+        const m = new Map();
+        filtered.forEach(d => {
+          if (!m.has(d.unitKey)) m.set(d.unitKey, { key: d.unitKey, name: d.unitName, type: d.type, cells: {}, docs: 0, items: 0, value: 0 });
+          const u = m.get(d.unitKey); const v = docValue(d); const rk = d.round || 0;
+          const c = u.cells[rk] || (u.cells[rk] = { value: 0, docs: 0, items: 0 });
+          c.value += v; c.docs += 1; c.items += d.items.length;
+          u.value += v; u.docs += 1; u.items += d.items.length;
+        });
+        const order = { rpst: 0, dept: 1, pharmacy: 2 };
+        return [...m.values()].sort((a, b) => order[a.type] - order[b.type] || String(a.name).localeCompare(String(b.name), 'th'));
+      }, [filtered]);
+      const typeTotals = useMemo(() => {
+        const t = {};
+        unitRows.forEach(u => {
+          const x = t[u.type] || (t[u.type] = { value: 0, docs: 0, items: 0, units: 0, cells: {} });
+          x.value += u.value; x.docs += u.docs; x.items += u.items; x.units += 1;
+          Object.entries(u.cells).forEach(([rk, c]) => { const y = x.cells[rk] || (x.cells[rk] = { value: 0, docs: 0, items: 0 }); y.value += c.value; y.docs += c.docs; y.items += c.items; });
+        });
+        return t;
+      }, [unitRows]);
+      const grand = Object.values(typeTotals).reduce((s, x) => ({ value: s.value + x.value, docs: s.docs + x.docs, items: s.items + x.items }), { value: 0, docs: 0, items: 0 });
+
+      const drugRows = useMemo(() => {
+        const m = new Map();
+        filtered.forEach(d => d.items.forEach(it => {
+          const q = summaryQty(it, d.src); const qty = d.status === 'Completed' ? q.disp : q.req;
+          if (!(q.req > 0 || q.disp > 0)) return;
+          const id = String(it.drugId || it.drug_id || it.name);
+          const drug = ctx.findDrug(id);
+          if (!m.has(id)) m.set(id, { id, name: drug?.drug_name || it.name || id, unit: it.unit || ctx.findUnitName(drug), pack: safePackSize(it.packSize ?? drug?.pack_size), type: it.type || drug?.type, byType: { rpst: 0, dept: 0, pharmacy: 0 }, req: 0, qty: 0, value: 0, units: new Set() });
+          const r = m.get(id);
+          r.byType[d.type] += qty; r.req += q.req; r.qty += qty; r.value += summaryValue(it, qty); r.units.add(d.unitKey);
+        }));
+        const k = normalizeForMatch(drugSearch);
+        return [...m.values()].filter(r => !k || normalizeForMatch(r.name + ' ' + r.id).includes(k)).sort((a, b) => b.value - a.value);
+      }, [filtered, drugSearch]);
+
+      const fmtMoney = (v) => v > 0 ? v.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-';
+      const fmtN = (v) => v > 0 ? v.toLocaleString('th-TH', { maximumFractionDigits: 2 }) : '-';
+      const cellText = (c) => !c ? '-' : metric === 'value' ? fmtMoney(c.value) : metric === 'docs' ? (c.docs || '-') : (c.items || '-');
+      const roundHead = (rk) => rk ? `รอบ ${rk}` : 'ไม่ระบุรอบ';
+      const typesSrc = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+      const subtitle = `ปีงบประมาณ ${fy}${roundNo === 'all' ? '' : roundNo === 'none' ? ' · ไม่ระบุรอบ' : ` · รอบที่ ${roundNo}`} · ${statusMode === 'completed' ? 'เฉพาะที่อนุมัติ/จัดยาแล้ว (มูลค่าตามจำนวนจ่าย)' : 'ทุกสถานะ (อนุมัติแล้วใช้จำนวนจ่าย / ที่เหลือใช้จำนวนขอ)'}`;
+
+      const exportCsv = () => {
+        if (tab === 'units') {
+          const head = ['ประเภท', 'หน่วยงาน', ...shownRounds.map(roundHead), 'จำนวนใบ', 'จำนวนรายการ', 'มูลค่ารวม (บาท)'];
+          const body = unitRows.map(u => [SUMMARY_UNIT_TYPES[u.type], u.name, ...shownRounds.map(rk => u.cells[rk] ? (metric === 'value' ? u.cells[rk].value.toFixed(2) : metric === 'docs' ? u.cells[rk].docs : u.cells[rk].items) : ''), u.docs, u.items, u.value.toFixed(2)]);
+          downloadCsv(`สรุปการเบิก_หน่วยงาน_${fy}.csv`, [[subtitle], head, ...body, ['รวม', '', ...shownRounds.map(() => ''), grand.docs, grand.items, grand.value.toFixed(2)]]);
+        } else {
+          const head = ['รหัส', 'รายการ', 'หน่วย', 'รพ.สต.', 'หน่วยงาน', 'ห้องยา', 'รวมจำนวน', 'จำนวนขอเบิก', 'จำนวนหน่วยที่เบิก', 'มูลค่า (บาท)'];
+          downloadCsv(`สรุปการเบิก_รายการยา_${fy}.csv`, [[subtitle], head, ...drugRows.map(r => [r.id, r.name, r.unit, r.byType.rpst, r.byType.dept, r.byType.pharmacy, r.qty, r.req, r.units.size, r.value.toFixed(2)])]);
+        }
+      };
+
+      const TabChip = ({ id, icon, label }) => (
+        <button onClick={() => setTab(id)} className={`px-4 py-2 rounded-xl font-bold text-sm transition ${tab === id ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600 hover:bg-slate-50'}`}><i className={`fa-solid ${icon} mr-2`}></i>{label}</button>
+      );
+
+      return (
+        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100 print-safe-wrapper">
+          <div className="flex flex-wrap justify-between items-start mb-5 pb-4 border-b gap-4 no-print">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-table-list text-emerald-600 mr-2"></i> สรุปการเบิก</h2>
+              <p className="text-slate-500 mt-1 text-sm">รวมใบเบิก รพ.สต. และหน่วยงาน/ห้องยาใน รพ. · มูลค่า = จำนวน ÷ ขนาดบรรจุ × ราคาต่อหน่วยบรรจุ</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={exportCsv} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-file-csv mr-2"></i>ส่งออก CSV</button>
+              <PrintButton />
+            </div>
+          </div>
+          <div className="flex flex-wrap items-end gap-3 mb-4 no-print">
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">ปีงบ</span>
+              <select id="sum-fy" value={fy} onChange={e => { setFy(Number(e.target.value)); setRoundNo('all'); }} className="border rounded-xl p-2 font-bold">{years.map(y => <option key={y} value={y}>{y}</option>)}</select></label>
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">รอบ</span>
+              <select id="sum-round" value={roundNo} onChange={e => setRoundNo(e.target.value)} className="border rounded-xl p-2 font-bold">
+                <option value="all">ทุกรอบ</option>{roundCols.filter(Boolean).map(r => <option key={r} value={r}>รอบที่ {r}</option>)}{roundCols.includes(0) && <option value="none">ไม่ระบุรอบ</option>}
+              </select></label>
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">ประเภทหน่วย</span>
+              <select id="sum-type" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} className="border rounded-xl p-2 font-bold">
+                <option value="all">ทั้งหมด</option>{Object.entries(SUMMARY_UNIT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select></label>
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">สถานะ</span>
+              <select id="sum-status" value={statusMode} onChange={e => setStatusMode(e.target.value)} className="border rounded-xl p-2 font-bold">
+                <option value="completed">อนุมัติ/จัดยาแล้ว</option><option value="all">ทุกสถานะ (ยกเว้นยกเลิก/ร่าง)</option>
+              </select></label>
+            <div className="flex gap-2 ml-auto">
+              <TabChip id="units" icon="fa-building" label="ตามหน่วยงาน" />
+              <TabChip id="drugs" icon="fa-pills" label="ตามรายการยา" />
+            </div>
+          </div>
+          {loadErr && <div className="no-print mb-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm">โหลดใบเบิกภายใน รพ. ไม่สำเร็จ: {loadErr} — แสดงเฉพาะ รพ.สต.</div>}
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5 no-print">
+            {Object.entries(SUMMARY_UNIT_TYPES).map(([k, label]) => (
+              <div key={k} className="rounded-xl border p-4">
+                <div className="text-xs font-bold text-slate-500">{label}</div>
+                <div className="text-xl font-extrabold tabular-nums text-slate-800">{fmtMoney(typeTotals[k]?.value || 0)}</div>
+                <div className="text-[11px] text-slate-400">{typeTotals[k]?.units || 0} หน่วย · {typeTotals[k]?.docs || 0} ใบ</div>
+              </div>
+            ))}
+            <div className="rounded-xl border-2 border-emerald-500 bg-emerald-50 p-4">
+              <div className="text-xs font-bold text-emerald-800">รวมทั้งสิ้น (บาท)</div>
+              <div className="text-xl font-extrabold tabular-nums text-emerald-900">{fmtMoney(grand.value)}</div>
+              <div className="text-[11px] text-emerald-700">{grand.docs} ใบ · {grand.items} รายการ</div>
+            </div>
+          </div>
+
+          <div className="print-area font-sarabun w-full">
+            <ReportPrintHeader title={tab === 'units' ? 'สรุปการเบิกยาและเวชภัณฑ์ แยกตามหน่วยงาน' : 'สรุปการเบิกยาและเวชภัณฑ์ แยกตามรายการ'} subtitle={subtitle} />
+            {internalReqs === null ? <div className="py-10 flex justify-center"><div className="loader"></div></div> : tab === 'units' ? (
+              <>
+                <div className="flex items-center gap-2 mb-2 text-sm no-print">
+                  <span className="text-slate-500">ช่องรอบแสดง</span>
+                  {[['value', 'มูลค่า'], ['docs', 'จำนวนใบ'], ['items', 'จำนวนรายการ']].map(([k, l]) => (
+                    <button key={k} onClick={() => setMetric(k)} className={`px-3 py-1 rounded-lg text-xs font-bold ${metric === k ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{l}</button>
+                  ))}
+                </div>
+                <div className="overflow-x-auto w-full">
+                  <table id="sum-units-table" className="official-table w-full text-[13px] whitespace-nowrap border-collapse">
+                    <thead><tr className="bg-slate-200">
+                      <th className="p-2 border border-slate-300 text-center w-10">ที่</th>
+                      <th className="p-2 border border-slate-300 text-left">หน่วยงาน</th>
+                      {shownRounds.map(rk => <th key={rk} className="p-2 border border-slate-300 text-right">{roundHead(rk)}</th>)}
+                      <th className="p-2 border border-slate-300 text-right">ใบ</th>
+                      <th className="p-2 border border-slate-300 text-right bg-slate-300">มูลค่ารวม (บาท)</th>
+                    </tr></thead>
+                    <tbody>
+                      {!unitRows.length && <tr><td colSpan={shownRounds.length + 4} className="p-8 text-center text-slate-400">ไม่มีใบเบิกตามเงื่อนไขที่เลือก</td></tr>}
+                      {Object.keys(SUMMARY_UNIT_TYPES).filter(t => typeTotals[t]).map(t => (
+                        <React.Fragment key={t}>
+                          <tr className="bg-slate-50 font-bold">
+                            <td colSpan="2" className="p-2 border border-slate-300">{SUMMARY_UNIT_TYPES[t]} <span className="text-xs font-normal text-slate-500">({typeTotals[t].units} หน่วย)</span></td>
+                            {shownRounds.map(rk => <td key={rk} className="p-2 border border-slate-300 text-right tabular-nums">{cellText(typeTotals[t].cells[rk])}</td>)}
+                            <td className="p-2 border border-slate-300 text-right tabular-nums">{typeTotals[t].docs}</td>
+                            <td className="p-2 border border-slate-300 text-right tabular-nums bg-slate-100">{fmtMoney(typeTotals[t].value)}</td>
+                          </tr>
+                          {unitRows.filter(u => u.type === t).map((u, i) => (
+                            <tr key={u.key} className="hover:bg-slate-50">
+                              <td className="p-2 border border-slate-300 text-center text-slate-500">{i + 1}</td>
+                              <td className="p-2 border border-slate-300">{u.name}</td>
+                              {shownRounds.map(rk => <td key={rk} className="p-2 border border-slate-300 text-right tabular-nums">{cellText(u.cells[rk])}</td>)}
+                              <td className="p-2 border border-slate-300 text-right tabular-nums">{u.docs}</td>
+                              <td className="p-2 border border-slate-300 text-right tabular-nums font-bold bg-slate-50">{fmtMoney(u.value)}</td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                    {unitRows.length > 0 && <tfoot><tr className="bg-emerald-100 text-emerald-900 font-bold">
+                      <td colSpan="2" className="p-2 border border-emerald-200 text-right">รวมทั้งสิ้น</td>
+                      {shownRounds.map(rk => { const c = Object.values(typeTotals).reduce((s, x) => { const y = x.cells[rk]; return y ? { value: s.value + y.value, docs: s.docs + y.docs, items: s.items + y.items } : s; }, { value: 0, docs: 0, items: 0 }); return <td key={rk} className="p-2 border border-emerald-200 text-right tabular-nums">{cellText(c.docs ? c : null)}</td>; })}
+                      <td className="p-2 border border-emerald-200 text-right tabular-nums">{grand.docs}</td>
+                      <td className="p-2 border border-emerald-300 text-right tabular-nums bg-emerald-200">{fmtMoney(grand.value)}</td>
+                    </tr></tfoot>}
+                  </table>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 mb-2 no-print">
+                  <input id="sum-drug-search" value={drugSearch} onChange={e => setDrugSearch(e.target.value)} placeholder="ค้นหายา / รหัส" className="border rounded-xl px-3 py-2 text-sm w-72 max-w-full" />
+                  <span className="text-sm text-slate-500">{drugRows.length} รายการ · เรียงตามมูลค่า</span>
+                </div>
+                <div className="overflow-x-auto w-full">
+                  <table id="sum-drugs-table" className="official-table w-full text-[13px] whitespace-nowrap border-collapse">
+                    <thead><tr className="bg-slate-200">
+                      <th className="p-2 border border-slate-300 text-center w-10">ที่</th>
+                      <th className="p-2 border border-slate-300 text-left">รายการ</th>
+                      <th className="p-2 border border-slate-300 text-left">หน่วย</th>
+                      {Object.values(SUMMARY_UNIT_TYPES).map(l => <th key={l} className="p-2 border border-slate-300 text-right">{l}</th>)}
+                      <th className="p-2 border border-slate-300 text-right">รวมจำนวน</th>
+                      <th className="p-2 border border-slate-300 text-right">หน่วยที่เบิก</th>
+                      <th className="p-2 border border-slate-300 text-right bg-slate-300">มูลค่า (บาท)</th>
+                    </tr></thead>
+                    <tbody>
+                      {!drugRows.length && <tr><td colSpan="9" className="p-8 text-center text-slate-400">ไม่มีรายการตามเงื่อนไขที่เลือก</td></tr>}
+                      {drugRows.map((r, i) => (
+                        <tr key={r.id} className="hover:bg-slate-50">
+                          <td className="p-2 border border-slate-300 text-center text-slate-500">{i + 1}</td>
+                          <td className="p-2 border border-slate-300 whitespace-normal min-w-[220px]"><div className="font-semibold">{r.name}</div><div className="text-[10px] text-slate-400 font-mono">{r.id}{r.type && typesSrc[r.type] ? ` · ${typesSrc[r.type]}` : ''}</div></td>
+                          <td className="p-2 border border-slate-300 text-xs">{r.unit}{r.pack > 1 ? ` (บรรจุ ${r.pack})` : ''}</td>
+                          {Object.keys(SUMMARY_UNIT_TYPES).map(t => <td key={t} className="p-2 border border-slate-300 text-right tabular-nums">{fmtN(r.byType[t])}</td>)}
+                          <td className="p-2 border border-slate-300 text-right tabular-nums font-bold">{fmtN(r.qty)}</td>
+                          <td className="p-2 border border-slate-300 text-right tabular-nums">{r.units.size}</td>
+                          <td className="p-2 border border-slate-300 text-right tabular-nums font-bold bg-slate-50">{fmtMoney(r.value)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {drugRows.length > 0 && <tfoot><tr className="bg-emerald-100 text-emerald-900 font-bold">
+                      <td colSpan="8" className="p-2 border border-emerald-200 text-right">รวมมูลค่า {drugRows.length} รายการ</td>
+                      <td className="p-2 border border-emerald-300 text-right tabular-nums bg-emerald-200">{fmtMoney(drugRows.reduce((s, r) => s + r.value, 0))}</td>
+                    </tr></tfoot>}
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    };
 
     // ===== v5.9 ยา NCDs ตามนัด (จาก Sawee Refer → ncds_demand_inbox) =====
     const ncdsToday = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
@@ -8250,7 +8793,8 @@ const AdminConfigView = ({ ctx }) => {
           ['historical_usages', () => scoped('historical_usages', 'hospital_id').get()],
           ['vaccine_requisitions', () => scoped('vaccine_requisitions', 'hospitalId').get()],
           ['master_depts',      () => db.collection('master_depts').get()],
-          ['internal_pending',  () => isAdmin ? db.collection('internal_requisitions').where('status', 'in', ['Pending', 'ApprovalFailed']).get() : Promise.resolve(null)]
+          ['internal_pending',  () => isAdmin ? db.collection('internal_requisitions').where('status', 'in', ['Pending', 'ApprovalFailed']).get() : Promise.resolve(null)],
+          ['req_rounds',        () => db.collection('req_rounds').get().catch(e => { console.warn('[Sawee Rxfill] req_rounds:', e?.message || e); return null; })]
         ];
 
         const settled = await Promise.allSettled(tasks.map(t => t[1]()));
@@ -8278,6 +8822,7 @@ const AdminConfigView = ({ ctx }) => {
         const vaccineReqs  = rowsAt(10);
         const depts        = rowsAt(11);
         const internalPendingSnap = snapAt(12);
+        const reqRounds    = rowsAt(13);
 
         setAppDb(prev => ({
           ...prev,
@@ -8295,7 +8840,8 @@ const AdminConfigView = ({ ctx }) => {
           historicalUsages:  histories    ?? prev.historicalUsages ?? [],
           vaccineReqs:       vaccineReqs  ?? prev.vaccineReqs       ?? [],
           depts:             (depts ?? prev.depts ?? []).map(d => ({ ...d, dept_id: d.dept_id || d.id })),
-          internalPendingCount: internalPendingSnap ? internalPendingSnap.size : (prev.internalPendingCount ?? 0)
+          internalPendingCount: internalPendingSnap ? internalPendingSnap.size : (prev.internalPendingCount ?? 0),
+          rounds:            reqRounds ?? prev.rounds ?? []
         }));
 
         if (failed.length) {
@@ -8312,7 +8858,7 @@ const AdminConfigView = ({ ctx }) => {
 
       useEffect(()=>{
         if(normalizeUserRole(currentUser?.role)!=='admin') return;
-        if(['config','summary_report','item_usage_report','map_dashboard','drug_history'].includes(currentView)) {
+        if(['config','summary_report','item_usage_report','map_dashboard','drug_history','req_summary'].includes(currentView)) {
           refreshData(currentUser,{adminScope:'global',forceMaster:currentView==='config'});
           return;
         }
@@ -8404,6 +8950,7 @@ const AdminConfigView = ({ ctx }) => {
               {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('my_stock')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='my_stock'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> {normalizeUserRole(currentUser?.role)==='admin'?'คลังยา รพ.สต.':'ชั้นยาของฉัน'}</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('internal_queue')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='internal_queue'?'bg-teal-600 text-white shadow-lg shadow-teal-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-list-ol w-6 text-center mr-2"></i> คิวใบเบิกภายใน รพ.{appDb.internalPendingCount ? <span className="ml-auto text-[11px] bg-amber-400 text-slate-900 rounded-full px-2 py-0.5">{appDb.internalPendingCount}</span> : null}</button>}
               {currentUser?.role === 'admin' && <a href="internal.html" className="w-full text-left p-4 rounded-xl font-bold transition flex items-center hover:bg-slate-800 text-slate-300"><i className="fa-solid fa-prescription-bottle-medical w-6 text-center mr-2"></i> เบิกยาห้องยา/หน่วยงาน</a>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('req_summary')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='req_summary'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-table-list w-6 text-center mr-2"></i> สรุปการเบิก</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('map_dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='map_dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-map-location-dot w-6 text-center mr-2"></i> VMI Map Dashboard</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
               
@@ -8424,7 +8971,7 @@ const AdminConfigView = ({ ctx }) => {
           <div className="flex-1 p-4 lg:p-10 overflow-auto w-full relative print-safe-wrapper print:p-0 print:bg-white">
             <div className={`${currentView==='config'?'w-max min-w-full':currentView==='my_stock'||currentView==='internal_queue'?'max-w-[1800px]':'max-w-7xl'} mx-auto pb-20 print-safe-wrapper print:pb-0 print:max-w-full`}>
               {currentView === 'dashboard' && <DashboardView ctx={ctx} />}
-              {currentView === 'create_req' && <CreateReqView ctx={ctx} />}
+              {currentView === 'create_req' && <CreateReqGate ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}
               {currentView === 'my_stock' && <MyStockView ctx={ctx} />}
               {currentView === 'invs_lots' && <InvsLotView ctx={ctx} />}
@@ -8433,6 +8980,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}
+              {currentView === 'req_summary' && currentUser?.role === 'admin' && <ReqSummaryView ctx={ctx} />}
               {currentView === 'item_usage_report' && <ItemUsageReportView ctx={ctx} />}
               {currentView === 'drug_history' && <DrugHistoryView ctx={ctx} />}
               {currentView === 'vaccine_req' && <VaccineReqView ctx={ctx} />}

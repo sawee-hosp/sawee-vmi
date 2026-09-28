@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.0.0"></script>
+  <script src="shared.js?v=6.1.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.0.0';
+      var need = '6.1.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -190,7 +190,7 @@
         || String(d.invs_location || '').toLowerCase() === q.toLowerCase().trim();
     };
 
-    // ช่องค้นหายาจาก master_drugs (ไม่แสดงยายกเลิกใช้ และวัคซีน type 6)
+    // ช่องค้นหายาจาก master_drugs (ไม่แสดงยา "ยกเลิกใช้" ทุกหน่วย และวัคซีน type 6 · ยา "ยกเลิก รพ.สต." ยังเบิกได้)
     const DrugSearchBox = ({ ctx, onPick, excludeIds, placeholder, autoFocus }) => {
       const [q, setQ] = useState('');
       const [open, setOpen] = useState(false);
@@ -198,7 +198,7 @@
       const results = useMemo(() => {
         if (!q.trim()) return [];
         const ex = excludeIds || new Set();
-        return ctx.drugs.filter(d => !isDrugDiscontinued(d) && String(d.type) !== '6' && drugMatches(d, q))
+        return ctx.drugs.filter(d => !isDrugDiscontinuedAll(d) && String(d.type) !== '6' && drugMatches(d, q))
           .slice(0, 30)
           .map(d => ({ d, added: ex.has(String(d.drug_id)) }));
       }, [q, ctx.drugs, excludeIds]);
@@ -239,7 +239,8 @@
       return {
         drugId: String(drug.drug_id), name: safeText(drug.drug_name), unit: ctx.unitName(drug),
         packSize: snap.packSize, isUnpacked: snap.isUnpacked, dispenseStep: snap.dispenseStep, maximumQty: snap.maximumQty,
-        type: snap.type, price: snap.price, isDiscontinued: snap.isDiscontinued
+        // หน่วยงานใน รพ. ล็อกเฉพาะยา "ยกเลิกใช้" (ทุกหน่วย) — "ยกเลิก รพ.สต." ยังเบิกได้
+        type: snap.type, price: snap.price, isDiscontinued: snap.discontinuedAll, discontinuedAll: snap.discontinuedAll
       };
     };
 
@@ -516,12 +517,12 @@
     const DeptReqView = ({ ctx, editReq, round, onDone }) => {
       const [template] = useState(() => editReq ? null : lastDeptTemplate(ctx));
       const [items, setItems] = useState(() => {
-        if (editReq) return (editReq.items || []).map(it => ({ ...it }));
+        if (editReq) return (editReq.items || []).map(it => { const d = ctx.drugById.get(String(it.drugId)); return { ...it, isDiscontinued: d ? isDrugDiscontinuedAll(d) : !!it.discontinuedAll }; });
         if (!template) return [];
         // โครงจากใบล่าสุด: ข้อมูลยาอัปเดตจาก master, จำนวนเริ่มที่ 0 ให้กรอกเอง
         return (template.items || []).map(it => {
           const drug = ctx.drugById.get(String(it.drugId));
-          if (!drug || isDrugDiscontinued(drug)) return null;
+          if (!drug || isDrugDiscontinuedAll(drug)) return null;
           const base = baseItemFromDrug(ctx, drug);
           const lastQty = toNonNegativeNumber(it.requestQty ?? it.dispenseQty);
           return { ...base, requestQty: 0, dispenseQty: 0, note: '', source: 'template', lastQty, requestMode: it.requestMode || defaultRequestMode(lastQty, safePackSize(base.packSize)) };
@@ -548,7 +549,7 @@
         });
         return [...count.entries()]
           .map(([id, c]) => ({ drug: ctx.drugById.get(id), ...c }))
-          .filter(x => x.drug && !isDrugDiscontinued(x.drug))
+          .filter(x => x.drug && !isDrugDiscontinuedAll(x.drug))
           .sort((a, b) => b.n - a.n)
           .slice(0, 30);
       }, [ctx.reqs, ctx.drugById]);
@@ -847,7 +848,7 @@ ORDER BY d.name`;
           [...(editReq.items || []), ...(editReq.zero_rows || [])].forEach(it => {
             const id = String(it.drugId);
             m.set(id, {
-              base: { drugId: id, name: it.name, unit: it.unit, packSize: it.packSize, isUnpacked: it.isUnpacked, dispenseStep: it.dispenseStep, maximumQty: it.maximumQty, type: it.type, price: it.price, isDiscontinued: it.isDiscontinued },
+              base: { drugId: id, name: it.name, unit: it.unit, packSize: it.packSize, isUnpacked: it.isUnpacked, dispenseStep: it.dispenseStep, maximumQty: it.maximumQty, type: it.type, price: it.price, isDiscontinued: ctx.drugById.get(id) ? isDrugDiscontinuedAll(ctx.drugById.get(id)) : !!it.discontinuedAll },
               multiplier: toNonNegativeNumber(it.hosxpMultiplier, 1) || 1,
               onHand: toNonNegativeNumber(it.onHand),
               dispenseManual: it.followSuggest === false ? toNonNegativeNumber(it.dispenseQty) : null,
@@ -1462,7 +1463,7 @@ ORDER BY d.name`;
       const ids = useMemo(() => {
         const s = new Set(ctx.stock.map(x => String(x.drug_id)));
         ctx.reqs.forEach(r => (r.items || []).forEach(it => s.add(String(it.drugId))));
-        if (showAll) ctx.drugs.filter(d => !isDrugDiscontinued(d) && String(d.type) !== '6').forEach(d => s.add(String(d.drug_id)));
+        if (showAll) ctx.drugs.filter(d => !isDrugDiscontinuedAll(d) && String(d.type) !== '6').forEach(d => s.add(String(d.drug_id)));
         edits.forEach((_, k) => s.add(k));
         return [...s];
       }, [ctx.stock, ctx.reqs, ctx.drugs, showAll, edits]);

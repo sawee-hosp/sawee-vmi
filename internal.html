@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=5.9.0"></script>
+  <script src="shared.js?v=6.0.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '5.9.0';
+      var need = '6.0.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -387,8 +387,72 @@
       );
     };
 
+    // ===== ขั้นแรกของการสร้างใบ: เลือกรอบเบิก (เลขที่/วันที่ของใบยึดตามรอบ ไม่ว่าจะเบิกวันไหน) =====
+    const RoundPickStep = ({ ctx, onPick, onOpenReq }) => {
+      const today = toYmd(new Date());
+      const fyNow = fiscalYearBEOfYmd(today);
+      const list = ctx.rounds.filter(r => Number(r.fiscal_year) >= fyNow - 1 && Number(r.fiscal_year) <= fyNow + 1);
+      const usedBy = (r) => ctx.reqs.find(q => q.round_id === r.id && q.status !== 'Cancelled');
+      const [sel, setSel] = useState(() => { const open = list.filter(r => !usedBy(r)); return pickDefaultRound(open, today)?.id || ''; });
+      if (!list.length) {
+        return (
+          <div className="bg-white rounded-2xl border shadow-sm p-8 max-w-2xl space-y-4 animate-fade-in">
+            <h2 className="text-xl font-extrabold">ยังไม่มีรอบเบิกในระบบ</h2>
+            <p className="text-slate-600">แอดมินยังไม่ได้กำหนดรอบเบิกของปีงบนี้ (จัดการฐานข้อมูล › รอบเบิก) ระบบจะใช้เลขที่ใบอัตโนมัติและวันที่วันนี้แทน</p>
+            <button onClick={() => onPick(null)} className="px-6 py-3 rounded-xl bg-gradient-main text-white font-bold">สร้างใบเบิกต่อ</button>
+          </div>
+        );
+      }
+      const chosen = list.find(r => r.id === sel);
+      return (
+        <div className="space-y-5 animate-fade-in max-w-4xl">
+          <div>
+            <div className="text-xs font-bold text-teal-700 tracking-wide">ขั้นที่ 1 จาก 2</div>
+            <h2 className="text-2xl font-extrabold text-slate-800">เลือกรอบเบิก</h2>
+            <p className="text-sm text-slate-500">เลขที่และวันที่ในใบเบิกจะเป็นไปตามรอบที่เลือก ไม่ว่าจะกรอกวันไหน · 1 รอบ เบิกได้ 1 ใบต่อหน่วยงาน</p>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3" role="radiogroup" aria-label="รอบเบิก">
+            {list.map(r => {
+              const used = usedBy(r);
+              const past = String(r.round_date) < today;
+              const on = sel === r.id;
+              return (
+                <div key={r.id} role="radio" aria-checked={on} tabIndex={used ? -1 : 0}
+                  onClick={() => !used && setSel(r.id)} onKeyDown={e => { if (!used && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSel(r.id); } }}
+                  className={`rounded-xl border p-4 transition ${used ? 'bg-slate-50 border-slate-200 cursor-default' : on ? 'border-teal-500 bg-teal-50 ring-2 ring-teal-200 cursor-pointer' : 'bg-white border-slate-200 hover:border-teal-300 cursor-pointer'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-lg font-extrabold text-slate-800">รอบที่ {r.round_no}<span className="text-sm text-slate-400">/{r.fiscal_year}</span></span>
+                    {used ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600">มีใบแล้ว</span> : past ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">เลยวันแล้ว</span> : null}
+                  </div>
+                  <div className="text-sm text-slate-600 mt-1">{thaiDateLong(r.round_date)}</div>
+                  {r.note && <div className="text-xs text-slate-400 mt-1">{r.note}</div>}
+                  {used && <button onClick={() => onOpenReq(used)} className="mt-2 text-xs font-bold text-teal-700 hover:underline">{['Pending', 'Rejected'].includes(used.status) ? 'แก้ไขใบเดิม' : 'ดูใบเดิม'} ({INTERNAL_STATUS_LABELS[used.status] || used.status})</button>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={() => chosen && onPick(chosen)} disabled={!chosen} className="px-6 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40"><i className="fa-solid fa-arrow-right mr-2"></i>เริ่มกรอกใบเบิก{chosen ? ` · ${roundFormNo(chosen)}` : ''}</button>
+            {chosen && <span className="text-sm text-slate-500">ใบเบิกเลขที่ <b>{roundFormNo(chosen)}</b> วันที่ <b>{thaiDateLong(chosen.round_date)}</b></span>}
+          </div>
+        </div>
+      );
+    };
+    const RoundBanner = ({ round, editReq }) => {
+      const no = editReq ? (editReq.form_no || '') : (round ? roundFormNo(round) : '');
+      const date = editReq ? editReq.form_date : round?.round_date;
+      if (!no && !date) return null;
+      return (
+        <div className="inline-flex flex-wrap items-center gap-x-4 gap-y-1 bg-white border border-teal-200 rounded-xl px-4 py-2 text-sm">
+          <span className="text-slate-500">ใบเบิกเลขที่ <b className="text-slate-800 font-mono">{no || '(อัตโนมัติ)'}</b></span>
+          {date && <span className="text-slate-500">วันที่ <b className="text-slate-800">{thaiDateLong(date)}</b></span>}
+          {(round || editReq?.round_no) && <span className="text-[11px] font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded">รอบที่ {round?.round_no || editReq.round_no}</span>}
+        </div>
+      );
+    };
+
     // ===== ใบเบิก: บันทึก/ส่งใหม่ (ใช้ทั้งหน่วยงานและห้องยา) =====
-    const saveInternalReq = async ({ ctx, editReq, kind, items, extra, stockOps }) => {
+    const saveInternalReq = async ({ ctx, editReq, kind, items, extra, stockOps, round }) => {
       const dept = ctx.dept;
       const user = ctx.currentUser;
       const total = items.reduce((s, it) => s + internalItemValue(it), 0);
@@ -422,11 +486,13 @@
       } else {
         reqId = buildInternalReqId(dept.dept_id);
         const today = toYmd(new Date());
-        const fno = nextInternalFormNo(ctx.reqs, dept.dept_id, today);
+        if (round && ctx.reqs.some(q => q.round_id === round.id && q.status !== 'Cancelled')) throw new Error(`หน่วยงานนี้มีใบเบิกของรอบที่ ${round.round_no} แล้ว — แก้ไขใบเดิมแทน`);
+        const fno = round ? { no: roundFormNo(round), fiscalYear: Number(round.fiscal_year) } : nextInternalFormNo(ctx.reqs, dept.dept_id, today);
         await db.collection('internal_requisitions').doc(reqId).set({
           ...common,
           id: reqId,
-          form_no: fno.no, form_date: today, fiscal_year: fno.fiscalYear,
+          form_no: fno.no, form_date: round ? round.round_date : today, fiscal_year: fno.fiscalYear,
+          ...(round ? { round_id: round.id, round_no: Number(round.round_no), round_date: round.round_date } : {}),
           doc_no: buildDocNo(dept.dept_id),
           revision: 1,
           created_by_uid: user.uid, created_by_name: safeText(user.name), created_by_position: safeText(user.position),
@@ -447,7 +513,7 @@
       .filter(r => r.kind !== 'pharmacy' && r.status !== 'Cancelled' && (r.items || []).length)
       .sort((a, b) => tsToMillis(b.submitted_at || b.created_at) - tsToMillis(a.submitted_at || a.created_at))[0] || null;
 
-    const DeptReqView = ({ ctx, editReq, onDone }) => {
+    const DeptReqView = ({ ctx, editReq, round, onDone }) => {
       const [template] = useState(() => editReq ? null : lastDeptTemplate(ctx));
       const [items, setItems] = useState(() => {
         if (editReq) return (editReq.items || []).map(it => ({ ...it }));
@@ -538,7 +604,7 @@
             setSaving(true);
             try {
               const clean = valid.map(({ lastQty, ...it }) => ({ ...it, source: it.source === 'template' ? 'template' : (it.source || 'manual'), requestQty: toNonNegativeNumber(it.requestQty), dispenseQty: toNonNegativeNumber(it.requestQty), note: safeText(it.note) }));
-              await saveInternalReq({ ctx, editReq, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent } });
+              await saveInternalReq({ ctx, editReq, round, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent } });
               ctx.showToast(editReq ? 'ส่งใบเบิกที่แก้ไขแล้ว' : 'ส่งใบเบิกแล้ว รอห้องยาตรวจสอบ');
               await ctx.reload();
               onDone();
@@ -555,6 +621,7 @@
               <div className="text-xs font-bold text-teal-700 tracking-wide">ใบเบิกยาหน่วยงาน</div>
               <h2 className="text-2xl font-extrabold text-slate-800">{editReq ? `แก้ไขใบ ${editReq.doc_no || ''}` : 'สร้างใบเบิกใหม่'}</h2>
               <div className="text-sm text-slate-500">{ctx.dept?.dept_name} · คีย์จำนวนที่ต้องการได้เลย ห้องยาจะตรวจและจ่ายตามลำดับคิว</div>
+              <div className="mt-2"><RoundBanner round={round} editReq={editReq} /></div>
             </div>
             {editReq?.status === 'Rejected' && (
               <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-2 text-sm max-w-md">
@@ -740,20 +807,23 @@ ORDER BY d.name`;
       return { byDrug, unmatched };
     };
 
-    const PharmacyReqView = ({ ctx, editReq, onDone }) => {
+    const PharmacyReqView = ({ ctx, editReq, round, onDone }) => {
       const isAdmin = ctx.isAdmin;
       const today = toYmd(new Date());
       const yesterday = addDaysYmd(today, -1);
 
       // ช่วงวันที่เริ่มต้น = ต่อจากใบก่อนหน้า (กันยอดใช้ซ้ำซ้อน)
-      const lastPeriodTo = useMemo(() => {
-        const prev = ctx.reqs.filter(r => r.kind === 'pharmacy' && !['Cancelled', 'Rejected'].includes(r.status) && r.id !== editReq?.id && r.period_to)
-          .sort((a, b) => String(b.period_to).localeCompare(String(a.period_to)))[0];
-        return prev?.period_to || '';
-      }, [ctx.reqs, editReq?.id]);
-
+      const prevReq = useMemo(() => ctx.reqs.filter(r => r.kind === 'pharmacy' && !['Cancelled', 'Rejected'].includes(r.status) && r.id !== editReq?.id && r.period_to)
+        .sort((a, b) => String(b.period_to).localeCompare(String(a.period_to)))[0] || null, [ctx.reqs, editReq?.id]);
+      const lastPeriodTo = prevReq?.period_to || '';
+      // วันเริ่มถูกล็อกให้ต่อจากใบก่อน (กันยอดใช้ซ้ำ/ขาดช่วง) — แอดมินปลดล็อกได้
+      const [fromUnlocked, setFromUnlocked] = useState(false);
+      const fromLocked = !!lastPeriodTo && !fromUnlocked;
+      const defaultTo = (() => { let t = yesterday; if (round?.round_date && addDaysYmd(round.round_date, -1) < t) t = addDaysYmd(round.round_date, -1); return t; })();
       const [from, setFrom] = useState(() => editReq?.period_from || (lastPeriodTo ? addDaysYmd(lastPeriodTo, 1) : today.slice(0, 8) + '01'));
-      const [to, setTo] = useState(() => editReq?.period_to || yesterday);
+      const [to, setTo] = useState(() => editReq?.period_to || (lastPeriodTo && defaultTo < addDaysYmd(lastPeriodTo, 1) ? addDaysYmd(lastPeriodTo, 1) : defaultTo));
+      const roundDays = useMemo(() => daysToNextRound(ctx.rounds, round || (editReq?.round_id ? ctx.rounds.find(r => r.id === editReq.round_id) : null), toNonNegativeNumber(ctx.dept?.round_days, 0) || 30), [ctx.rounds, round, editReq?.round_id, ctx.dept?.round_days]);
+      const [minOrderValue, setMinOrderValue] = useState(() => toNonNegativeNumber(editReq?.min_order_value ?? ctx.dept?.min_order_value, 100));
       const [coverDays, setCoverDays] = useState(() => toNonNegativeNumber(editReq?.cover_days, 0) || toNonNegativeNumber(ctx.dept?.cover_days, 0) || INTERNAL_DEFAULT_COVER_DAYS);
       const [note, setNote] = useState(editReq?.note || '');
 
@@ -848,7 +918,7 @@ ORDER BY d.name`;
           const onHand = onHandTouched ? toNonNegativeNumber(st.onHand) : Math.max(0, stockBal - usage);
           const inTransit = inTransitMap.get(id) || 0;
           const blocked = String(base.type) === '6' || !!base.isDiscontinued;
-          const sug = calcPharmacySuggestion({ usage, days: calcDays, coverDays, onHand, inTransit, item: base });
+          const sug = calcPharmacySuggestion({ usage, days: calcDays, coverDays, roundDays, minOrderValue, onHand, inTransit, item: base });
           const suggested = blocked ? 0 : sug.suggested;
           const follow = st.dispenseManual === null || st.dispenseManual === undefined;
           const dispense = follow ? suggested : toNonNegativeNumber(st.dispenseManual);
@@ -859,12 +929,13 @@ ORDER BY d.name`;
             hosxpUnits: u?.hosxpUnits || '', hosxpNames: u?.hosxpNames || [],
             stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit,
             dailyAvg: sug.dailyAvg, target: sug.target, suggested, follow, dispense, blocked, source,
+            skipReason: blocked ? '' : sug.skipReason, coverRounds: sug.coverRounds,
             value: internalItemValue({ dispenseQty: dispense, packSize: base.packSize, price: base.price }),
             note: st.note || ''
           });
         });
         return out;
-      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays]);
+      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue]);
 
       const visible = useMemo(() => {
         let rows = derived;
@@ -873,6 +944,7 @@ ORDER BY d.name`;
         else if (filter === 'order') rows = rows.filter(r => r.dispense > 0);
         else if (filter === 'unused') rows = rows.filter(r => r.usage <= 0);
         else if (filter === 'changed') rows = rows.filter(r => !r.follow || r.onHandTouched || r.multiplierChanged);
+        else if (filter === 'skip') rows = rows.filter(r => !!r.skipReason);
         if (search.trim()) {
           const n = normalizeForMatch(search);
           const q = search.trim().toLowerCase();
@@ -890,7 +962,8 @@ ORDER BY d.name`;
         suggest: derived.filter(r => r.suggested > 0).length,
         order: derived.filter(r => r.dispense > 0).length,
         value: derived.reduce((s, r) => s + r.value, 0),
-        changed: derived.filter(r => !r.follow || r.onHandTouched || r.multiplierChanged).length
+        changed: derived.filter(r => !r.follow || r.onHandTouched || r.multiplierChanged).length,
+        skip: derived.filter(r => !!r.skipReason).length
       }), [derived]);
 
       const rowIds = useMemo(() => new Set(derived.map(r => r.id)), [derived]);
@@ -947,7 +1020,8 @@ ORDER BY d.name`;
         const orderRows = derived.filter(r => r.dispense > 0);
         if (!orderRows.length) return ctx.showToast('ยังไม่มีรายการที่จะเบิก', 'error');
         const warn = [];
-        if (overlapReq) warn.push(`⚠ ช่วงวันที่ทับกับใบ ${overlapReq.doc_no || overlapReq.id} (${formatThaiDate(overlapReq.period_from)}–${formatThaiDate(overlapReq.period_to)}) ยอดใช้อาจถูกนับซ้ำ`);
+        if (overlapReq) return ctx.showToast(`ช่วงยอดใช้ทับกับใบ ${overlapReq.form_no || overlapReq.doc_no || overlapReq.id} (${formatThaiDate(overlapReq.period_from)}–${formatThaiDate(overlapReq.period_to)}) — ยอดใช้จะถูกนับซ้ำ ปรับวันที่ก่อนส่ง`, 'error');
+        if (!editReq && round && ctx.reqs.some(q => q.round_id === round.id && q.status !== 'Cancelled')) return ctx.showToast(`มีใบเบิกของรอบที่ ${round.round_no} แล้ว`, 'error');
         if (unmatched.length) warn.push(`มี ${unmatched.length} icode ที่ยังไม่จับคู่รหัส INVS (ไม่ถูกนำมาคำนวณ)`);
         ctx.setConfirmDialog({
           title: editReq ? 'ส่งใบเบิกที่แก้ไข?' : 'ยืนยันส่งใบเบิกห้องยา?',
@@ -961,13 +1035,13 @@ ORDER BY d.name`;
                 opdRaw: r.opdRaw, ipdRaw: r.ipdRaw, hosxpMultiplier: r.multiplier, hosxpCodes: r.icodes, hosxpUnits: r.hosxpUnits,
                 usage: r.usage, dailyAvg: Math.round(r.dailyAvg * 1000) / 1000, onHand: r.onHand, onHandTouched: r.onHandTouched,
                 stockBefore: r.stockBal, inTransit: r.inTransit, targetQty: r.target, suggestedQty: r.suggested,
-                requestQty: r.dispense, dispenseQty: r.dispense, followSuggest: r.follow, source: r.source, note: r.note
+                requestQty: r.dispense, dispenseQty: r.dispense, followSuggest: r.follow, source: r.source, note: r.note, skipReason: r.skipReason || ''
               });
               const items = orderRows.map(toItem);
               const zeroRows = derived.filter(r => r.dispense <= 0 && (r.usage > 0 || r.onHandTouched)).map(r => ({
                 drugId: r.id, name: r.base.name, unit: r.base.unit, packSize: r.base.packSize, price: r.base.price, type: r.base.type,
                 opdRaw: r.opdRaw, ipdRaw: r.ipdRaw, hosxpMultiplier: r.multiplier, hosxpCodes: r.icodes, usage: r.usage,
-                onHand: r.onHand, suggestedQty: r.suggested, followSuggest: r.follow, dispenseQty: 0, source: r.source
+                onHand: r.onHand, suggestedQty: r.suggested, followSuggest: r.follow, dispenseQty: 0, source: r.source, skipReason: r.skipReason || ''
               }));
               const stockOps = derived.filter(r => r.usage > 0 || r.onHandTouched).map(r => ({
                 type: 'set',
@@ -985,10 +1059,11 @@ ORDER BY d.name`;
                 data: { hosxp_multiplier: r.multiplier, hosxp_multiplier_updated_at: firebase.firestore.FieldValue.serverTimestamp(), hosxp_multiplier_updated_by: safeText(ctx.currentUser.name) }
               }));
               await saveInternalReq({
-                ctx, editReq, kind: 'pharmacy', items, stockOps,
+                ctx, editReq, round, kind: 'pharmacy', items, stockOps,
                 extra: {
                   note: safeText(note), period_from: from, period_to: to, period_days: calcDays, cover_days: coverDays,
                   usage_source: usageMeta.source, usage_file: usageMeta.fileName || '', usage_fetched_at: usageMeta.fetchedAt || null,
+                  round_days: roundDays, min_order_value: minOrderValue, prev_req_id: prevReq?.id || '', prev_period_to: lastPeriodTo || '', skipped_suggest_count: stats.skip,
                   zero_rows: zeroRows, unmatched: unmatched.slice(0, 300), unmatched_count: unmatched.length,
                   suggested_item_count: stats.suggest, changed_item_count: stats.changed
                 }
@@ -1027,20 +1102,25 @@ ORDER BY d.name`;
             <div>
               <div className="text-xs font-bold text-teal-700 tracking-wide">ใบเบิกยาห้องยา · ตามยอดใช้ HOSxP</div>
               <h2 className="text-2xl font-extrabold text-slate-800">{editReq ? `แก้ไขใบ ${editReq.doc_no || ''}` : 'สร้างใบเบิกห้องยา'}</h2>
-              <div className="text-sm text-slate-500">{ctx.dept?.dept_name} · แนะนำ = (ใช้/วัน × วันสำรอง) − คงเหลือ − ค้างรับ แล้วปัดตามแพ็ค</div>
+              <div className="text-sm text-slate-500">{ctx.dept?.dept_name} · แนะนำ = (ใช้/วัน × วันสำรอง) − เครดิต − ค้างรับ แล้วปัดตามแพ็ค · ยาที่เครดิตพอใช้ถึงรอบหน้าจะแนะนำให้ข้าม</div>
+              <div className="mt-2"><RoundBanner round={round} editReq={editReq} /></div>
             </div>
             {editReq?.status === 'Rejected' && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-2 text-sm max-w-md"><b>ถูกส่งกลับ:</b> {editReq.reject_reason || 'ไม่ระบุเหตุผล'}</div>}
           </div>
 
           {/* ขั้นที่ 1: ช่วงวันที่ + แหล่งยอดใช้ */}
           <div className="bg-white rounded-2xl border shadow-sm p-5">
-            <div className="grid gap-4 lg:grid-cols-[auto_auto_auto_1fr] items-end">
+            <div className="grid gap-4 lg:grid-cols-[auto_auto_auto_auto_1fr] items-end">
               <label className="block"><span className="text-xs font-bold text-slate-500">ยอดใช้ตั้งแต่</span>
-                <input type="date" id="usage-from" value={from} max={to} disabled={!!editReq} onChange={e => setFrom(e.target.value)} className="block mt-1 p-2.5 border border-slate-300 rounded-xl" /></label>
+                <input type="date" id="usage-from" value={from} max={to} disabled={!!editReq || fromLocked || !!usageMeta} onChange={e => setFrom(e.target.value)} className="block mt-1 p-2.5 border border-slate-300 rounded-xl disabled:bg-slate-100" />
+                {fromLocked && !editReq && <span className="text-[11px] text-slate-500"><i className="fa-solid fa-lock mr-1"></i>ต่อจากใบก่อน{isAdmin && <button type="button" onClick={() => setFromUnlocked(true)} className="ml-2 text-teal-700 underline">ปลดล็อก</button>}</span>}</label>
               <label className="block"><span className="text-xs font-bold text-slate-500">ถึง</span>
-                <input type="date" id="usage-to" value={to} min={from} max={today} disabled={!!editReq} onChange={e => setTo(e.target.value)} className="block mt-1 p-2.5 border border-slate-300 rounded-xl" /></label>
+                <input type="date" id="usage-to" value={to} min={from} max={today} disabled={!!editReq || !!usageMeta} onChange={e => setTo(e.target.value)} className="block mt-1 p-2.5 border border-slate-300 rounded-xl disabled:bg-slate-100" />
+                {usageMeta && !usageMeta.stored && !editReq && <button type="button" onClick={() => { setUsageRaw(null); setUsageMeta(null); }} className="text-[11px] text-teal-700 underline">เปลี่ยนช่วงแล้วดึงใหม่</button>}</label>
               <label className="block"><span className="text-xs font-bold text-slate-500">สำรองกี่วัน</span>
                 <input type="number" id="cover-days" min="1" max="365" value={coverDays} onChange={e => setCoverDays(Math.max(1, Math.min(365, toNonNegativeInt(e.target.value, 1))))} className="block mt-1 p-2.5 border border-slate-300 rounded-xl w-24 text-right" /></label>
+              <label className="block" title="ถ้ายอดที่ต้องเบิกมีมูลค่าต่ำกว่านี้ และเครดิตยังพอใช้อย่างน้อยครึ่งรอบ ระบบจะแนะนำให้รวบไปเบิกรอบหน้า"><span className="text-xs font-bold text-slate-500">รวบเบิกถ้าน้อยกว่า (บาท)</span>
+                <input type="number" id="min-order-value" min="0" step="50" value={minOrderValue} onChange={e => setMinOrderValue(Math.max(0, toNonNegativeNumber(e.target.value, 0)))} className="block mt-1 p-2.5 border border-slate-300 rounded-xl w-28 text-right" /></label>
               <div className="flex flex-wrap gap-2 lg:justify-end">
                 <button onClick={fetchFromBridge} disabled={!!busy || !!editReq} className="px-4 py-2.5 rounded-xl bg-teal-600 text-white font-bold shadow hover:bg-teal-700 disabled:opacity-40">
                   {busy === 'bridge' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-database mr-2"></i>}ดึงยอดใช้จาก HOSxP
@@ -1054,7 +1134,7 @@ ORDER BY d.name`;
               </div>
             </div>
             <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm">
-              <span className="text-slate-500">ช่วงที่เลือก <b className="text-slate-800">{periodDays || '-'}</b> วัน{lastPeriodTo && !editReq && <span className="text-slate-400"> · ใบก่อนหน้าถึง {formatThaiDate(lastPeriodTo)}</span>}</span>
+              <span className="text-slate-500">ช่วงที่เลือก <b className="text-slate-800">{periodDays || '-'}</b> วัน · ห่างรอบหน้า <b className="text-slate-800">{roundDays}</b> วัน{prevReq && !editReq && <span className="text-slate-400"> · ใบก่อน {prevReq.form_no || prevReq.doc_no} ยอดใช้ {formatThaiDate(prevReq.period_from)}–{formatThaiDate(prevReq.period_to)}</span>}</span>
               {usageMeta ? (
                 <span className={usageStale ? 'text-amber-700 font-bold' : 'text-emerald-700'}>
                   <i className={`fa-solid ${usageStale ? 'fa-triangle-exclamation' : 'fa-circle-check'} mr-1`}></i>
@@ -1092,6 +1172,7 @@ ORDER BY d.name`;
               <FilterBtn id="suggest" label="แนะนำให้เบิก" count={stats.suggest} />
               <FilterBtn id="order" label="จะเบิก" count={stats.order} />
               <FilterBtn id="unused" label="ไม่มีการใช้" />
+              <FilterBtn id="skip" label="แนะนำข้ามรอบนี้" count={stats.skip} />
               <FilterBtn id="changed" label="แก้ไขเอง" count={stats.changed} />
               <div className="flex-1"></div>
               <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
@@ -1124,7 +1205,7 @@ ORDER BY d.name`;
                     <th className="p-2 text-right bg-slate-100" title="ตัวคูณแปลงหน่วย HOSxP → หน่วย INVS">×แปลงหน่วย</th>
                     <th className="p-2 text-right bg-slate-100">ใช้ (INVS)</th>
                     <th className="p-2 text-right bg-slate-100">เฉลี่ย/วัน</th>
-                    <th className="p-2 text-right bg-slate-100">คงเหลือ</th>
+                    <th className="p-2 text-right bg-slate-100" title="คงเหลือจากใบก่อน − ยอดใช้รอบนี้">เครดิต</th>
                     <th className="p-2 text-right bg-slate-100">ค้างรับ</th>
                     <th className="p-2 text-right bg-slate-100">เป้า {coverDays} วัน</th>
                     <th className="p-2 text-right bg-slate-100">แนะนำ</th>
@@ -1158,13 +1239,15 @@ ORDER BY d.name`;
                         <td className="p-2 text-right tnum font-semibold">{r.usage ? fmtNum(r.usage) : '-'}</td>
                         <td className="p-2 text-right tnum">{r.dailyAvg ? fmtNum(r.dailyAvg, 1) : '-'}</td>
                         <td className="p-2 text-right whitespace-nowrap">
-                          <NumCell value={r.onHand} touched={r.onHandTouched} ariaLabel={`คงเหลือ ${r.base.name}`} onCommit={v => patchRow(r.id, { onHand: v })} />
+                          <NumCell value={r.onHand} touched={r.onHandTouched} ariaLabel={`เครดิต ${r.base.name}`} onCommit={v => patchRow(r.id, { onHand: v })} />
                           {!r.onHandTouched && r.hasStock && r.usage > 0 && <div className="text-[10px] text-slate-400">{fmtNum(r.stockBal)} − {fmtNum(r.usage)}</div>}
                           {r.onHandTouched && !editReq && <button onClick={() => patchRow(r.id, { onHand: null })} className="text-[10px] text-slate-400 hover:text-teal-600 block ml-auto">↺ คืนค่า</button>}
                         </td>
                         <td className="p-2 text-right tnum">{r.inTransit ? fmtNum(r.inTransit) : '-'}</td>
                         <td className="p-2 text-right tnum">{r.target ? fmtNum(r.target) : '-'}</td>
-                        <td className="p-2 text-right tnum font-bold text-teal-700">{r.suggested ? <QtyWithPack qty={r.suggested} packSize={pack} /> : '-'}</td>
+                        <td className="p-2 text-right tnum font-bold text-teal-700">{r.suggested ? <QtyWithPack qty={r.suggested} packSize={pack} /> : '-'}
+                          {r.skipReason && <div className="mt-0.5"><span className="text-[10px] font-bold text-amber-800 bg-amber-100 rounded px-1.5 py-0.5 whitespace-nowrap">ข้าม: {r.skipReason}</span></div>}
+                          {r.suggested > 0 && r.coverRounds >= 1.9 && <div className="text-[10px] text-slate-400 font-normal">พอ ~{Math.floor(r.coverRounds)} รอบ</div>}</td>
                         <td className="p-2 text-right whitespace-nowrap">
                           <NumCell value={r.dispense} touched={!r.follow} disabled={r.blocked} ariaLabel={`เบิกจริง ${r.base.name}`} onCommit={v => patchRow(r.id, { dispenseManual: v === null ? null : v })} />
                           {pack > 1 && r.dispense > 0 && <div className="text-[10px] text-slate-400">= {formatQty(r.dispense, pack)} แพ็ค</div>}
@@ -1456,7 +1539,8 @@ ORDER BY d.name`;
       const [confirmDialog, setConfirmDialog] = useState(null);
       const [currentUser, setCurrentUser] = useState(null);
       const [booting, setBooting] = useState(true);
-      const [masters, setMasters] = useState({ drugs: [], units: [], depts: [] });
+      const [masters, setMasters] = useState({ drugs: [], units: [], depts: [], rounds: [] });
+      const [newRound, setNewRound] = useState(undefined); // undefined = ยังไม่ได้เลือกรอบ, null = ไม่มีรอบให้เลือก
       const [deptId, setDeptId] = useState('');
       const [reqs, setReqs] = useState([]);
       const [stock, setStock] = useState([]);
@@ -1470,10 +1554,12 @@ ORDER BY d.name`;
       const isAdmin = normalizeUserRole(currentUser?.role) === 'admin';
 
       const reloadMasters = async () => {
-        const [d, u, dp] = await Promise.all([
-          db.collection('master_drugs').get(), db.collection('master_unit').get(), db.collection('master_depts').get()
+        const [d, u, dp, rr] = await Promise.all([
+          db.collection('master_drugs').get(), db.collection('master_unit').get(), db.collection('master_depts').get(),
+          db.collection('req_rounds').get().catch(() => null)
         ]);
-        const next = { drugs: d.docs.map(x => ({ id: x.id, drug_id: x.id, ...x.data() })), units: u.docs.map(x => ({ id: x.id, ...x.data() })), depts: dp.docs.map(x => ({ id: x.id, dept_id: x.id, ...x.data() })) };
+        const next = { drugs: d.docs.map(x => ({ id: x.id, drug_id: x.id, ...x.data() })), units: u.docs.map(x => ({ id: x.id, ...x.data() })), depts: dp.docs.map(x => ({ id: x.id, dept_id: x.id, ...x.data() })),
+          rounds: rr ? rr.docs.map(x => ({ id: x.id, ...x.data() })) : [] };
         setMasters(next);
         return next;
       };
@@ -1520,7 +1606,8 @@ ORDER BY d.name`;
         return () => unsub();
       }, []);
 
-      useEffect(() => { if (deptId) { reload(deptId); setView('history'); setEditReq(null); } }, [deptId]);
+      useEffect(() => { if (deptId) { reload(deptId); setView('history'); setEditReq(null); setNewRound(undefined); } }, [deptId]);
+      useEffect(() => { if (view !== 'new') setNewRound(undefined); }, [view]);
 
       useEffect(() => { db.collection('config').doc('drug_types').get().then(sn => setDrugTypes(sn.exists ? sn.data() : null)).catch(() => {}); }, []);
 
@@ -1535,7 +1622,8 @@ ORDER BY d.name`;
       const ctx = {
         currentUser, isAdmin, dept, reqs, stock,
         drugs: masters.drugs, drugById, unitName: (d) => d ? (unitById.get(String(d.unit_id))?.unit_name || d.unit_id || '') : '',
-        showToast, setConfirmDialog, reload: () => reload(), reloadMasters, drugTypes
+        showToast, setConfirmDialog, reload: () => reload(), reloadMasters, drugTypes,
+        rounds: roundsFor(masters.rounds, 'internal')
       };
 
       const pendingCount = reqs.filter(r => r.status === 'Pending').length;
@@ -1602,8 +1690,9 @@ ORDER BY d.name`;
                   <div className="p-10 flex justify-center"><div className="loader"></div></div>
                 ) : (
                   <>
-                    {view === 'new' && kind === 'dept' && <DeptReqView key={editReq?.id || 'new-' + deptId} ctx={ctx} editReq={editReq} onDone={() => { setEditReq(null); setView('history'); }} />}
-                    {view === 'new' && kind === 'pharmacy' && <PharmacyReqView key={editReq?.id || 'new-' + deptId} ctx={ctx} editReq={editReq} onDone={() => { setEditReq(null); setView('history'); }} />}
+                    {view === 'new' && !editReq && newRound === undefined && <RoundPickStep ctx={ctx} onPick={setNewRound} onOpenReq={(r) => { setEditReq(r); }} />}
+                    {view === 'new' && (editReq || newRound !== undefined) && kind === 'dept' && <DeptReqView key={editReq?.id || 'new-' + deptId + (newRound?.id || '')} ctx={ctx} editReq={editReq} round={editReq ? null : newRound} onDone={() => { setEditReq(null); setView('history'); }} />}
+                    {view === 'new' && (editReq || newRound !== undefined) && kind === 'pharmacy' && <PharmacyReqView key={editReq?.id || 'new-' + deptId + (newRound?.id || '')} ctx={ctx} editReq={editReq} round={editReq ? null : newRound} onDone={() => { setEditReq(null); setView('history'); }} />}
                     {view === 'history' && <HistoryView ctx={ctx} onNew={() => { setEditReq(null); setView('new'); }} onEdit={(r) => { setEditReq(r); setView('new'); }} onPrint={setPrintReq} />}
                     {view === 'stock' && kind === 'pharmacy' && <StockView ctx={ctx} />}
                   </>

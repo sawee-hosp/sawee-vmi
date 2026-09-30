@@ -7,13 +7,15 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
 <!--
-  หน้า LIFF สำหรับผู้ป่วยสแกน QR บนใบนัด → ยอมรับรับแจ้งเตือนนัดทาง LINE OA ของ รพ.สวี
-  LIFF ID: 2011801491-uJ1WbgA9  ·  QR = https://liff.line.me/2011801491-uJ1WbgA9?c=<รหัส 8 ตัว>
+  หน้า LIFF ของ รพ.สวี ใช้ 2 แบบ
+   ?c=<รหัส 8 ตัว>  ผู้ป่วยสแกน QR บนใบนัด → ยอมรับรับแจ้งเตือนนัดทาง LINE (QR ใช้ได้ครั้งเดียว มีวันหมดอายุ)
+   ?a=<token>       ปุ่ม "รับทราบ" ในข้อความแจ้งเตือนนัด → บันทึกว่าผู้ป่วยตอบรับแล้ว (รพ.สต. เห็นในระบบ)
+  LIFF ID: 2011801491-uJ1WbgA9
   ตั้งค่าใน LINE Developers > LIFF: Endpoint URL = ที่อยู่ไฟล์นี้บน GitHub Pages · Scope: openid, profile
      · Add friend option (Bot link feature) = On (Aggressive) เพื่อบังคับเพิ่มเพื่อน OA ก่อนเข้าหน้านี้
   หน้านี้ไม่ดึงข้อมูลผู้ป่วยมาแสดง (ไม่มีชื่อ/วันนัด) — แค่บอกว่าจะแจ้งอะไร ขอความยินยอม แล้วบันทึก
   เขียนลง Firestore โปรเจกต์ sawee-refer ด้วย Anonymous sign-in · สิทธิ์คุมด้วย firestore.rules
-     (รหัสต้องยังใช้ได้ + เลขบัตร 4 ตัวท้ายต้องตรง ถ้า รพ. มีเลขบัตรของผู้ป่วยคนนั้น)
+     (รหัสต้องยังไม่หมดอายุและยังไม่เคยใช้ — ใช้แล้วถูกปิดทันทีใน batch เดียวกัน)
 -->
 <style>
 :root{--bg:#FFF8F2;--card:#fff;--ink:#2B1D12;--sub:#7A6555;--line:#EADBCD;--acc:#06C755;--acc-d:#04A847;--warn:#B8860B;--err:#B42318}
@@ -58,19 +60,13 @@ button.go:disabled{background:#B9C4BD;cursor:default}
       <div class="sub">จากโรงพยาบาลสวี · สำหรับผู้ป่วยที่ส่งไปรับยาต่อที่ รพ.สต. ใกล้บ้าน</div>
       <ul class="what">
         <li><span class="dot">1</span><div><b>เมื่อ รพ.สต. รับนัดของท่านแล้ว</b><div class="sub">บอกชื่อ รพ.สต. วันที่ต้องไป และปุ่มนำทาง</div></div></li>
-        <li><span class="dot">2</span><div><b>เตือนช่วงเย็นก่อนวันนัด 1 วัน</b><div class="sub">พร้อมบอกให้เตรียมสมุดประจำตัวผู้ป่วย</div></div></li>
+        <li><span class="dot">2</span><div><b>เตือนก่อนวันนัด 1 วัน (เที่ยงวัน)</b><div class="sub">พร้อมบอกให้เตรียมสมุดประจำตัวผู้ป่วย</div></div></li>
         <li><span class="dot">3</span><div><b>เมื่อมีการเลื่อนนัด</b><div class="sub">แจ้งวันนัดใหม่ให้ทันที</div></div></li>
       </ul>
       <div class="no">ข้อความจะ<b>ไม่มี</b>ชื่อโรค รายการยา หรือเลขบัตรประชาชน</div>
     </div>
 
     <div class="card">
-      <div id="cid-box">
-        <label class="fld" for="cid">เลขบัตรประชาชน 4 ตัวท้ายของผู้ป่วย</label>
-        <input id="cid" class="cid" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="••••">
-        <div class="sub" style="margin-top:6px">ใช้ยืนยันว่าเป็นผู้ป่วยตามใบนัดนี้ (ญาติกรอกแทนได้)</div>
-      </div>
-
       <details>
         <summary>อ่านข้อตกลงการใช้ข้อมูล</summary>
         <div class="pdpa">
@@ -88,6 +84,19 @@ button.go:disabled{background:#B9C4BD;cursor:default}
     <div class="foot">โรงพยาบาลสวี จังหวัดชุมพร</div>
   </div>
 
+  <div id="v-ack" class="card center hidden">
+    <div class="big">✅</div>
+    <h1 style="margin-top:10px">รับทราบนัดเรียบร้อย</h1>
+    <div style="margin-top:14px;background:#EAF9F0;border:1px solid #BFEBD0;border-radius:14px;padding:14px">
+      <div class="sub">โปรดเดินทางไปรับยาที่</div>
+      <div id="ack-rp" style="font-size:19px;font-weight:700;margin-top:2px"></div>
+      <div id="ack-date" style="font-size:22px;font-weight:700;color:#0B6E3A;margin-top:6px"></div>
+      <div id="ack-n" style="color:#0B8043;font-weight:600"></div>
+    </div>
+    <div class="sub" style="margin-top:12px">📘 นำสมุดประจำตัวผู้ป่วยโรคเรื้อรัง บัตรประชาชน และยาเดิมที่เหลือไปด้วย</div>
+    <button class="go" id="close2">ปิดหน้านี้</button>
+  </div>
+
   <div id="v-info" class="card center hidden">
     <div class="big" id="info-ic">ℹ️</div>
     <h1 id="info-h" style="margin-top:10px"></h1>
@@ -100,7 +109,7 @@ button.go:disabled{background:#B9C4BD;cursor:default}
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import { getFirestore, doc, getDoc, collection, writeBatch, serverTimestamp }
+import { getFirestore, doc, getDoc, collection, writeBatch, updateDoc, serverTimestamp }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 const LIFF_ID = '2011801491-uJ1WbgA9';
@@ -115,29 +124,36 @@ const FIREBASE_CONFIG = {
 };
 const $ = id => document.getElementById(id);
 const show = (id, on) => $(id).classList.toggle('hidden', !on);
-const view = v => ['v-load','v-form','v-info'].forEach(x => show(x, x===v));
+const view = v => ['v-load','v-form','v-info','v-ack'].forEach(x => show(x, x===v));
 
 function info(icon, head, text, canClose){
   $('info-ic').textContent = icon; $('info-h').textContent = head; $('info-t').textContent = text;
   show('close', !!canClose); view('v-info');
 }
-/* รหัสจาก QR: ?c=XXXX — LIFF อาจส่งมาใน liff.state (ก่อน init) หรือเป็น query ปกติ (หลัง init) */
-function readCode(){
+/* พารามิเตอร์ ?c= / ?a= — LIFF อาจส่งมาใน liff.state (ก่อน init) หรือเป็น query ปกติ (หลัง init) */
+function param(k){
   const q = new URLSearchParams(location.search);
-  let c = q.get('c');
-  if(!c && q.get('liff.state')){ try{ c = new URLSearchParams(q.get('liff.state').split('?')[1]||'').get('c'); }catch(e){} }
-  c = String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
-  return /^[A-Z0-9]{8}$/.test(c) ? c : null;
+  let v = q.get(k);
+  if(!v && q.get('liff.state')){ try{ v = new URLSearchParams(q.get('liff.state').split('?')[1]||'').get(k); }catch(e){} }
+  return v ? String(v) : null;
 }
+const readCode = () => { const c = String(param('c')||'').toUpperCase().replace(/[^A-Z0-9]/g,''); return /^[A-Z0-9]{8}$/.test(c) ? c : null; };
+const readAck  = () => { const a = String(param('a')||'').toLowerCase(); return /^[0-9a-f]{24}$/.test(a) ? a : null; };
+const TMON = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+const TDAY = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'];
+function thDate(iso){ const [y,m,d] = String(iso).slice(0,10).split('-').map(Number); if(!y) return iso||'';
+  const w = new Date(y, m-1, d).getDay(); return `วัน${TDAY[w]}ที่ ${d} ${TMON[m]} ${y+543}`; }
+function daysTo(iso){ const [y,m,d]=String(iso).slice(0,10).split('-').map(Number); const t=new Date(); t.setHours(0,0,0,0);
+  return Math.round((new Date(y,m-1,d) - t)/864e5); }
 
-let CODE = readCode(), CODEDOC = null, PROFILE = null, FRIEND = null, db = null;
+let CODE = readCode(), ACK = readAck(), CODEDOC = null, PROFILE = null, FRIEND = null, db = null;
 
 async function main(){
   try{ await liff.init({ liffId: LIFF_ID }); }
   catch(e){ return info('⚠️','เปิดหน้านี้ไม่สำเร็จ','กรุณาสแกน QR บนใบนัดด้วยแอป LINE อีกครั้ง'); }
   if(!liff.isLoggedIn()){ liff.login({ redirectUri: location.href }); return; }
-  CODE = CODE || readCode();
-  if(!CODE) return info('📄','กรุณาสแกน QR บนใบนัด','หน้านี้ใช้คู่กับใบนัดรับยาที่ รพ.สต. ที่ได้รับจากโรงพยาบาลสวี', true);
+  CODE = CODE || readCode(); ACK = ACK || readAck();
+  if(!CODE && !ACK) return info('📄','กรุณาสแกน QR บนใบนัด','หน้านี้ใช้คู่กับใบนัดรับยาที่ รพ.สต. ที่ได้รับจากโรงพยาบาลสวี', true);
 
   try{ PROFILE = await liff.getProfile(); }
   catch(e){ return info('⚠️','อ่านข้อมูลบัญชี LINE ไม่ได้','กรุณาปิดแล้วสแกน QR อีกครั้ง', true); }
@@ -148,25 +164,43 @@ async function main(){
   try{ await signInAnonymously(getAuth(app)); }
   catch(e){ return info('⚠️','เชื่อมต่อระบบไม่ได้','ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง', true); }
 
-  // ตรวจเฉพาะว่ารหัสยังใช้ได้ไหม และต้องกรอกเลขบัตรหรือเปล่า — ไม่ดึงชื่อหรือรายละเอียดนัดมาแสดง
+  if(ACK) return doAck();
+
+  // ตรวจเฉพาะว่ารหัสยังใช้ได้ไหม — ไม่ดึงชื่อหรือรายละเอียดนัดมาแสดง
   try{
     const s = await getDoc(doc(db,'line_codes',CODE));
     if(!s.exists()) return info('❌','QR นี้ใช้ไม่ได้','กรุณาขอใบนัดใหม่จากเจ้าหน้าที่ รพ.สวี', true);
     CODEDOC = s.data();
     const exp = CODEDOC.expires_at?.toDate ? CODEDOC.expires_at.toDate() : null;
+    if(CODEDOC.status==='used')
+      return info('✅','QR นี้ถูกใช้ลงทะเบียนแล้ว','ถ้าเป็นท่านเอง ท่านจะได้รับแจ้งเตือนตามปกติ · ถ้าต้องการเพิ่มผู้รับอีกคน ขอใบนัดใหม่จากเจ้าหน้าที่', true);
     if(CODEDOC.status!=='active' || (exp && exp < new Date()))
       return info('⌛','QR นี้หมดอายุแล้ว','กรุณาขอใบนัดใหม่จากเจ้าหน้าที่ รพ.สวี หรือ รพ.สต.', true);
   }catch(e){ return info('⚠️','ตรวจสอบ QR ไม่ได้','ลองใหม่อีกครั้ง ('+(e.code||e.message)+')', true); }
 
-  show('cid-box', !!CODEDOC.need_cid4);
   view('v-form');
   if(FRIEND===false) $('msg').innerHTML = '<div class="msg warn">ท่านยังไม่ได้เพิ่มเพื่อน LINE ของโรงพยาบาล — กรุณากดเพิ่มเพื่อนก่อน ไม่อย่างนั้นจะไม่ได้รับข้อความ</div>';
 }
 
-const ready = () => $('ok').checked && (!CODEDOC?.need_cid4 || /^\d{4}$/.test($('cid').value));
+/* ปุ่ม "รับทราบ" จากข้อความแจ้งเตือนนัด — บันทึกทันทีที่เปิด ไม่ต้องกดซ้ำ */
+async function doAck(){
+  try{
+    const ref = doc(db,'line_acks',ACK), s = await getDoc(ref);
+    if(!s.exists()) return info('❌','ไม่พบนัดนี้','ลิงก์อาจหมดอายุ กรุณาติดต่อ รพ.สต.', true);
+    const a = s.data();
+    if(a.status!=='acked') await updateDoc(ref, {status:'acked', acked_at:serverTimestamp(), ack_via:'liff'});
+    $('ack-rp').textContent = a.rpst_name || '';
+    $('ack-date').textContent = thDate(a.appoint_date);
+    const n = daysTo(a.appoint_date);
+    $('ack-n').textContent = n<0 ? 'นัดนี้ผ่านไปแล้ว' : n===0 ? 'วันนี้' : n===1 ? 'พรุ่งนี้' : `อีก ${n} วัน`;
+    view('v-ack');
+  }catch(e){ info('⚠️','บันทึกไม่สำเร็จ','ลองกดรับทราบจากข้อความอีกครั้ง ('+(e.code||e.message)+')', true); }
+}
+
+const ready = () => $('ok').checked;
 $('ok').addEventListener('change', () => $('go').disabled = !ready());
-$('cid').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g,'').slice(0,4); $('go').disabled = !ready(); });
 $('close').addEventListener('click', () => { try{ liff.closeWindow(); }catch(e){ window.close(); } });
+$('close2').addEventListener('click', () => { try{ liff.closeWindow(); }catch(e){ window.close(); } });
 
 $('go').addEventListener('click', async () => {
   if(!ready()) return;
@@ -176,22 +210,23 @@ $('go').addEventListener('click', async () => {
     const link = doc(collection(db,'line_links'));        // id สุ่ม — ไม่มี userId ในชื่อเอกสาร
     b.set(link, {
       code: CODE, hn: CODEDOC.hn, hcode: CODEDOC.hcode, doc_id: CODEDOC.doc_id,
-      user_id: PROFILE.userId, cid4: CODEDOC.need_cid4 ? $('cid').value : null,
-      consent: true, consent_ver: CONSENT_VER, consent_at: serverTimestamp(),
+      user_id: PROFILE.userId, consent: true, consent_ver: CONSENT_VER, consent_at: serverTimestamp(),
       friend: FRIEND, via: 'liff' });
+    // QR ใช้ได้ครั้งเดียว — ปิดรหัสใน batch เดียวกัน
+    b.update(doc(db,'line_codes',CODE), { status:'used', used_at: serverTimestamp(), used_link: link.id });
     // สถานะรวมต่อ HN ที่เจ้าหน้าที่เห็น (ไม่มี userId)
     b.set(doc(db,'line_status',CODEDOC.hn), {
       hn: CODEDOC.hn, linked: true, consent: true, friend: FRIEND, last_link: link.id, updated_at: serverTimestamp() });
     await b.commit();
-    alert('บันทึกเรียบร้อย\n\nท่านจะได้รับข้อความเมื่อ รพ.สต. รับนัด และเตือนช่วงเย็นก่อนวันนัด 1 วัน ทาง LINE ของโรงพยาบาลสวี');
+    alert('บันทึกเรียบร้อย\n\nท่านจะได้รับข้อความเมื่อ รพ.สต. รับนัด และเตือนก่อนวันนัด 1 วัน (เที่ยงวัน) ทาง LINE ของโรงพยาบาลสวี');
     info('✅','รับแจ้งเตือนเรียบร้อย','ปิดหน้านี้ได้เลย ท่านจะได้รับข้อความทาง LINE ของโรงพยาบาลสวี', true);
     setTimeout(() => { try{ liff.closeWindow(); }catch(e){} }, 1500);
   }catch(e){
     $('go').disabled = false; $('go').textContent = 'ยืนยันรับแจ้งเตือน';
     const denied = e.code === 'permission-denied';
-    $('msg').innerHTML = `<div class="msg err">${denied && CODEDOC.need_cid4
-      ? 'เลขบัตร 4 ตัวท้ายไม่ตรงกับผู้ป่วยตามใบนัดนี้ กรุณาตรวจสอบอีกครั้ง'
-      : 'บันทึกไม่สำเร็จ กรุณาลองใหม่' + (denied ? '' : ' ('+(e.code||e.message)+')')}</div>`;
+    $('msg').innerHTML = `<div class="msg err">${denied
+      ? 'QR นี้ถูกใช้ไปแล้วหรือหมดอายุ กรุณาขอใบนัดใหม่จากเจ้าหน้าที่'
+      : 'บันทึกไม่สำเร็จ กรุณาลองใหม่ ('+(e.code||e.message)+')'}</div>`;
   }
 });
 

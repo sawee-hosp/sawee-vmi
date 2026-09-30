@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>รับแจ้งเตือนนัดรับยา · รพ.สวี</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
+<!--
+  หน้า LIFF สำหรับผู้ป่วยสแกน QR บนใบนัด → ยอมรับรับแจ้งเตือนนัดทาง LINE OA ของ รพ.สวี
+  LIFF ID: 2011801491-uJ1WbgA9  ·  QR = https://liff.line.me/2011801491-uJ1WbgA9?c=<รหัส 8 ตัว>
+  ตั้งค่าใน LINE Developers > LIFF: Endpoint URL = ที่อยู่ไฟล์นี้บน GitHub Pages · Scope: openid, profile
+     · Add friend option (Bot link feature) = On (Aggressive) เพื่อบังคับเพิ่มเพื่อน OA ก่อนเข้าหน้านี้
+  หน้านี้ไม่ดึงข้อมูลผู้ป่วยมาแสดง (ไม่มีชื่อ/วันนัด) — แค่บอกว่าจะแจ้งอะไร ขอความยินยอม แล้วบันทึก
+  เขียนลง Firestore โปรเจกต์ sawee-refer ด้วย Anonymous sign-in · สิทธิ์คุมด้วย firestore.rules
+     (รหัสต้องยังใช้ได้ + เลขบัตร 4 ตัวท้ายต้องตรง ถ้า รพ. มีเลขบัตรของผู้ป่วยคนนั้น)
+-->
+<style>
+:root{--bg:#FFF8F2;--card:#fff;--ink:#2B1D12;--sub:#7A6555;--line:#EADBCD;--acc:#06C755;--acc-d:#04A847;--warn:#B8860B;--err:#B42318}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:'Noto Sans Thai',system-ui,sans-serif;font-size:16px;line-height:1.55}
+.wrap{max-width:480px;margin:0 auto;padding:20px 16px 40px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 18px;margin-bottom:14px}
+h1{font-size:21px;margin:0 0 4px;line-height:1.35}
+.sub{color:var(--sub);font-size:14px}
+ul.what{list-style:none;margin:12px 0 0;padding:0}
+ul.what li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--line)}
+ul.what li:first-child{border-top:0}
+.dot{flex:0 0 28px;height:28px;border-radius:50%;background:#E7F9EE;color:var(--acc-d);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.no{margin-top:12px;font-size:14px;color:var(--sub);background:#F7F1EA;border-radius:10px;padding:10px 12px}
+details{margin-top:6px}
+summary{cursor:pointer;color:var(--sub);font-size:14px}
+.pdpa{font-size:13.5px;color:var(--sub);margin-top:8px}
+.pdpa p{margin:6px 0}
+label.fld{display:block;font-size:15px;font-weight:600;margin:4px 0 6px}
+input.cid{width:100%;font-size:26px;letter-spacing:10px;text-align:center;padding:12px;border:2px solid var(--line);border-radius:12px;font-family:inherit}
+input.cid:focus{outline:none;border-color:var(--acc)}
+.chk{display:flex;gap:10px;align-items:flex-start;font-size:15px;margin-top:14px;cursor:pointer}
+.chk input{width:22px;height:22px;margin-top:2px;flex:0 0 22px;accent-color:var(--acc)}
+button.go{width:100%;margin-top:16px;padding:15px;border:0;border-radius:12px;background:var(--acc);color:#fff;font-size:18px;font-weight:700;font-family:inherit;cursor:pointer}
+button.go:disabled{background:#B9C4BD;cursor:default}
+.msg{border-radius:12px;padding:12px 14px;font-size:15px;margin-top:12px}
+.msg.err{background:#FDECEA;color:var(--err)}
+.msg.warn{background:#FFF6DC;color:#7A5A00}
+.center{text-align:center}
+.big{font-size:52px;line-height:1}
+.hidden{display:none}
+.foot{text-align:center;font-size:12.5px;color:var(--sub);margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="v-load" class="card center"><div class="sub">กำลังเปิด...</div></div>
+
+  <div id="v-form" class="hidden">
+    <div class="card">
+      <h1>รับแจ้งเตือนนัดรับยาทาง LINE</h1>
+      <div class="sub">จากโรงพยาบาลสวี · สำหรับผู้ป่วยที่ส่งไปรับยาต่อที่ รพ.สต. ใกล้บ้าน</div>
+      <ul class="what">
+        <li><span class="dot">1</span><div><b>เมื่อ รพ.สต. รับนัดของท่านแล้ว</b><div class="sub">บอกชื่อ รพ.สต. วันที่ต้องไป และปุ่มนำทาง</div></div></li>
+        <li><span class="dot">2</span><div><b>เตือนช่วงเย็นก่อนวันนัด 1 วัน</b><div class="sub">พร้อมบอกให้เตรียมสมุดประจำตัวผู้ป่วย</div></div></li>
+        <li><span class="dot">3</span><div><b>เมื่อมีการเลื่อนนัด</b><div class="sub">แจ้งวันนัดใหม่ให้ทันที</div></div></li>
+      </ul>
+      <div class="no">ข้อความจะ<b>ไม่มี</b>ชื่อโรค รายการยา หรือเลขบัตรประชาชน</div>
+    </div>
+
+    <div class="card">
+      <div id="cid-box">
+        <label class="fld" for="cid">เลขบัตรประชาชน 4 ตัวท้ายของผู้ป่วย</label>
+        <input id="cid" class="cid" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="••••">
+        <div class="sub" style="margin-top:6px">ใช้ยืนยันว่าเป็นผู้ป่วยตามใบนัดนี้ (ญาติกรอกแทนได้)</div>
+      </div>
+
+      <details>
+        <summary>อ่านข้อตกลงการใช้ข้อมูล</summary>
+        <div class="pdpa">
+          <p><b>ข้อมูลที่เก็บ:</b> รหัสผู้ใช้ LINE ของท่าน (ไม่ใช่เบอร์โทรหรือชื่อบัญชี) ผูกกับเลขประจำตัวผู้ป่วย (HN) ของโรงพยาบาลสวี และเวลาที่ท่านกดยินยอม</p>
+          <p><b>ใช้เพื่อ:</b> ส่งข้อความแจ้งและเตือนนัดรับยาที่ รพ.สต. ตาม 3 ข้อด้านบนเท่านั้น ไม่ใช้โฆษณา ไม่เปิดเผยให้บุคคลอื่น</p>
+          <p><b>ผู้ที่เข้าถึงได้:</b> ผู้ดูแลระบบของโรงพยาบาลสวี · เจ้าหน้าที่ รพ.สวี และ รพ.สต. เห็นเพียงว่าผู้ป่วย "รับแจ้งเตือนทาง LINE แล้ว"</p>
+          <p><b>ยกเลิกได้ทุกเมื่อ:</b> บล็อกบัญชี LINE ของโรงพยาบาล หรือแจ้งเจ้าหน้าที่ รพ.สวี / รพ.สต. ระบบจะหยุดส่งทันที</p>
+        </div>
+      </details>
+
+      <label class="chk"><input type="checkbox" id="ok"><span>ข้าพเจ้ายินยอมให้โรงพยาบาลสวีส่งข้อความแจ้งนัดรับยาทาง LINE ตามข้อตกลงข้างต้น</span></label>
+      <button class="go" id="go" disabled>ยืนยันรับแจ้งเตือน</button>
+      <div id="msg"></div>
+    </div>
+    <div class="foot">โรงพยาบาลสวี จังหวัดชุมพร</div>
+  </div>
+
+  <div id="v-info" class="card center hidden">
+    <div class="big" id="info-ic">ℹ️</div>
+    <h1 id="info-h" style="margin-top:10px"></h1>
+    <div class="sub" id="info-t"></div>
+    <button class="go hidden" id="close">ปิดหน้านี้</button>
+  </div>
+</div>
+
+<script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { getFirestore, doc, getDoc, collection, writeBatch, serverTimestamp }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+const LIFF_ID = '2011801491-uJ1WbgA9';
+const CONSENT_VER = '2026-10-01';
+const FIREBASE_CONFIG = {
+  apiKey:            "AIzaSyCSi-vbZ1pLuv7UUOrxmHVtpfl_qz6KdVk",
+  authDomain:        "sawee-refer.firebaseapp.com",
+  projectId:         "sawee-refer",
+  storageBucket:     "sawee-refer.firebasestorage.app",
+  messagingSenderId: "755502284752",
+  appId:             "1:755502284752:web:3a4e2f81e50affa04a03d5"
+};
+const $ = id => document.getElementById(id);
+const show = (id, on) => $(id).classList.toggle('hidden', !on);
+const view = v => ['v-load','v-form','v-info'].forEach(x => show(x, x===v));
+
+function info(icon, head, text, canClose){
+  $('info-ic').textContent = icon; $('info-h').textContent = head; $('info-t').textContent = text;
+  show('close', !!canClose); view('v-info');
+}
+/* รหัสจาก QR: ?c=XXXX — LIFF อาจส่งมาใน liff.state (ก่อน init) หรือเป็น query ปกติ (หลัง init) */
+function readCode(){
+  const q = new URLSearchParams(location.search);
+  let c = q.get('c');
+  if(!c && q.get('liff.state')){ try{ c = new URLSearchParams(q.get('liff.state').split('?')[1]||'').get('c'); }catch(e){} }
+  c = String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  return /^[A-Z0-9]{8}$/.test(c) ? c : null;
+}
+
+let CODE = readCode(), CODEDOC = null, PROFILE = null, FRIEND = null, db = null;
+
+async function main(){
+  try{ await liff.init({ liffId: LIFF_ID }); }
+  catch(e){ return info('⚠️','เปิดหน้านี้ไม่สำเร็จ','กรุณาสแกน QR บนใบนัดด้วยแอป LINE อีกครั้ง'); }
+  if(!liff.isLoggedIn()){ liff.login({ redirectUri: location.href }); return; }
+  CODE = CODE || readCode();
+  if(!CODE) return info('📄','กรุณาสแกน QR บนใบนัด','หน้านี้ใช้คู่กับใบนัดรับยาที่ รพ.สต. ที่ได้รับจากโรงพยาบาลสวี', true);
+
+  try{ PROFILE = await liff.getProfile(); }
+  catch(e){ return info('⚠️','อ่านข้อมูลบัญชี LINE ไม่ได้','กรุณาปิดแล้วสแกน QR อีกครั้ง', true); }
+  try{ FRIEND = (await liff.getFriendship()).friendFlag; }catch(e){ FRIEND = null; }
+
+  const app = initializeApp(FIREBASE_CONFIG);
+  db = getFirestore(app);
+  try{ await signInAnonymously(getAuth(app)); }
+  catch(e){ return info('⚠️','เชื่อมต่อระบบไม่ได้','ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง', true); }
+
+  // ตรวจเฉพาะว่ารหัสยังใช้ได้ไหม และต้องกรอกเลขบัตรหรือเปล่า — ไม่ดึงชื่อหรือรายละเอียดนัดมาแสดง
+  try{
+    const s = await getDoc(doc(db,'line_codes',CODE));
+    if(!s.exists()) return info('❌','QR นี้ใช้ไม่ได้','กรุณาขอใบนัดใหม่จากเจ้าหน้าที่ รพ.สวี', true);
+    CODEDOC = s.data();
+    const exp = CODEDOC.expires_at?.toDate ? CODEDOC.expires_at.toDate() : null;
+    if(CODEDOC.status!=='active' || (exp && exp < new Date()))
+      return info('⌛','QR นี้หมดอายุแล้ว','กรุณาขอใบนัดใหม่จากเจ้าหน้าที่ รพ.สวี หรือ รพ.สต.', true);
+  }catch(e){ return info('⚠️','ตรวจสอบ QR ไม่ได้','ลองใหม่อีกครั้ง ('+(e.code||e.message)+')', true); }
+
+  show('cid-box', !!CODEDOC.need_cid4);
+  view('v-form');
+  if(FRIEND===false) $('msg').innerHTML = '<div class="msg warn">ท่านยังไม่ได้เพิ่มเพื่อน LINE ของโรงพยาบาล — กรุณากดเพิ่มเพื่อนก่อน ไม่อย่างนั้นจะไม่ได้รับข้อความ</div>';
+}
+
+const ready = () => $('ok').checked && (!CODEDOC?.need_cid4 || /^\d{4}$/.test($('cid').value));
+$('ok').addEventListener('change', () => $('go').disabled = !ready());
+$('cid').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g,'').slice(0,4); $('go').disabled = !ready(); });
+$('close').addEventListener('click', () => { try{ liff.closeWindow(); }catch(e){ window.close(); } });
+
+$('go').addEventListener('click', async () => {
+  if(!ready()) return;
+  $('go').disabled = true; $('go').textContent = 'กำลังบันทึก...'; $('msg').innerHTML = '';
+  try{
+    const b = writeBatch(db);
+    const link = doc(collection(db,'line_links'));        // id สุ่ม — ไม่มี userId ในชื่อเอกสาร
+    b.set(link, {
+      code: CODE, hn: CODEDOC.hn, hcode: CODEDOC.hcode, doc_id: CODEDOC.doc_id,
+      user_id: PROFILE.userId, cid4: CODEDOC.need_cid4 ? $('cid').value : null,
+      consent: true, consent_ver: CONSENT_VER, consent_at: serverTimestamp(),
+      friend: FRIEND, via: 'liff' });
+    // สถานะรวมต่อ HN ที่เจ้าหน้าที่เห็น (ไม่มี userId)
+    b.set(doc(db,'line_status',CODEDOC.hn), {
+      hn: CODEDOC.hn, linked: true, consent: true, friend: FRIEND, last_link: link.id, updated_at: serverTimestamp() });
+    await b.commit();
+    alert('บันทึกเรียบร้อย\n\nท่านจะได้รับข้อความเมื่อ รพ.สต. รับนัด และเตือนช่วงเย็นก่อนวันนัด 1 วัน ทาง LINE ของโรงพยาบาลสวี');
+    info('✅','รับแจ้งเตือนเรียบร้อย','ปิดหน้านี้ได้เลย ท่านจะได้รับข้อความทาง LINE ของโรงพยาบาลสวี', true);
+    setTimeout(() => { try{ liff.closeWindow(); }catch(e){} }, 1500);
+  }catch(e){
+    $('go').disabled = false; $('go').textContent = 'ยืนยันรับแจ้งเตือน';
+    const denied = e.code === 'permission-denied';
+    $('msg').innerHTML = `<div class="msg err">${denied && CODEDOC.need_cid4
+      ? 'เลขบัตร 4 ตัวท้ายไม่ตรงกับผู้ป่วยตามใบนัดนี้ กรุณาตรวจสอบอีกครั้ง'
+      : 'บันทึกไม่สำเร็จ กรุณาลองใหม่' + (denied ? '' : ' ('+(e.code||e.message)+')')}</div>`;
+  }
+});
+
+main();
+</script>
+</body>
+</html>

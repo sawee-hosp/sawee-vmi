@@ -555,6 +555,14 @@ tbody tr:hover{background:#FAFCFA}
         </div>
         <div id="u-msg" style="margin-top:10px"></div>
       </div>
+      <div class="panel" style="border-color:#06C755">
+        <h2>LINE แจ้งเตือนนัด <span class="note">ส่งผ่าน LINE Hub (Google Apps Script) ทำงานตลอด 24 ชม. ไม่ต้องเปิดเครื่อง server</span></h2>
+        <div id="line-st" class="sub">กด "ตรวจสถานะ" เพื่อดูโควตาข้อความ</div>
+        <div class="frm" style="margin-top:10px">
+          <button class="btn-primary" id="btn-line-st">ตรวจสถานะ / โควตา</button>
+          <button class="btn-sm" id="btn-line-flush">ส่งคิวที่ค้างทั้งหมด</button></div>
+        <div id="line-outbox" style="margin-top:10px"></div>
+      </div>
       <div class="panel" style="border-color:var(--accent)">
         <h2>ขอบเขตคลินิกที่ส่งออกจาก HOSxP <span class="note">pusher อ่านค่านี้ทุกรอบ ส่งเฉพาะผู้ป่วยที่ส่งต่อจากคลินิกที่ติ๊ก
           และยา/แล็บจาก visit ที่มาตามนัดคลินิกเหล่านี้เท่านั้น</span></h2>
@@ -816,7 +824,7 @@ const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออ
   open_round:'เปิดรอบนัด', view_dashboard:'เปิดแดชบอร์ด', view_log:'เปิดบันทึกการเข้าถึง',
   edit_outreach:'แก้ไขวันนัด', request_sync:'สั่ง sync ข้อมูล', edit_drugusage:'แก้ไขวิธีใช้ยา', create_user:'สร้างผู้ใช้',
   edit_user:'แก้ไขสิทธิ์ผู้ใช้', revoke_user:'ระงับสิทธิ์ผู้ใช้', edit_geo:'แก้พิกัด รพ.สต.',
-  record_visit:'บันทึกการให้บริการ', view_clinical:'เปิดดูยา/แล็บ (ออกหน่วย)', reassign_patient:'ย้าย รพ.สต. ปลายทาง', find_referral:'ค้นหาการส่งตัว', nurse_send:'ส่งตัวผู้ป่วย (พยาบาล)', nurse_send_cancel:'ยกเลิกการส่งตัว', print_appt_slip:'พิมพ์ใบนัด', confirm_nurse_date:'ยืนยันวันนัดที่ รพ.สวี นัดไว้', block_patient:'ลบผู้ป่วยออกจากระบบ', unblock_patient:'ยกเลิกการลบผู้ป่วย', edit_clinic_scope:'แก้ขอบเขตคลินิก', add_manual_patient:'เพิ่มผู้ป่วยเอง', delete_manual_patient:'ลบผู้ป่วยที่เพิ่มเอง', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
+  record_visit:'บันทึกการให้บริการ', view_clinical:'เปิดดูยา/แล็บ (ออกหน่วย)', reassign_patient:'ย้าย รพ.สต. ปลายทาง', find_referral:'ค้นหาการส่งตัว', nurse_send:'ส่งตัวผู้ป่วย (พยาบาล)', nurse_send_cancel:'ยกเลิกการส่งตัว', print_appt_slip:'พิมพ์ใบนัด', confirm_nurse_date:'ยืนยันวันนัดที่ รพ.สวี นัดไว้', block_patient:'ลบผู้ป่วยออกจากระบบ', unblock_patient:'ยกเลิกการลบผู้ป่วย', edit_clinic_scope:'แก้ขอบเขตคลินิก', add_manual_patient:'เพิ่มผู้ป่วยเอง', delete_manual_patient:'ลบผู้ป่วยที่เพิ่มเอง', cancel_referral:'ยกเลิกการส่งตัว', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
   approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
   reveal_sensitive:'เปิดดูข้อมูลส่วนบุคคล', add_patient_request:'ขอเพิ่มผู้ป่วย',
   approve_add_patient:'อนุมัติเพิ่มผู้ป่วย', edit_rpst:'แก้ไขหน่วยบริการ', queue_line:'เข้าคิวแจ้งผู้ป่วยทาง LINE',
@@ -1117,7 +1125,7 @@ function openTab(id){
   if(id==='cal')   renderCal();
   if(id==='batch') renderBatch();
   if(id==='dash')  { renderDash(); audit('view_dashboard'); }
-  if(id==='user')  { loadUsers(); loadPending(); renderScopeAdmin(); }
+  if(id==='user')  { loadUsers(); loadPending(); renderScopeAdmin(); renderLineAdmin(false); }
   if(id==='find')  { loadFindQueue(); renderSentList(); setTimeout(()=>$('f-hn')?.focus(), 50); }
   if(id==='remission') renderRemission();
   if(id==='drugsum')   renderDrugSum();
@@ -1156,6 +1164,32 @@ async function startApp(){
    ผู้ป่วยสแกน QR บนใบนัด → หน้า LIFF (liff.html) → ยินยอม → line_links (มี userId, admin อ่านได้) + line_status/{hn} (ทุกคนเห็น)
    รพ.สต. กดรับตัว → เขียนคิว line_outbox → LINE Hub (ภายหลัง) ส่งข้อความจริง */
 const LIFF_URL = 'https://liff.line.me/2011801491-uJ1WbgA9';
+/* URL ของ LINE Hub (Google Apps Script Web App) — Deploy แล้วคัดลอกมาวางตรงนี้ (ลงท้าย /exec)
+   Hub รับแค่เลขที่คิว เนื้อหาข้อความสร้างเองจากข้อมูลนัด — URL นี้เปิดเผยได้ ไม่ใช่ความลับ */
+const LINE_HUB_URL = 'https://script.google.com/macros/s/AKfycbxdASemtPuL7w0EnDuMqSwjMZRN6Jm8MfUVTKdlL2mXzHwpFivCY1sIxF209hkQaI8Ukg/exec';
+async function callHub(body, ms){
+  if(!LINE_HUB_URL) return {ok:false, error:'ยังไม่ได้ตั้งค่า LINE_HUB_URL ใน refer.html'};
+  const ctl = new AbortController(), t = setTimeout(()=>ctl.abort(), ms||25000);
+  try{
+    const r = await fetch(LINE_HUB_URL, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify(body), signal:ctl.signal});
+    return await r.json();
+  }catch(e){ return {ok:false, error: e.name==='AbortError' ? 'LINE Hub ตอบช้า — ข้อความจะถูกส่งจากคิวภายใน 1 นาที' : 'ติดต่อ LINE Hub ไม่ได้: '+e.message}; }
+  finally{ clearTimeout(t); }
+}
+/* อ่านสถานะ LINE ของ HN นี้ใหม่จาก Firestore (ผู้ป่วยอาจเพิ่งสแกน QR หลังเปิดหน้าเว็บ) */
+async function refreshLine(r){
+  if(!r?.hn) return;
+  try{ const d = await getDoc(doc(db,'line_status',String(r.hn))); if(d.exists()) LINE_ST[String(r.hn)] = d.data(); }catch(e){}
+}
+/* ข้อความสรุปผลส่ง LINE ให้ผู้ใช้อ่าน */
+function lineResultText(res){
+  if(!res) return '';
+  if(res.reason==='not_linked') return 'ผู้ป่วยยังไม่ได้ผูก LINE — ไม่ได้ส่งข้อความ';
+  if(res.hub?.ok) return `ส่ง LINE ถึงผู้ป่วยแล้ว (${res.hub.n||1} บัญชี)`;
+  if(res.queued) return 'เข้าคิว LINE แล้ว แต่ยังส่งไม่สำเร็จ: '+(res.hub?.error||'ไม่ทราบสาเหตุ');
+  return 'ส่ง LINE ไม่ได้: '+(res.error||'');
+}
 let LINE_ST = {}, LINE_ACK = {};
 async function loadLineStatus(){
   try{ const s = await getDocs(collection(db,'line_status')); LINE_ST = {};
@@ -1213,15 +1247,21 @@ async function ensureLineCode(r){
 }
 /* คิวส่งข้อความ LINE (LINE Hub จะรับไปส่ง) */
 async function queueLine(r, type, appoint){
-  if(!lineOn(r)) return false;
-  await addDoc(collection(db,'line_outbox'), { project:'refer', type, doc_id:r.id, hn:String(r.hn), hcode:r.hcode,
+  await refreshLine(r);
+  if(!lineOn(r)) return {queued:false, reason:'not_linked'};
+  const ob = await addDoc(collection(db,'line_outbox'), { project:'refer', type, doc_id:r.id, hn:String(r.hn), hcode:r.hcode,
     appoint_date:appoint||null, status:'pending', created_uid:ME.uid, created_by:PROFILE.full_name||ME.email,
     created_at:serverTimestamp() });
   await updateDoc(doc(db,'referrals',r.id), {'workflow.line_notify':{type, appoint_date:appoint||null,
     at:new Date(Date.now()+7*3600e3).toISOString().slice(0,16).replace('T',' '), by:PROFILE.full_name||ME.email}});
   await audit('queue_line', r.id, {type, appoint_date:appoint||null});
   r.workflow = {...(r.workflow||{}), line_notify:{type, appoint_date:appoint||null, at:new Date(Date.now()+7*3600e3).toISOString().slice(0,16).replace('T',' ')}};
-  return true;
+  // ส่งทันทีผ่าน LINE Hub (ถ้าเรียกไม่สำเร็จ Hub จะหยิบจากคิวเองภายใน 1 นาที)
+  const hub = await callHub({action:'send', id:ob.id});
+  r.line_last = {type, ok:!!hub.ok, error:hub.ok?null:(hub.error||null), n:hub.n||0,
+                 sent_at:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' ')};
+  if(!hub.ok && !LINE_HUB_URL) r.line_last = null;
+  return {queued:true, id:ob.id, hub};
 }
 
 async function loadRpst(){
@@ -1535,6 +1575,10 @@ function openDetail(id){
     ${r.manual && (isAdmin()||isOutreach()||(isRpst()&&r.hcode===myHcode()))?`<div class="sec">
       <div class="sub">เพิ่มเองโดย ${esc(r.created_by_name||r.created_by||'-')} · ${thDate(r.refer_date)}</div>
       <button class="btn-sm red" id="man-del" style="margin-top:6px">ลบรายการนี้ (เพิ่มผิด/ซ้ำ)</button></div>`:''}
+    ${(isHospital()||isAdmin()) && r.case_type!=='data_only' ? `<div class="sec" style="border:1px solid #B42318">
+      <div class="st" style="color:#B42318">ยกเลิกการส่งตัวครั้งนี้</div>
+      <div class="sub">ลบการส่งตัวครั้งนี้ออกจากระบบ (ส่งผิดคน / ผิดหน่วย / ผู้ป่วยไม่ไปแล้ว) · ส่งตัวใหม่ภายหลังได้ตามปกติ ไม่ถูกบล็อก</div>
+      <button class="btn-sm red" id="d-cancel" style="margin-top:6px">ยกเลิกการส่งตัว</button></div>` : ''}
     ${canDischarge()?`<div class="sec" style="border:1px solid var(--warn)"><div class="st" style="color:var(--warn)">จำหน่ายออกจากทะเบียน</div>
       <div class="frm">
         <div class="fld grow"><label>เหตุผล</label><select id="dc-reason">
@@ -1544,19 +1588,24 @@ function openDetail(id){
   $('ov').classList.remove('hidden');
   const decide = async (to, extra, msg) => {
     try{ await setStatus(id, to, extra);
-         let sent = false;
-         if(to==='scheduled' && $('dc-line')?.checked){
-           try{ sent = await queueLine(r, 'accepted', extra?.appoint_date); }catch(e){ console.warn(e); }
+         let lr = null;
+         if(to==='scheduled' && ($('dc-line') ? $('dc-line').checked : true)){
+           $('dc-msg').innerHTML=`<div class="msg info">${msg} · กำลังส่ง LINE...</div>`;
+           try{ lr = await queueLine(r, 'accepted', extra?.appoint_date); }
+           catch(e){ lr = {queued:false, error:(e.code||e.message)+(e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':'')}; }
          }
-         $('dc-msg').innerHTML=`<div class="msg ok">${msg}${sent?' · เข้าคิวแจ้งผู้ป่วยทาง LINE แล้ว':''}</div>`; renderList();
-         setTimeout(()=>$('ov').classList.add('hidden'), 700); }
+         const bad = lr && !(lr.hub?.ok) && lr.reason!=='not_linked';
+         $('dc-msg').innerHTML=`<div class="msg ${bad?'amber':'ok'}">${msg}${lr?'<br>'+esc(lineResultText(lr)):''}</div>`; renderList();
+         if(!bad) setTimeout(()=>$('ov').classList.add('hidden'), lr ? 2200 : 700); }
     catch(e){ $('dc-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}</div>`; }
   };
   $('dc-ack')?.addEventListener('click', ()=>decide('acknowledged', {}, 'รับตัวแล้ว'));
+  $('d-cancel')?.addEventListener('click', async ()=>{ if(await cancelReferral(r)){ $('ov').classList.add('hidden'); renderList(); } });
   $('d-line-resend')?.addEventListener('click', async ()=>{
     if(!confirm('ส่งข้อความแจ้งนัดวันที่ '+thDate(r.workflow.appoint_date)+' ทาง LINE ให้ผู้ป่วยอีกครั้ง?')) return;
-    try{ await queueLine(r, 'resend', r.workflow.appoint_date); $('d-line-resend').textContent='เข้าคิวแล้ว'; $('d-line-resend').disabled=true; }
-    catch(e){ alert('ไม่สำเร็จ: '+(e.code||e.message)); }
+    $('d-line-resend').disabled=true; $('d-line-resend').textContent='กำลังส่ง...';
+    try{ const lr = await queueLine(r, 'resend', r.workflow.appoint_date); $('d-line-resend').textContent=lineResultText(lr); }
+    catch(e){ $('d-line-resend').textContent='ไม่สำเร็จ: '+(e.code||e.message); }
   });
   $('dc-okdate')?.addEventListener('click', ()=>decide('scheduled', {appoint_date:r.workflow.proposed_date},
     'รับตัวและยืนยันนัด '+thDate(r.workflow.proposed_date)+' แล้ว — รพ.สวี เห็นสถานะยืนยันทันที'));
@@ -1638,12 +1687,13 @@ function openDetail(id){
         const oldAp = r.workflow?.appoint_date||null, newAp = $('d-ap').value||null;
         await setStatus(id, $('d-st').value,
           {appoint_date:newAp, note:$('d-note').value.trim()||null});
-        let sent = false;
+        let lr = null;
+        await refreshLine(r);
         if(newAp && oldAp && newAp!==oldAp && lineOn(r) && ['scheduled','acknowledged'].includes($('d-st').value)
            && confirm('วันนัดเปลี่ยนเป็น '+thDate(newAp)+'\nส่ง LINE แจ้งผู้ป่วยวันนัดใหม่ด้วยไหม?')){
-          try{ sent = await queueLine(r, 'rescheduled', newAp); }catch(e){ console.warn(e); }
+          try{ lr = await queueLine(r, 'rescheduled', newAp); }catch(e){ lr = {queued:false, error:e.code||e.message}; }
         }
-        $('d-msg').innerHTML=`<div class="msg ok">บันทึกแล้ว${sent?' · เข้าคิวแจ้งวันนัดใหม่ทาง LINE แล้ว':''}</div>`; renderList();
+        $('d-msg').innerHTML=`<div class="msg ok">บันทึกแล้ว${lr?' · '+esc(lineResultText(lr)):''}</div>`; renderList();
       }catch(e){ $('d-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
     });
     wireApPick('d-ap-pick','d-ap');
@@ -3227,7 +3277,7 @@ function renderSentList(){
       <td>${confirmTag(r)}${stOf(r)==='not_mine'&&r.workflow?.note?`<div class="sub">${esc(r.workflow.note)}</div>`:''}<div style="margin-top:3px">${lineBadge(r,true)} ${lineMsgTag(r)}</div></td>
       <td class="sub">${r.source==='nurse'?`ส่งเอง · ${esc(r.created_by_name||'')}${r.synced_at?'':'<div style="color:var(--amber)">รอข้อมูล HOSxP</div>'}`:'HOSxP'}</td>
       <td class="right" style="white-space:nowrap">${r.workflow?.appoint_date?`<button class="btn-sm grey" data-slip="${esc(r.id)}">ใบนัด</button>`:''}
-        ${r.source==='nurse'&&stOf(r)==='new'&&(r.created_uid===ME.uid||isAdmin())?` <button class="btn-sm red" data-nsdel="${esc(r.id)}">ยกเลิก</button>`:''}</td>
+        ${!['discharged','cancelled'].includes(stOf(r))?` <button class="btn-sm red" data-nsdel="${esc(r.id)}">ยกเลิก</button>`:''}</td>
     </tr>`).join('')}</tbody></table></div>` : '<div class="empty">ไม่มีผู้ป่วยที่ส่งตัวในช่วงนี้</div>';
   el.querySelectorAll('.btn-eye').forEach(b=>b.addEventListener('click', async ()=>{
     const v = await revealField(b.dataset.eye, b.dataset.ef);
@@ -3235,12 +3285,25 @@ function renderSentList(){
   el.querySelectorAll('[data-slip]').forEach(b=>b.addEventListener('click', ()=>{
     const r=LIST.find(x=>x.id===b.dataset.slip); if(r) printApptSlip(r); }));
   el.querySelectorAll('[data-nsdel]').forEach(b=>b.addEventListener('click', async ()=>{
-    if(!confirm('ยกเลิกการส่งตัวรายนี้? (ใช้เมื่อส่งผิดคน/ผิดหน่วย — รพ.สต. ยังไม่ได้ยืนยัน)')) return;
-    try{ await deleteDoc(doc(db,'referrals',b.dataset.nsdel)); await audit('nurse_send_cancel', b.dataset.nsdel);
-      LIST=LIST.filter(x=>x.id!==b.dataset.nsdel); renderSentList(); }
-    catch(e){ alert('ยกเลิกไม่สำเร็จ: '+(e.code||e.message)); }
+    const r = LIST.find(x=>x.id===b.dataset.nsdel); if(r && await cancelReferral(r)) renderSentList();
   }));
 }
+/* ยกเลิกการส่งตัว = ลบเคสนี้ออกจากระบบ + จด referral_cancel/{docId} ไว้ให้ push.php ไม่ส่งเคส "ครั้งนี้" กลับมาอีก
+   (บล็อกเฉพาะรหัสเคสนี้ ไม่บล็อก HN) → ส่งตัวใหม่ภายหลังได้ตามปกติ */
+async function cancelReferral(r){
+  const why = prompt(`ยกเลิกการส่งตัว HN ${r.hn||'-'} → ${r.hcode_name||rpstName(r.hcode)} ?\n\nเหตุผล (บันทึกไว้):`, 'ส่งผิดคน/ผิดหน่วย');
+  if(why===null) return false;
+  try{
+    await setDoc(doc(db,'referral_cancel',r.id), { doc_id:r.id, hn:String(r.hn||''), hcode:r.hcode||null,
+      reason:why.trim()||null, source:r.source||'hosxp', by:PROFILE.full_name||ME.email, by_uid:ME.uid,
+      at:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' ') });
+    await deleteDoc(doc(db,'referrals',r.id));
+    await audit('cancel_referral', r.id, {hn:r.hn, hcode:r.hcode, reason:why});
+    LIST = LIST.filter(x=>x.id!==r.id);
+    return true;
+  }catch(e){ alert('ยกเลิกไม่สำเร็จ: '+(e.code||e.message)+(e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':'')); return false; }
+}
+
 $('f-sent-days')?.addEventListener('change', renderSentList);
 $('f-sent-mine')?.addEventListener('change', renderSentList);
 $('f-sent-reload')?.addEventListener('click', async ()=>{ await Promise.all([loadList(), loadLineStatus()]); renderSentList(); });
@@ -3272,6 +3335,43 @@ async function loadFindQueue(){
       loadFindQueue(); }));
   }catch(e){ $('f-queue').innerHTML=`<div class="msg err">โหลดไม่ได้: ${esc(e.code||e.message)}</div>`; }
 }
+
+/* ================= LINE แจ้งเตือนนัด (admin) ================= */
+const OB_ST = {pending:['รอส่ง','#B8860B'], sending:['กำลังส่ง','#3E6E8E'], sent:['ส่งแล้ว','#1F7A4D'], error:['ไม่สำเร็จ','#B42318']};
+async function renderLineAdmin(withStatus){
+  if(!isAdmin()) return;
+  if(withStatus){
+    $('line-st').innerHTML = '<span class="sub">กำลังตรวจ...</span>';
+    const s = await callHub({action:'status'});
+    $('line-st').innerHTML = !s.ok && !s.hub ? `<div class="msg err">${esc(s.error||'ติดต่อ LINE Hub ไม่ได้')}</div>` : `<table class="kv">
+      <tr><td>LINE Hub</td><td>${s.ok?'<b style="color:var(--ok)">ออนไลน์</b>':'ผิดพลาด'} · ${esc(s.time||'')}</td></tr>
+      <tr><td>OA</td><td>${esc(s.oa_name||'-')} ${s.oa_basic_id?'('+esc(s.oa_basic_id)+')':''} ${s.token_ok?'':'<span class="pill pill-warn">token ใช้ไม่ได้</span>'}</td></tr>
+      <tr><td>โควตาเดือนนี้</td><td>${s.quota_type==='none'?'ไม่จำกัด':`<b>${s.remaining??'-'}</b> เหลือ จาก ${s.quota_limit??'-'} (ใช้ไป ${s.used_this_month??'-'})`}</td></tr>
+      <tr><td>คิวค้าง</td><td>${s.pending??'-'} รายการ</td></tr>
+      ${s.error?`<tr><td></td><td class="sub" style="color:#B42318">${esc(s.error)}</td></tr>`:''}
+      ${s.firestore_error?`<tr><td></td><td class="sub" style="color:#B42318">Firestore: ${esc(s.firestore_error)}</td></tr>`:''}</table>`;
+  }
+  try{
+    const q = await getDocs(query(collection(db,'line_outbox'), limit(300)));
+    const rows = q.docs.map(d=>({id:d.id, ...d.data()}))
+      .sort((a,b)=>(b.created_at?.seconds||0)-(a.created_at?.seconds||0)).slice(0,20);
+    $('line-outbox').innerHTML = rows.length ? `<div class="st">คิวล่าสุด 20 รายการ</div><div class="tbl-wrap"><table>
+      <thead><tr><th>เวลา</th><th>ประเภท</th><th>HN</th><th>วันนัด</th><th>สถานะ</th><th>โดย</th></tr></thead><tbody>${rows.map(o=>{
+        const [t,c]=OB_ST[o.status]||[o.status,'#888'];
+        return `<tr><td class="sub">${o.created_at?.toDate?o.created_at.toDate().toLocaleString('th-TH'):''}</td><td>${esc(o.type)}</td>
+          <td class="mono">${esc(o.hn||'')}</td><td>${thDate(o.appoint_date)}</td>
+          <td><span class="tag" style="background:${c}1a;color:${c}">${t}</span>${o.error?`<div class="sub" style="color:#B42318;max-width:320px">${esc(o.error)}</div>`:''}</td>
+          <td class="sub">${esc(o.created_by||'')}</td></tr>`; }).join('')}</tbody></table></div>` : '<div class="sub">ยังไม่มีคิว</div>';
+  }catch(e){ $('line-outbox').innerHTML = `<div class="sub">อ่านคิวไม่ได้: ${esc(e.code||e.message)}</div>`; }
+}
+$('btn-line-st')?.addEventListener('click', ()=>renderLineAdmin(true));
+$('btn-line-flush')?.addEventListener('click', async ()=>{
+  $('btn-line-flush').disabled=true;
+  const r = await callHub({action:'flush'});
+  $('btn-line-flush').disabled=false;
+  alert(r.ok ? 'ส่งคิวที่ค้างแล้ว '+(r.done||0)+' รายการ' : 'ไม่สำเร็จ: '+(r.error||''));
+  renderLineAdmin(false);
+});
 
 /* ================= ขอบเขตคลินิก / ผู้ป่วยที่ลบออก (admin) ================= */
 async function renderScopeAdmin(){

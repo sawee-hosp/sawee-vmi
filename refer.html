@@ -819,7 +819,7 @@ const ACTION_LABEL = { login:'เข้าสู่ระบบ', logout:'ออ
   record_visit:'บันทึกการให้บริการ', view_clinical:'เปิดดูยา/แล็บ (ออกหน่วย)', reassign_patient:'ย้าย รพ.สต. ปลายทาง', find_referral:'ค้นหาการส่งตัว', nurse_send:'ส่งตัวผู้ป่วย (พยาบาล)', nurse_send_cancel:'ยกเลิกการส่งตัว', print_appt_slip:'พิมพ์ใบนัด', confirm_nurse_date:'ยืนยันวันนัดที่ รพ.สวี นัดไว้', block_patient:'ลบผู้ป่วยออกจากระบบ', unblock_patient:'ยกเลิกการลบผู้ป่วย', edit_clinic_scope:'แก้ขอบเขตคลินิก', add_manual_patient:'เพิ่มผู้ป่วยเอง', delete_manual_patient:'ลบผู้ป่วยที่เพิ่มเอง', keyed_hosxp:'คีย์เข้า HOSxP แล้ว', print_patient_list:'พิมพ์รายชื่อผู้ป่วย', ncdr_keyin_note:'แก้หมายเหตุ NCDs',
   approve_user:'อนุมัติผู้ใช้', reject_user:'ปฏิเสธคำขอ',
   reveal_sensitive:'เปิดดูข้อมูลส่วนบุคคล', add_patient_request:'ขอเพิ่มผู้ป่วย',
-  approve_add_patient:'อนุมัติเพิ่มผู้ป่วย', edit_rpst:'แก้ไขหน่วยบริการ',
+  approve_add_patient:'อนุมัติเพิ่มผู้ป่วย', edit_rpst:'แก้ไขหน่วยบริการ', queue_line:'เข้าคิวแจ้งผู้ป่วยทาง LINE',
   create_test_data:'สร้างข้อมูลทดสอบ', delete_test_data:'ลบข้อมูลทดสอบ',
   edit_drug_policy:'ตั้งค่าประเภทยา', export_refill:'ส่งยอดเบิกไป sawee refill' };
 
@@ -1136,7 +1136,7 @@ async function startApp(){
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   buildNav();
   await audit('login');
-  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy(), loadClinicScope()]);
+  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy(), loadClinicScope(), loadLineStatus()]);
   if(isAdmin()){
     initSync();
     loadPending();
@@ -1152,6 +1152,59 @@ async function startApp(){
   }else $('th-unit').classList.add('hidden');
   await loadList();
 }
+/* ================= แจ้งเตือนนัดทาง LINE =================
+   ผู้ป่วยสแกน QR บนใบนัด → หน้า LIFF (liff.html) → ยินยอม → line_links (มี userId, admin อ่านได้) + line_status/{hn} (ทุกคนเห็น)
+   รพ.สต. กดรับตัว → เขียนคิว line_outbox → LINE Hub (ภายหลัง) ส่งข้อความจริง */
+const LIFF_URL = 'https://liff.line.me/2011801491-uJ1WbgA9';
+let LINE_ST = {};
+async function loadLineStatus(){
+  try{ const s = await getDocs(collection(db,'line_status')); LINE_ST = {};
+       s.docs.forEach(d=>{ LINE_ST[d.id] = d.data(); }); }
+  catch(e){ LINE_ST = {}; }
+}
+const lineOf = r => r?.hn ? LINE_ST[String(r.hn)] : null;
+const lineOn = r => { const x=lineOf(r); return !!(x?.linked && x?.consent); };
+function lineBadge(r, big){
+  const x = lineOf(r), sz = big ? 'font-size:13px;padding:3px 10px' : '';
+  if(x?.linked && x?.consent && x.friend!==false)
+    return `<span class="pill" style="background:#06C7551f;color:#04A847;${sz}" title="ผูก HN กับ LINE แล้ว และยอมรับการแจ้งเตือน">● LINE รับแจ้งเตือน</span>`;
+  if(x?.linked) return `<span class="pill pill-warn" style="${sz}" title="ผูกแล้ว แต่ยังไม่ได้เพิ่มเพื่อน LINE OA — ข้อความอาจส่งไม่ถึง">● LINE ยังไม่เพิ่มเพื่อน</span>`;
+  return big ? `<span class="pill" style="background:#8881;color:#777;${sz}">○ ยังไม่ผูก LINE</span>` : '';
+}
+/* รหัส 8 ตัวสำหรับ QR (ตัดตัวที่สับสน 0 O 1 I L) */
+function newLineCode(){
+  const A='ABCDEFGHJKMNPQRSTUVWXYZ23456789', b=new Uint8Array(8); crypto.getRandomValues(b);
+  return [...b].map(x=>A[x % A.length]).join('');
+}
+/* หา/สร้างรหัส QR ของเคสนี้ (อายุ 30 วัน) — เฉพาะพยาบาล/เภสัชกร/admin */
+async function ensureLineCode(r){
+  if(!(isHospital()||isAdmin()) || !r?.hn) return null;
+  try{
+    const q = await getDocs(query(collection(db,'line_codes'), where('doc_id','==',r.id), where('status','==','active'), limit(5)));
+    const ok = q.docs.find(d=>{ const e=d.data().expires_at; return !e?.toDate || e.toDate() > new Date(Date.now()+3*864e5); });
+    if(ok) return ok.id;
+  }catch(e){ /* rules เก่า — สร้างใหม่ */ }
+  const code = newLineCode(), c4 = String(r.patient?.cid_last4||'');
+  try{
+    await setDoc(doc(db,'line_codes',code), { hn:String(r.hn), hcode:r.hcode, doc_id:r.id, status:'active',
+      need_cid4: /^\d{4}$/.test(c4), expires_at: new Date(Date.now()+30*864e5),
+      created_uid:ME.uid, created_by:PROFILE.full_name||ME.email, created_at:serverTimestamp() });
+    if(/^\d{4}$/.test(c4)) await setDoc(doc(db,'line_codes_secret',code), {cid4:c4});
+    return code;
+  }catch(e){ console.warn('สร้างรหัส QR ไม่ได้', e); return null; }
+}
+/* คิวส่งข้อความ LINE (LINE Hub จะรับไปส่ง) */
+async function queueLine(r, type, appoint){
+  if(!lineOn(r)) return false;
+  await addDoc(collection(db,'line_outbox'), { project:'refer', type, doc_id:r.id, hn:String(r.hn), hcode:r.hcode,
+    appoint_date:appoint||null, status:'pending', created_uid:ME.uid, created_by:PROFILE.full_name||ME.email,
+    created_at:serverTimestamp() });
+  await updateDoc(doc(db,'referrals',r.id), {'workflow.line_notify':{type, appoint_date:appoint||null,
+    at:new Date(Date.now()+7*3600e3).toISOString().slice(0,16).replace('T',' '), by:PROFILE.full_name||ME.email}});
+  await audit('queue_line', r.id, {type, appoint_date:appoint||null});
+  return true;
+}
+
 async function loadRpst(){
   try{
     const s = await getDocs(collection(db,'rpst'));
@@ -1298,6 +1351,7 @@ function renderList(){
           ${p.moo?` · หมู่ ${esc(p.moo)} ${esc(p.tambon||'')}`:''}
           ${r.case_type==='data_only'?'<span class="pill pill-rem">Remission</span>':''}
           ${r.manual?'<span class="pill pill-warn" title="รพ.สต. เพิ่มเอง ไม่ได้มาจาก HOSxP">เพิ่มเอง</span>':''}
+          ${lineBadge(r)}
           ${r.source==='nurse'&&stOf(r)==='new'&&r.workflow?.proposed_date?`<span class="pill pill-warn" title="พยาบาล รพ.สวี นัดคนไข้ไว้แล้ว รอ รพ.สต. ยืนยัน">รพ.สวี นัด ${thDate(r.workflow.proposed_date)} — รอยืนยัน</span>`:''}
           ${r.hcode_conflict?'<span class="pill pill-warn">ปลายทางขัดแย้ง</span>':''}
           ${r.hcode_source==='address_guess'?'<span class="pill pill-warn" title="HOSxP ไม่ได้ระบุ รพ.สต. ปลายทาง ระบบเดาจากที่อยู่ผู้ป่วย ถ้าไม่ใช่ให้กด ไม่ใช่คนของเรา">ปลายทางจากที่อยู่ — รอยืนยัน</span>':''}</div>
@@ -1401,6 +1455,10 @@ function openDetail(id){
         <div class="fld grow"><label>เหตุผล / ควรไปหน่วยไหน (admin จะย้ายหรือลบให้)</label>
           <input type="text" id="dc-why" style="width:100%" placeholder="เช่น ย้ายไปอยู่ ต.นาโพธิ์ แล้ว / ไม่รู้จักผู้ป่วยรายนี้"></div>
         <button class="btn-sm" id="dc-reject-ok" style="margin-top:8px;background:#6B4C9A;color:#fff">ยืนยัน ไม่ใช่คนของเรา</button></div>
+      <div style="margin-top:10px">${lineOn(r)
+        ? `<label style="display:flex;gap:8px;align-items:center;font-size:15px;cursor:pointer"><input type="checkbox" id="dc-line" checked style="width:18px;height:18px">
+            ส่ง LINE แจ้งผู้ป่วยว่า รพ.สต. รับนัดแล้ว ${lineBadge(r)}</label>`
+        : `<span class="sub">${lineBadge(r,true)} ผู้ป่วยรายนี้ยังไม่ได้ผูก LINE — แจ้งทาง LINE ไม่ได้</span>`}</div>
       <div id="dc-msg" style="margin-top:8px"></div>
     </div>` : ''}
     <div class="grid g2">
@@ -1411,6 +1469,7 @@ function openDetail(id){
           <button class="btn-eye" id="d-eye-phone">👁</button></td></tr>
         <tr><td>คลินิก</td><td>${esc(clinicText(r)||'-')}</td></tr>
         <tr><td>วันที่ส่งต่อ</td><td>${thDate(r.refer_date)}</td></tr>
+        <tr><td>LINE</td><td>${lineBadge(r,true)}${r.workflow?.line_notify?`<div class="sub">คิวแจ้ง LINE ${esc(r.workflow.line_notify.at||'')} โดย ${esc(r.workflow.line_notify.by||'')}</div>`:''}</td></tr>
         <tr><td>ปลายทาง</td><td>${esc(r.hcode_name||r.hcode||'-')}
           ${r.hcode_source==='address_guess'
             ? '<span class="pill pill-warn">ปลายทางจากที่อยู่ — รอยืนยัน</span><div class="sub">HOSxP ไม่ได้ระบุ รพ.สต. ปลายทาง ถ้าไม่ใช่คนในพื้นที่ให้กด "ไม่ใช่คนของเรา"</div>'
@@ -1463,7 +1522,12 @@ function openDetail(id){
       </div><div id="dc-msg" style="margin-top:8px"></div></div>`:''}`;
   $('ov').classList.remove('hidden');
   const decide = async (to, extra, msg) => {
-    try{ await setStatus(id, to, extra); $('dc-msg').innerHTML=`<div class="msg ok">${msg}</div>`; renderList();
+    try{ await setStatus(id, to, extra);
+         let sent = false;
+         if(to==='scheduled' && $('dc-line')?.checked){
+           try{ sent = await queueLine(r, 'accepted', extra?.appoint_date); }catch(e){ console.warn(e); }
+         }
+         $('dc-msg').innerHTML=`<div class="msg ok">${msg}${sent?' · เข้าคิวแจ้งผู้ป่วยทาง LINE แล้ว':''}</div>`; renderList();
          setTimeout(()=>$('ov').classList.add('hidden'), 700); }
     catch(e){ $('dc-msg').innerHTML=`<div class="msg err">${esc(e.code||e.message)}</div>`; }
   };
@@ -1545,9 +1609,15 @@ function openDetail(id){
         $('d-msg').innerHTML='<div class="msg err">ระบุในช่อง "บันทึกเพิ่มเติม" ด้วยว่าทำไมไม่ใช่คนของเรา / ควรไปหน่วยไหน เพื่อให้ admin ย้ายได้ถูก</div>';
         return; }
       try{
+        const oldAp = r.workflow?.appoint_date||null, newAp = $('d-ap').value||null;
         await setStatus(id, $('d-st').value,
-          {appoint_date:$('d-ap').value||null, note:$('d-note').value.trim()||null});
-        $('d-msg').innerHTML='<div class="msg ok">บันทึกแล้ว</div>'; renderList();
+          {appoint_date:newAp, note:$('d-note').value.trim()||null});
+        let sent = false;
+        if(newAp && oldAp && newAp!==oldAp && lineOn(r) && ['scheduled','acknowledged'].includes($('d-st').value)
+           && confirm('วันนัดเปลี่ยนเป็น '+thDate(newAp)+'\nส่ง LINE แจ้งผู้ป่วยวันนัดใหม่ด้วยไหม?')){
+          try{ sent = await queueLine(r, 'rescheduled', newAp); }catch(e){ console.warn(e); }
+        }
+        $('d-msg').innerHTML=`<div class="msg ok">บันทึกแล้ว${sent?' · เข้าคิวแจ้งวันนัดใหม่ทาง LINE แล้ว':''}</div>`; renderList();
       }catch(e){ $('d-msg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
     });
     wireApPick('d-ap-pick','d-ap');
@@ -3016,51 +3086,87 @@ async function saveNurseSend(){
   }
 }
 /* ใบนัดรับยา รพ.สต. — A5 แนวตั้ง (สั่งพิมพ์ หรือเลือก "บันทึกเป็น PDF") · ไม่มีเลขบัตร ไม่มีรายการยา */
-function printApptSlip(r){
+/* สร้าง QR เป็นรูป (data URL) ในหน้าหลัก — โหลดไลบรารีครั้งเดียว ถ้าโหลดไม่ได้ใบนัดยังพิมพ์ได้ แค่ไม่มี QR */
+let QR_LIB = null;
+function loadQrLib(){
+  if(window.QRCode) return Promise.resolve(true);
+  if(QR_LIB) return QR_LIB;
+  QR_LIB = new Promise(res=>{
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    const t = setTimeout(()=>res(false), 6000);
+    sc.onload = ()=>{ clearTimeout(t); res(!!window.QRCode); };
+    sc.onerror = ()=>{ clearTimeout(t); QR_LIB=null; res(false); };
+    document.head.appendChild(sc);
+  });
+  return QR_LIB;
+}
+async function qrDataUrl(text){
+  if(!text || !(await loadQrLib())) return '';
+  const box = document.createElement('div'); box.style.cssText='position:fixed;left:-9999px;top:0';
+  document.body.appendChild(box);
+  try{ new window.QRCode(box, {text, width:320, height:320, correctLevel:window.QRCode.CorrectLevel.M});
+       const c = box.querySelector('canvas'); return c ? c.toDataURL('image/png') : (box.querySelector('img')?.src||''); }
+  catch(e){ return ''; } finally { box.remove(); }
+}
+async function printApptSlip(r){
   if(!r) return;
+  // เปิดหน้าต่างก่อน (กันเบราว์เซอร์บล็อก pop-up) แล้วค่อยเตรียมรหัส QR
+  const w = window.open('', '_blank', 'width=600,height=860');
+  if(!w){ alert('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up ก่อน'); return; }
+  w.document.write('<p style="font-family:sans-serif;padding:20px">กำลังเตรียมใบนัด...</p>');
   const u = RPST.find(x=>x.hcode===r.hcode)||{};
   const ap = r.workflow?.appoint_date, d = ap ? daysFrom(ap) : null;
-  const clin = String(r.clinics||'').split('|').map(x=>x.replace(/^\d+:/,'')).filter(Boolean).join(', ');
-  const w = window.open('', '_blank', 'width=560,height=800');
-  if(!w){ alert('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — อนุญาต pop-up ก่อน'); return; }
+  const linked = lineOn(r);
+  const code = linked ? null : await ensureLineCode(r);
+  const lineUrl = code ? `${LIFF_URL}?c=${code}` : '';
+  const mapUrl = (u.lat && u.lng) ? `https://www.google.com/maps/dir/?api=1&destination=${(+u.lat).toFixed(6)},${(+u.lng).toFixed(6)}` : '';
   const name = r.patient?.full_name;
+  const [qLine, qMap] = await Promise.all([qrDataUrl(lineUrl), qrDataUrl(mapUrl)]);
+  w.document.open();
   w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบนัดรับยา ${esc(r.hn||'')}</title>
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>@page{size:A5 portrait;margin:10mm}
-    *{box-sizing:border-box}body{font-family:'Sarabun','Tahoma',sans-serif;margin:0;color:#111;font-size:15px}
-    .pg{width:128mm;height:186mm;margin:0 auto;padding:2mm;display:flex;flex-direction:column;overflow:hidden}
-    .hd{text-align:center;border-bottom:2px solid #111;padding-bottom:3mm}
-    .hd h1{font-size:22px;margin:0}.hd div{font-size:14px}
-    .to{margin-top:3mm;font-size:15px}.to b{font-size:21px;display:block;margin-top:1mm}
-    .date{margin:3mm 0;border:3px solid #111;border-radius:4mm;padding:2.5mm;text-align:center}
-    .date .l{font-size:15px}.date .d{font-size:32px;font-weight:700;line-height:1.3}.date .n{font-size:15px}
-    table{width:100%;border-collapse:collapse;font-size:15px}td{padding:1mm 0;vertical-align:top}td:first-child{width:24mm;color:#444}
-    .line{border-bottom:1px dotted #555;display:inline-block;min-width:80mm;height:6mm}
-    .bring{margin-top:3mm;border:1.5px solid #111;border-radius:3mm;padding:3mm 4mm}
-    .bring h2{font-size:17px;margin:0 0 2mm}.bring ul{list-style:none;margin:0;padding-left:2mm}.bring li{font-size:15.5px;margin:1mm 0}
-    .bring li.key{font-weight:700;font-size:18px}
-    .ft{margin-top:auto;font-size:12.5px;color:#444;border-top:1px solid #999;padding-top:2mm}
-    @media screen{body{background:#eee}.pg{background:#fff;margin:8px auto;box-shadow:0 1px 6px #0003;padding:8mm;height:auto;min-height:186mm}}</style></head>
+    <style>@page{size:A5 portrait;margin:9mm}
+    *{box-sizing:border-box}body{font-family:'Sarabun','Tahoma',sans-serif;margin:0;color:#111;font-size:14.5px}
+    .pg{width:130mm;height:190mm;margin:0 auto;padding:1mm;display:flex;flex-direction:column;overflow:hidden}
+    .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #111;padding-bottom:2mm}
+    .hd h1{font-size:21px;margin:0}.hd .s{font-size:12.5px;color:#444;text-align:right}
+    .pt{margin-top:3mm;display:flex;gap:6mm;align-items:baseline;font-size:15px}.pt b{font-size:17px}
+    .to{margin-top:3mm;border:2.5px solid #111;border-radius:4mm;padding:3mm 4mm}
+    .to .l{font-size:13.5px;color:#333}.to .n{font-size:20px;font-weight:700;line-height:1.3}
+    .to .a{font-size:13.5px;color:#333;margin-top:1mm}
+    .to .d{font-size:30px;font-weight:700;margin-top:2mm;line-height:1.2}.to .c{font-size:14px}
+    .bring{margin-top:3mm;border:1.5px solid #111;border-radius:3mm;padding:2.5mm 4mm}
+    .bring h2{font-size:15px;margin:0 0 1mm}.bring ul{list-style:none;margin:0;padding:0}
+    .bring li{font-size:14.5px;margin:.8mm 0}.bring li.key{font-weight:700;font-size:17px}
+    .qrs{margin-top:4mm;display:flex;gap:4mm}
+    .qr{flex:1;border:1px dashed #666;border-radius:3mm;padding:2.5mm;display:flex;gap:3mm;align-items:center}
+    .qr img{width:34mm;height:34mm;flex:0 0 34mm}
+    .qr .t{font-size:13px;line-height:1.4}.qr .t b{font-size:14.5px;display:block;margin-bottom:1mm}
+    .ok{flex:1;border:1px solid #06C755;border-radius:3mm;padding:3mm;font-size:13px;color:#04753A}
+    .ft{margin-top:auto;font-size:11.5px;color:#444;border-top:1px solid #999;padding-top:1.5mm}
+    @media screen{body{background:#eee}.pg{background:#fff;margin:8px auto;box-shadow:0 1px 6px #0003;padding:8mm;height:auto;min-height:190mm}}</style></head>
     <body><div class="pg">
-    <div class="hd"><h1>ใบนัดรับยาที่ รพ.สต.</h1><div>ส่งต่อจากโรงพยาบาลสวี จังหวัดชุมพร</div></div>
-    <div class="to">ให้ไปรับยาที่<b>${esc(u.name||r.hcode_name||r.hcode)}</b></div>
-    <div class="date"><div class="l">ในวันที่</div><div class="d">${ap?thDate(ap):'.................'}</div>
-      ${d!=null?`<div class="n">(อีก ${d} วัน นับจากวันที่ ${thDate(todayISO())})</div>`:''}</div>
-    <table>
-      <tr><td>ชื่อ-สกุล</td><td>${name?`<b>${esc(name)}</b>`:'<span class="line"></span>'}</td></tr>
-      <tr><td>HN</td><td>${esc(r.hn||'-')}</td></tr>
-      ${clin?`<tr><td>คลินิก</td><td>${esc(clin)}</td></tr>`:''}
-      ${u.phone?`<tr><td>โทร รพ.สต.</td><td>${esc(u.phone)}</td></tr>`:''}
-    </table>
+    <div class="hd"><h1>ใบนัดรับยาที่ รพ.สต.</h1><div class="s">ส่งต่อจากโรงพยาบาลสวี<br>จังหวัดชุมพร</div></div>
+    <div class="pt"><div>ชื่อ ${name?`<b>${esc(name)}</b>`:'<span style="display:inline-block;min-width:60mm;border-bottom:1px dotted #555">&nbsp;</span>'}</div>
+      <div>HN <b>${esc(r.hn||'-')}</b></div></div>
+    <div class="to"><div class="l">ให้ไปรับยาที่</div>
+      <div class="n">${esc(u.name||r.hcode_name||r.hcode)}</div>
+      ${u.address||u.phone?`<div class="a">${esc(u.address||'')}${u.address&&u.phone?' · ':''}${u.phone?'โทร '+esc(u.phone):''}</div>`:''}
+      <div class="d">วันที่ ${ap?thDate(ap):'...................'}</div>
+      ${d!=null?`<div class="c">อีก <b>${d}</b> วัน (นับจากวันที่ ${thDate(todayISO())}) · ยาที่ได้ครั้งนี้ใช้ให้ถึงวันนัด</div>`:''}</div>
     <div class="bring"><h2>สิ่งที่ต้องนำไปด้วย</h2><ul>
       <li class="key">☐ สมุดประจำตัวผู้ป่วยโรคเรื้อรัง</li>
-      <li>☐ บัตรประชาชน</li>
-      <li>☐ ยาเดิมที่เหลืออยู่ทั้งหมด</li></ul></div>
-    <div style="margin-top:3mm;font-size:14px">ยาที่ได้รับจาก รพ.สวี ครั้งนี้ใช้ให้ถึงวันนัด · ถ้าไปตามนัดไม่ได้ โปรดติดต่อ รพ.สต. ล่วงหน้า</div>
-    <div class="ft">ส่งตัวโดย ${esc(r.created_by_name||'-')} · วันที่ ${thDate(r.refer_date||todayISO())}</div>
-    </div><script>window.onload=()=>setTimeout(()=>window.print(),400)<\/script></body></html>`);
+      <li>☐ บัตรประชาชน &nbsp; ☐ ยาเดิมที่เหลืออยู่ทั้งหมด</li></ul></div>
+    <div class="qrs">
+      ${lineUrl&&qLine?`<div class="qr"><img src="${qLine}" alt="QR LINE"><div class="t"><b>รับแจ้งเตือนนัดทาง LINE</b>สแกนด้วยแอป LINE แล้วกดยืนยัน<br>ใช้ได้ถึง ${thDate(new Date(Date.now()+30*864e5).toISOString().slice(0,10))}</div></div>`
+        : linked ? `<div class="ok"><b>✓ ผูก LINE แล้ว</b><br>จะได้รับข้อความเมื่อ รพ.สต. รับนัด และเตือนเย็นก่อนวันนัด</div>` : ''}
+      ${mapUrl&&qMap?`<div class="qr"><img src="${qMap}" alt="QR แผนที่"><div class="t"><b>นำทางไป รพ.สต.</b>สแกนด้วยกล้องมือถือ เปิด Google Maps</div></div>`:''}
+    </div>
+    <div class="ft">ถ้าไปตามนัดไม่ได้ โปรดโทรแจ้ง รพ.สต. ล่วงหน้า · ส่งตัวโดย ${esc(r.created_by_name||PROFILE.full_name||'-')} · ${thDate(r.refer_date||todayISO())}</div>
+    </div><script>window.onload=function(){ setTimeout(function(){ window.print(); }, 400); };<\/script></body></html>`);
   w.document.close();
-  audit('print_appt_slip', r.id, {hn:r.hn});
+  audit('print_appt_slip', r.id, {hn:r.hn, line_code:!!code});
 }
 /* สถานะการยืนยันของ รพ.สต. สำหรับผู้ป่วยที่ รพ.สวี ส่งไป (ทั้งพยาบาลส่งเองและจาก HOSxP) */
 function confirmTag(r){
@@ -3090,7 +3196,7 @@ function renderSentList(){
       <td><span class="masked">${maskName(r.patient?.full_name)}</span> ${eyeBtn(r.id,'full_name','ชื่อ')}<div class="sub">HN ${esc(r.hn||'-')}</div></td>
       <td>${esc(r.hcode_name||rpstName(r.hcode))}</td>
       <td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'<span class="sub">ยังไม่นัด</span>'}</td>
-      <td>${confirmTag(r)}${stOf(r)==='not_mine'&&r.workflow?.note?`<div class="sub">${esc(r.workflow.note)}</div>`:''}</td>
+      <td>${confirmTag(r)}${stOf(r)==='not_mine'&&r.workflow?.note?`<div class="sub">${esc(r.workflow.note)}</div>`:''}<div style="margin-top:3px">${lineBadge(r,true)}</div></td>
       <td class="sub">${r.source==='nurse'?`ส่งเอง · ${esc(r.created_by_name||'')}${r.synced_at?'':'<div style="color:var(--amber)">รอข้อมูล HOSxP</div>'}`:'HOSxP'}</td>
       <td class="right" style="white-space:nowrap">${r.workflow?.appoint_date?`<button class="btn-sm grey" data-slip="${esc(r.id)}">ใบนัด</button>`:''}
         ${r.source==='nurse'&&stOf(r)==='new'&&(r.created_uid===ME.uid||isAdmin())?` <button class="btn-sm red" data-nsdel="${esc(r.id)}">ยกเลิก</button>`:''}</td>
@@ -3109,7 +3215,7 @@ function renderSentList(){
 }
 $('f-sent-days')?.addEventListener('change', renderSentList);
 $('f-sent-mine')?.addEventListener('change', renderSentList);
-$('f-sent-reload')?.addEventListener('click', async ()=>{ await loadList(); renderSentList(); });
+$('f-sent-reload')?.addEventListener('click', async ()=>{ await Promise.all([loadList(), loadLineStatus()]); renderSentList(); });
 
 async function loadFindQueue(){
   show('f-push-now', isAdmin());
@@ -3270,17 +3376,20 @@ function renderRpstTable(){
   const cnt={}; LIST.forEach(r=>cnt[r.hcode]=(cnt[r.hcode]||0)+1);
   $('tb-rpst').innerHTML = RPST.length ? RPST.map(r=>`<tr>
     <td class="mono">${esc(r.hcode)}</td>
-    <td class="nm">${esc(r.name)}${isTestUnit(r.hcode)?' <span class="pill pill-rem">ทดสอบ</span>':''}</td>
+    <td class="nm">${esc(r.name)}${isTestUnit(r.hcode)?' <span class="pill pill-rem">ทดสอบ</span>':''}
+      <div class="sub">${esc(r.address||'ยังไม่มีที่อยู่')}${r.phone?' · โทร '+esc(r.phone):''}</div></td>
     <td class="sub mono">${r.lat&&r.lng?(+r.lat).toFixed(4)+', '+(+r.lng).toFixed(4):'ยังไม่มีพิกัด'}</td>
     <td class="right mono">${cnt[r.hcode]||0}</td>
-    <td class="right"><button class="btn-sm grey" data-rped="${esc(r.hcode)}">แก้ชื่อ</button></td>
+    <td class="right"><button class="btn-sm grey" data-rped="${esc(r.hcode)}">แก้ข้อมูล</button></td>
   </tr>`).join('') : '<tr><td colspan="5" class="empty">ยังไม่มีหน่วยบริการ</td></tr>';
   $('tb-rpst').querySelectorAll('[data-rped]').forEach(b=>b.addEventListener('click', async ()=>{
     const h=b.dataset.rped, cur=RPST.find(r=>r.hcode===h);
     const nm=prompt('ชื่อหน่วยบริการ '+h, cur?.name||''); if(nm===null||!nm.trim()) return;
+    const ad=prompt('ที่อยู่/สถานที่ (แสดงบนใบนัด) เช่น หมู่ 3 ต.นาสัก อ.สวี ใกล้วัดนาสัก', cur?.address||''); if(ad===null) return;
+    const ph=prompt('เบอร์โทร รพ.สต. (แสดงบนใบนัดและข้อความ LINE)', cur?.phone||''); if(ph===null) return;
     try{
-      await setDoc(doc(db,'rpst',h), {hcode:h, name:nm.trim()}, {merge:true});
-      await audit('edit_rpst', h, {name:nm.trim()});
+      await setDoc(doc(db,'rpst',h), {hcode:h, name:nm.trim(), address:ad.trim()||null, phone:ph.trim()||null}, {merge:true});
+      await audit('edit_rpst', h, {name:nm.trim(), address:ad.trim(), phone:ph.trim()});
       await loadRpst(); renderRpstTable();
     }catch(e){ alert('บันทึกไม่สำเร็จ: '+(e.code||e.message)); }
   }));

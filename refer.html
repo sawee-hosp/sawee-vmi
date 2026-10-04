@@ -246,6 +246,7 @@ tbody tr:hover{background:#FAFCFA}
 .ap-pick .ap-opt{padding:5px 12px;border:1px solid var(--line);border-radius:6px;cursor:pointer;font-size:13px;background:#fff;transition:all .15s}
 .ap-pick .ap-opt:hover{border-color:var(--ok);background:var(--ok-dim)}
 .ap-pick .ap-opt.sel{background:var(--ok);color:#fff;border-color:var(--ok)}
+.rem-fb{display:flex;gap:12px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px}.rem-fb b{color:var(--muted,#555);font-weight:600;margin-right:3px}
 </style>
 </head>
 <body>
@@ -356,6 +357,9 @@ tbody tr:hover{background:#FAFCFA}
       </table></div></div>
     </section>
 
+    <!-- ตรวจเท้าเบาหวาน (foot.js) -->
+    <section id="tab-foot" class="hidden"><div id="foot-root"></div></section>
+
     <!-- ผู้ป่วย Remission -->
     <section id="tab-remission" class="hidden">
       <div class="panel">
@@ -368,7 +372,7 @@ tbody tr:hover{background:#FAFCFA}
           <span class="sub" id="rem-count"></span>
         </div>
         <div class="tbl-wrap"><table>
-          <thead><tr><th>ผู้ป่วย</th><th>สถานะ Remission</th><th>Vital sign / น้ำหนัก / ส่วนสูง</th>
+          <thead><tr><th>ผู้ป่วย</th><th>สถานะ Remission</th><th>FBS · BP วันมา visit / Vital sign</th>
             <th>มาคลินิกล่าสุด</th><th style="width:190px"></th></tr></thead>
           <tbody id="tb-rem"></tbody></table></div>
       </div>
@@ -415,7 +419,7 @@ tbody tr:hover{background:#FAFCFA}
         <div id="f-sent"><div class="sub">กำลังโหลด...</div></div>
       </div>
       <div class="panel">
-        <h2>คำขอดึงข้อมูลจาก HOSxP <span class="note">pusher ทำอัตโนมัติรอบ 13.00 น. ทุกวัน</span>
+        <h2>คำขอดึงข้อมูลจาก HOSxP <span class="note">ดึงเข้าระบบเมื่อ admin กด Sync</span>
           <button class="btn-sm hidden" id="f-push-now" style="margin-left:10px">⟳ ส่งทันที (admin)</button></h2>
         <div id="f-queue"><div class="sub">กำลังโหลด...</div></div>
       </div>
@@ -1070,6 +1074,16 @@ function initSync(){
   });
 }
 
+/* ================= ตรวจเท้าเบาหวาน — โค้ดอยู่ไฟล์ foot.js (วางโฟลเดอร์เดียวกับ refer.html) ================= */
+async function openFoot(){
+  try{
+    const m = await import('./foot.js?v=20261004');
+    await m.renderFoot({ db, $, esc, thDate, daysFrom, maskName, rpstName, audit, hn9, watcherState, qrDataUrl,
+      RPST, ME, PROFILE, isAdmin, isRpst, isHospital, myHcode,
+      fs:{collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, updateDoc, query, where, serverTimestamp, onSnapshot} });
+  }catch(e){ $('foot-root').innerHTML = `<div class="msg err">เปิดหน้าตรวจเท้าไม่ได้: ${esc(e.message)} — ตรวจว่าอัปโหลดไฟล์ foot.js ไว้ข้าง refer.html แล้ว</div>`; }
+}
+
 /* ================= NAV ================= */
 const TABS = [
   {id:'list', label:'รายชื่อผู้ป่วย', all:1},
@@ -1083,6 +1097,7 @@ const TABS = [
   {id:'clinics', label:'คลินิกโรคเรื้อรัง', seesAll:1},
   {id:'intake', label:'รับข้อมูล NCDs', hospOnly:1},
   {id:'find', label:'🔍 เช็ค / ส่งตัวผู้ป่วย', hospOnly:1},
+  {id:'foot', label:'🦶 ตรวจเท้าเบาหวาน', all:1},
   {id:'adjreport', label:'รายงานปรับยา', seesAll:1},
   {id:'drugcat', label:'บัญชียา รพ.สต.', seesAll:1},
   {id:'drug', label:'วิธีใช้ยา',      seesAll:1},
@@ -1128,6 +1143,7 @@ function openTab(id){
   if(id==='user')  { loadUsers(); loadPending(); renderScopeAdmin(); renderLineAdmin(false); }
   if(id==='find')  { loadFindQueue(); renderSentList(); setTimeout(()=>$('f-hn')?.focus(), 50); }
   if(id==='remission') renderRemission();
+  if(id==='foot')  openFoot();
   if(id==='drugsum')   renderDrugSum();
   if(id==='clinics') renderClinicMenu();
   if(id==='intake') renderIntake();
@@ -1166,7 +1182,7 @@ async function startApp(){
 const LIFF_URL = 'https://liff.line.me/2011801491-uJ1WbgA9';
 /* URL ของ LINE Hub (Google Apps Script Web App) — Deploy แล้วคัดลอกมาวางตรงนี้ (ลงท้าย /exec)
    Hub รับแค่เลขที่คิว เนื้อหาข้อความสร้างเองจากข้อมูลนัด — URL นี้เปิดเผยได้ ไม่ใช่ความลับ */
-const LINE_HUB_URL = 'https://script.google.com/macros/s/AKfycbxdASemtPuL7w0EnDuMqSwjMZRN6Jm8MfUVTKdlL2mXzHwpFivCY1sIxF209hkQaI8Ukg/exec';
+const LINE_HUB_URL = '';
 async function callHub(body, ms){
   if(!LINE_HUB_URL) return {ok:false, error:'ยังไม่ได้ตั้งค่า LINE_HUB_URL ใน refer.html'};
   const ctl = new AbortController(), t = setTimeout(()=>ctl.abort(), ms||25000);
@@ -2799,7 +2815,7 @@ function renderRemission(){
         ${seesAll()?`<div class="sub">${esc(r.hcode_name||rpstName(r.hcode)||'')}</div>`:''}</td>
       <td>${esc(n.status_label||n.status_code||'-')}${n.status_cycle?`<div class="sub">ครั้งที่ ${esc(n.status_cycle)}</div>`:''}
         ${n.hba1c!=null?`<div class="sub">HbA1c ${esc(n.hba1c)}${n.hba1c_date?' ('+thDate(n.hba1c_date)+')':''}</div>`:''}</td>
-      <td style="max-width:340px">${n.vital_text?esc(n.vital_text):'<span class="sub">ยังไม่มีข้อมูล</span>'}
+      <td style="max-width:340px">${remFbsBp(n)}${n.vital_text?esc(n.vital_text):'<span class="sub">ยังไม่มีข้อมูล</span>'}
         ${n.vital_date?`<div class="sub">วัดเมื่อ ${thDate(n.vital_date)}</div>`:''}</td>
       <td>${thDate(n.clinic_last_visit||r.refer_date)}</td>
       <td class="right">${remDone(r)
@@ -2815,6 +2831,13 @@ function renderRemission(){
     const sp = b.parentElement.querySelector('.masked'); if(sp) sp.textContent = v||'-'; b.style.display='none'; }));
 }
 
+/* FBS + BP ของวันที่มา visit คลินิก Remission ที่ รพ.สวี (จาก push.php) */
+function remFbsBp(n){
+  if(n.fbs==null && !n.bp) return '';
+  return `<div class="rem-fb">${n.fbs!=null?`<span><b>${esc(n.fbs_type||'FBS')}</b> ${esc(n.fbs)} mg/dL</span>`:''}`+
+    `${n.bp?`<span><b>BP</b> ${esc(n.bp)}</span>`:''}`+
+    `${n.visit_date_fbs_bp?`<span class="sub">วันที่ ${thDate(n.visit_date_fbs_bp)}</span>`:''}</div>`;
+}
 /* ===== เลขบัตรเต็มของผู้ป่วย Remission (referrals_pii) =====
    เก็บแยกจากข้อมูลหลัก อ่านได้เฉพาะ รพ.สต. ปลายทางของคนนั้น + admin (บังคับใน firestore.rules)
    แสดงแบบปิดไว้ ต้องกดตา และบันทึก log ทุกครั้ง */
@@ -2846,6 +2869,7 @@ function openRemVisit(id){
         <button class="btn-sm" id="rv-cid-eye">👁 แสดงเลขบัตร</button>
         <button class="btn-sm grey hidden" id="rv-copy">คัดลอก</button></div>`
       :'<div class="sub" style="margin-top:8px">เลขบัตรเต็มแสดงเฉพาะ รพ.สต. ปลายทางของผู้ป่วยรายนี้</div>'}
+      <div style="margin-top:8px">${remFbsBp(n)}</div>
       ${n.vital_text?`<div class="sub" style="margin-top:8px">Vital sign: ${esc(n.vital_text)}${n.vital_date?' ('+thDate(n.vital_date)+')':''}</div>`:''}
     </div>
     <div class="msg info" style="font-size:16px;line-height:1.7"><div>
@@ -2931,7 +2955,7 @@ $('ds-print')?.addEventListener('click', ()=>{
    1) พิมพ์ HN → ค้นใน Firestore ว่ามีเคสส่งต่อแล้วหรือยัง
    2) ไม่เจอ → เลือก รพ.สต. ปลายทาง แล้วเพิ่มเข้าคิว (add_requests status approved)
    3) pusher รอบ 13.00 น. (หรือ admin กดส่งทันที) ดึงข้อมูลจาก HOSxP ส่งไป แล้วเขียนผลกลับ */
-const REQ_STATUS = {approved:['รอส่งรอบ 13.00 น.','#B8860B'], pending:['รอ admin ตรวจ','#B8860B'],
+const REQ_STATUS = {approved:['รอ Sync รอบถัดไป','#B8860B'], pending:['รอ admin ตรวจ','#B8860B'],
   done:['ส่งแล้ว','#1F7A4D'], not_found:['ไม่พบ HN ใน HOSxP','#8B2020'], out_of_scope:['ไม่อยู่ในคลินิกที่ส่งได้','#8B2020'],
   bad_hcode:['รหัส รพ.สต. ผิด','#8B2020'], rejected:['ปฏิเสธ','#8A8A8A']};
 const reqTag = st => { const [t,c]=REQ_STATUS[st]||[st,'#888']; return `<span class="tag" style="background:${c}1a;color:${c}">${esc(t)}</span>`; };
@@ -2980,7 +3004,7 @@ async function findReferral(){
     if(open){
       $('f-result').innerHTML = `<div class="msg info" style="font-size:15px"><b>อยู่ในคิวรอส่งแล้ว</b> —
         ปลายทาง ${esc(open.hcode_name||rpstName(open.hcode))} ${reqTag(open.status)}
-        <div class="sub" style="margin-top:4px">เพิ่มโดย ${esc(open.requested_by||'-')} · ข้อมูลจะถูกส่งตามรอบ 13.00 น.</div></div>`;
+        <div class="sub" style="margin-top:4px">เพิ่มโดย ${esc(open.requested_by||'-')} · ข้อมูลจะเข้าระบบเมื่อ Sync รอบถัดไป</div></div>`;
       return;
     }
     const last = reqs.sort((a,b)=>String(b.processed_at||'').localeCompare(String(a.processed_at||'')))[0];
@@ -3045,7 +3069,7 @@ function showLookup(hn, ans){
       <span class="sub" style="font-size:14px">HN ${esc(ans.hn_hosxp||hn)} · ${esc(p.sex||'')} ${p.age!=null?esc(p.age)+' ปี':''}${p.cid_last4?' · บัตร ••••'+esc(p.cid_last4):''}</span></div>
     <div style="margin-top:6px">${cl.length?cl.map(c=>`<span class="pill pill-rem" style="font-size:13px;margin-right:4px">${esc(c)}</span>`).join('')
       :'<span class="pill pill-warn">ไม่ได้อยู่ในคลินิกโรคเรื้อรังที่ส่งได้ — ยา/แล็บจะไม่ถูกส่งตาม</span>'}</div>
-    <div class="sub" style="margin-top:6px;font-size:14px">${hosxpLine(ans)}</div></div>`;
+    <div class="sub" style="margin-top:6px;font-size:14px">${hosxpLine(ans)}${ans.last_visit?.date?` · visit ล่าสุด <b>${thDate(ans.last_visit.date)}</b>${ans.last_visit.dep?' ('+esc(ans.last_visit.dep)+')':''}`:''}</div></div>`;
   renderNurseSend(hn, ans);
 }
 
@@ -3142,6 +3166,7 @@ async function saveNurseSend(){
       created_uid:ME.uid, created_by:ME.email, created_by_name:by, created_at:serverTimestamp() };
     await setDoc(doc(db,'referrals',id), data);
     await audit('nurse_send', id, {hn:H, hcode:h, appoint_date:ap});
+    const hxRef = await queueHosxpWrite('send', id, {hn:H, hcode:h, appoint_date:ap});
     const r = {id, ...data, workflow:{...data.workflow}};
     FIND_CACHE[id]=r; if(!LIST.some(x=>x.id===id)) LIST.push(r);
     const d = daysFrom(ap);
@@ -3152,7 +3177,9 @@ async function saveNurseSend(){
       <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn-primary" id="ns-print" style="font-size:16px">🖨 พิมพ์ใบนัด (A5)</button>
         <button class="btn-ghost" id="ns-next" style="font-size:16px">ส่งคนต่อไป</button></div>
+      <div id="ns-hx" style="margin-top:8px;font-size:14px"></div>
       <div class="sub" style="margin-top:8px">รอ รพ.สต. ยืนยัน — ดูสถานะในรายการด้านล่าง</div></div></div>`;
+    watchHosxpWrite(hxRef, r);
     $('ns-print').addEventListener('click', ()=>printApptSlip(r));
     $('ns-next').addEventListener('click', ()=>{ $('f-result').innerHTML=''; $('f-hn').focus(); });
     $('f-hn').value=''; renderSentList();
@@ -3160,6 +3187,34 @@ async function saveNurseSend(){
     $('ns-save').disabled=false;
     err('ส่งไม่สำเร็จ: '+(e.code||e.message)+(e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่ก่อน':''));
   }
+}
+/* ===== บันทึกส่งต่อลง HOSxP =====
+   ฝากคำขอไว้ใน hn_lookup (kind send/undo) → sync_watch.php บนเครื่อง server แก้ clinicmember ให้
+   (ติ๊กส่งต่อ + รพ.สต. + วันที่ visit ล่าสุด + สถานะ 2) แล้วรัน push.php --hn ให้รายนั้นทันที
+   เครื่องปิดอยู่ → คำขอรอไว้ ทำให้เมื่อเปิดเครื่อง (ไม่เกิน 14 วัน) · เคสถูกยกเลิกก่อน = ไม่ทำ */
+async function queueHosxpWrite(kind, refId, extra={}){
+  try{
+    return await addDoc(collection(db,'hn_lookup'), {kind, ref_id:refId, ...extra, status:'pending',
+      requested_uid:ME.uid, requested_by:PROFILE.full_name||ME.email, requested_at:serverTimestamp()});
+  }catch(e){ return null; }
+}
+function hxText(x){
+  if(!x || x.status==='pending') return '';
+  if(x.result==='written') return `<span style="color:var(--ok)">✓ บันทึกส่งต่อใน HOSxP แล้ว</span> <span class="sub">(visit ${thDate(x.send_date)}${x.clinics?.length?' · '+esc(x.clinics.join(', ')):''})</span>`;
+  if(x.result==='off' || x.result==='cancelled') return '';
+  return `<span style="color:var(--amber)">HOSxP ยังไม่ได้บันทึกส่งต่อ</span> <span class="sub">— ${esc(x.message||'')} · ติ๊กส่งต่อใน HOSxP เองได้</span>`;
+}
+function watchHosxpWrite(ref, r){
+  if(!ref || !$('ns-hx')) return;
+  $('ns-hx').innerHTML = '<span class="sub">⏳ กำลังบันทึกส่งต่อใน HOSxP...</span>';
+  const t = setTimeout(()=>{ if($('ns-hx')?.dataset.done!=='1') $('ns-hx').innerHTML='<span class="sub">ระบบจะบันทึกส่งต่อใน HOSxP ให้อัตโนมัติ</span>'; }, 25000);
+  const un = onSnapshot(ref, d=>{
+    const x=d.data(); if(!x || x.status==='pending') return;
+    clearTimeout(t); un();
+    if(x.result==='written') r.hosxp = {state:'written', send_date:x.send_date, clinics:x.clinics||[], a_key:x.a_key||null};
+    const el=$('ns-hx'); if(el){ el.dataset.done='1'; el.innerHTML = hxText(x); }
+    renderSentList();
+  }, ()=>{});
 }
 /* ใบนัดรับยา รพ.สต. — A5 แนวตั้ง (สั่งพิมพ์ หรือเลือก "บันทึกเป็น PDF") · ไม่มีเลขบัตร ไม่มีรายการยา */
 /* สร้าง QR เป็นรูป (data URL) ในหน้าหลัก — โหลดไลบรารีครั้งเดียว ถ้าโหลดไม่ได้ใบนัดยังพิมพ์ได้ แค่ไม่มี QR */
@@ -3275,7 +3330,7 @@ function renderSentList(){
       <td>${esc(r.hcode_name||rpstName(r.hcode))}</td>
       <td>${r.workflow?.appoint_date?thDate(r.workflow.appoint_date):'<span class="sub">ยังไม่นัด</span>'}</td>
       <td>${confirmTag(r)}${stOf(r)==='not_mine'&&r.workflow?.note?`<div class="sub">${esc(r.workflow.note)}</div>`:''}<div style="margin-top:3px">${lineBadge(r,true)} ${lineMsgTag(r)}</div></td>
-      <td class="sub">${r.source==='nurse'?`ส่งเอง · ${esc(r.created_by_name||'')}${r.synced_at?'':'<div style="color:var(--amber)">รอข้อมูล HOSxP</div>'}`:'HOSxP'}</td>
+      <td class="sub">${r.source==='nurse'?`ส่งเอง · ${esc(r.created_by_name||'')}${r.hosxp?.state==='written'?'<div style="color:var(--ok)">✓ บันทึกใน HOSxP</div>':''}${r.synced_at?'':'<div style="color:var(--amber)">รอข้อมูล HOSxP</div>'}`:'HOSxP'}</td>
       <td class="right" style="white-space:nowrap">${r.workflow?.appoint_date?`<button class="btn-sm grey" data-slip="${esc(r.id)}">ใบนัด</button>`:''}
         ${!['discharged','cancelled'].includes(stOf(r))?` <button class="btn-sm red" data-nsdel="${esc(r.id)}">ยกเลิก</button>`:''}</td>
     </tr>`).join('')}</tbody></table></div>` : '<div class="empty">ไม่มีผู้ป่วยที่ส่งตัวในช่วงนี้</div>';
@@ -3297,6 +3352,11 @@ async function cancelReferral(r){
     await setDoc(doc(db,'referral_cancel',r.id), { doc_id:r.id, hn:String(r.hn||''), hcode:r.hcode||null,
       reason:why.trim()||null, source:r.source||'hosxp', by:PROFILE.full_name||ME.email, by_uid:ME.uid,
       at:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' ') });
+    // ส่งตัวจากหน้าเว็บที่บันทึกลง HOSxP ไปแล้ว → กันเคสสาย A ของวันนั้น + สั่งคืนค่าเดิมใน HOSxP
+    if(r.hosxp?.a_key) await setDoc(doc(db,'referral_cancel',r.hosxp.a_key), { doc_id:r.hosxp.a_key, hn:String(r.hn||''), hcode:r.hcode||null,
+      reason:(why.trim()||'')+' (ยกเลิก '+r.id+')', source:'hosxp', by:PROFILE.full_name||ME.email, by_uid:ME.uid,
+      at:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' ') });
+    if(String(r.id).startsWith('NRS_')) await queueHosxpWrite('undo', r.id, {hn:String(r.hn||'')});
     await deleteDoc(doc(db,'referrals',r.id));
     await audit('cancel_referral', r.id, {hn:r.hn, hcode:r.hcode, reason:why});
     LIST = LIST.filter(x=>x.id!==r.id);

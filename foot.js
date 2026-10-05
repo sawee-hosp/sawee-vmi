@@ -71,14 +71,17 @@ const ITEMS = [
   ['posterior_tibial',   'ชีพจร Posterior tibial',         'posterior_tibial',   true],
   ['dorsalis_pedis',     'ชีพจร Dorsalis pedis',           'dorsalis_pedis',     true],
 ];
-/* จุดตรวจ monofilament 6 จุด/ข้าง (เลขตรงกับ "แบบประเมินความรู้สึกเท้า" ใน HOSxP — ตรวจตำแหน่งกับหน้าจอจริงอีกครั้ง) */
+/* จุดตรวจ monofilament ตามหน้าจอ "แบบประเมินความรู้สึกทางเท้า" ของ HOSxP
+   (มองฝ่าเท้า · เท้าขวาอยู่ซ้าย เท้าซ้ายอยู่ขวา · นิ้วโป้งหันเข้ากลาง)
+   จุด 1 2 3 5 = จุดที่ใช้จริง · จุด 4 (นิ้วก้อย) และ 6 (ส้นเท้า) HOSxP แสดงเป็นจุดเทา ไม่บังคับ
+   ค่าใน HOSxP: Y = ปกติ (รู้สึก) · N = ผิดปกติ · ว่าง = ไม่ได้ตรวจ */
 const POINTS = [
-  {n:1, x:70, y:24,  t:'ปลายนิ้วหัวแม่เท้า'},
-  {n:2, x:44, y:22,  t:'ปลายนิ้วกลาง'},
-  {n:3, x:68, y:70,  t:'โคนนิ้วหัวแม่เท้า'},
-  {n:4, x:48, y:66,  t:'โคนนิ้วกลาง'},
-  {n:5, x:28, y:76,  t:'โคนนิ้วก้อย'},
-  {n:6, x:50, y:190, t:'ส้นเท้า'},
+  {n:1, x:72, y:24,  t:'ปลายนิ้วหัวแม่เท้า'},
+  {n:2, x:66, y:64,  t:'ใต้โคนนิ้วหัวแม่เท้า'},
+  {n:3, x:46, y:60,  t:'ใต้โคนนิ้วกลาง'},
+  {n:4, x:22, y:37,  t:'นิ้วก้อย', opt:1},
+  {n:5, x:25, y:86,  t:'ใต้โคนนิ้วก้อย'},
+  {n:6, x:52, y:192, t:'ส้นเท้า', opt:1},
 ];
 
 const localISO = (d=new Date()) => new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10);
@@ -323,7 +326,8 @@ function paintList(){
         <div class="sub">HN ${esc(r.hn)}${r.patient?.cid_last4?' · บัตร ••••'+esc(r.patient.cid_last4):''}${r.patient?.age!=null?' · '+esc(r.patient.age)+' ปี':''}</div></td>
       ${C.isRpst()?'':`<td>${esc(r.hcode_name||C.rpstName(r.hcode))}</td>`}
       <td>${statusTag(r)}${r.result_by?`<div class="sub">${esc(r.result_by)}</div>`:''}</td>
-      <td>${esc(riskOf(r))||'<span class="sub">-</span>'}${r.hosxp?.state==='written'?'<div class="sub" style="color:var(--ok)">✓ เข้า HOSxP แล้ว</div>':''}</td>
+      <td>${esc(riskOf(r))||'<span class="sub">-</span>'}${r.hosxp?.state==='written'?'<div class="sub" style="color:var(--ok)">✓ เข้า HOSxP แล้ว</div>'
+        : r.hosxp?.state==='error'&&!C.isRpst()?`<div class="sub" style="color:#B3261E">HOSxP: ${esc(r.hosxp.message||'บันทึกไม่ได้')}</div>`:''}</td>
       <td class="right" style="white-space:nowrap">
         ${canResult(r)?`<button class="btn-sm" data-fr="${esc(r.id)}">${r.status==='done'?'แก้ผล':'บันทึกผล'}</button>`:''}
         <button class="btn-sm grey" data-fp="${esc(r.id)}">ฟอร์ม A4</button>
@@ -350,13 +354,13 @@ function selHtml(id, key, cur){
     `<option value="${i}"${cur && cur.name===x.name?' selected':''}>${C.esc(x.name)}</option>`).join('')}</select>`;
 }
 function footSvg(side, pts, interactive){
-  // รูปเท้ามองจากด้านบน (เหมือนรอยเท้า) · ซ้ายนิ้วโป้งอยู่ขวา / ขวานิ้วโป้งอยู่ซ้าย
-  const flip = side==='R';
+  // มองฝ่าเท้าแบบหน้าจอ HOSxP: เท้าขวา (วางซ้าย) นิ้วโป้งอยู่ขวา · เท้าซ้าย (วางขวา) กลับด้าน
+  const flip = side==='L';
   const st = n => pts?.[n];  // 'Y' รู้สึก / 'N' ไม่รู้สึก / undefined ยังไม่ตรวจ
   const dot = p => { const s=st(p.n); const fill = s==='Y'?'#1F7A4D':s==='N'?'#B3261E':'#fff';
     return `<g class="${interactive?'fpt':''}" data-side="${side}" data-n="${p.n}" style="${interactive?'cursor:pointer':''}">
-      <circle cx="${p.x}" cy="${p.y}" r="8" fill="${fill}" stroke="#222" stroke-width="1.3"/>
-      <text x="${p.x}" y="${p.y+3.6}" text-anchor="middle" font-size="10" font-weight="700" fill="${s?'#fff':'#222'}"
+      <circle cx="${p.x}" cy="${p.y}" r="${p.opt?6.5:8}" fill="${fill}" stroke="${p.opt&&!s?'#999':'#222'}" stroke-width="1.3"${p.opt&&!s?' stroke-dasharray="2 1.5"':''}/>
+      <text x="${p.x}" y="${p.y+3.6}" text-anchor="middle" font-size="${p.opt?8:10}" font-weight="700" fill="${s?'#fff':(p.opt?'#888':'#222')}"
         ${flip?`transform="scale(-1,1) translate(${-2*p.x},0)"`:''}>${s==='N'?'−':p.n}</text></g>`; };
   return `<svg viewBox="0 0 100 222" style="width:100%;max-width:140px;height:auto;display:block;margin:auto">
     <g ${flip?'transform="translate(100,0) scale(-1,1)"':''}>
@@ -394,10 +398,10 @@ function openResult(r){
         <tr><td>ลักษณะรองเท้าที่ใช้ประจำ</td><td colspan="2"><input type="text" id="fr-shoe" style="width:100%" value="${esc(x.shoe||'')}"></td></tr>
       </tbody></table></div></div>
       <div style="flex:0 1 300px">
-        <div class="sub" style="margin-bottom:4px">Monofilament — แตะจุดเพื่อเปลี่ยน: ว่าง → <b style="color:#1F7A4D">รู้สึก</b> → <b style="color:#B3261E">ไม่รู้สึก</b></div>
+        <div class="sub" style="margin-bottom:4px">Monofilament — แตะจุดเพื่อเปลี่ยน: ไม่ได้ตรวจ → <b style="color:#1F7A4D">ปกติ</b> → <b style="color:#B3261E">ผิดปกติ</b></div>
         <div style="display:flex;gap:8px">
-          <div style="flex:1;text-align:center"><b>ซ้าย</b><div id="fr-svg-L">${footSvg('L', pts.L, true)}</div></div>
-          <div style="flex:1;text-align:center"><b>ขวา</b><div id="fr-svg-R">${footSvg('R', pts.R, true)}</div></div></div>
+          <div style="flex:1;text-align:center"><b>เท้าขวา</b><div id="fr-svg-R">${footSvg('R', pts.R, true)}</div></div>
+          <div style="flex:1;text-align:center"><b>เท้าซ้าย</b><div id="fr-svg-L">${footSvg('L', pts.L, true)}</div></div></div>
         <div class="sub" id="fr-mono-sum" style="margin-top:4px"></div>
         <div style="margin-top:10px"><b>ขนาดเท้า (ซม.)</b>
           <table style="margin-top:4px"><tr><th></th><th>ยาว</th><th>กว้าง</th></tr>
@@ -412,7 +416,7 @@ function openResult(r){
     ${OPTS?'':'<div class="sub" style="margin-top:6px">ตัวเลือกชุดมาตรฐาน — จะเปลี่ยนเป็นรายการเดียวกับ HOSxP อัตโนมัติเมื่อเครื่อง server ส่งขึ้นมา</div>'}
     <div id="fr-msg" style="margin-top:8px"></div>`;
   C.$('ov').classList.remove('hidden');
-  const monoSum = () => { const f = s => { const v=Object.values(pts[s]); return v.length ? `${v.filter(y=>y==='N').length} จุดไม่รู้สึก จากที่ตรวจ ${v.length}` : 'ยังไม่ตรวจ'; };
+  const monoSum = () => { const f = s => { const v=Object.values(pts[s]); return v.length ? `ผิดปกติ ${v.filter(y=>y==='N').length} จาก ${v.length} จุด` : 'ยังไม่ตรวจ'; };
     C.$('fr-mono-sum').textContent = `ซ้าย: ${f('L')} · ขวา: ${f('R')}`; };
   const bindPts = side => C.$('fr-svg-'+side).querySelectorAll('.fpt').forEach(g=>g.addEventListener('click', ()=>{
     const n = g.dataset.n, cur = pts[side][n];
@@ -525,9 +529,9 @@ async function printFootForm(r){
     </div>
     <div class="ft2">
       <div style="font-weight:700;font-size:12.5px">Monofilament 10 g</div>
-      <div style="font-size:10.5px;margin-bottom:1mm">รู้สึก ✓ · ไม่รู้สึก ✗ ในวงกลม · วาดตำแหน่งแผล/หนังด้าน/ผิดรูปลงบนรูป</div>
-      <div class="feet"><div>ซ้าย${footSvg('L', {}, false)}</div><div>ขวา${footSvg('R', {}, false)}</div></div>
-      <div style="font-size:10px;line-height:1.3;margin-top:1mm">${POINTS.map(p=>`${p.n} ${esc(p.t)}`).join(' · ')}</div>
+      <div style="font-size:10.5px;margin-bottom:1mm">ปกติ ✓ · ผิดปกติ ✗ ในวงกลม · วาดตำแหน่งแผล/หนังด้าน/ผิดรูปลงบนรูป</div>
+      <div class="feet"><div>เท้าขวา${footSvg('R', {}, false)}</div><div>เท้าซ้าย${footSvg('L', {}, false)}</div></div>
+      <div style="font-size:10px;line-height:1.3;margin-top:1mm">${POINTS.map(p=>`${p.n} ${esc(p.t)}${p.opt?' (ไม่บังคับ)':''}`).join(' · ')}</div>
       <table class="sz" style="margin-top:1.5mm"><tr><th>ขนาดเท้า (ซม.)</th><th>ซ้าย</th><th>ขวา</th></tr>
         <tr><td>ความยาว</td><td></td><td></td></tr><tr><td>ความกว้าง</td><td></td><td></td></tr></table>
     </div>

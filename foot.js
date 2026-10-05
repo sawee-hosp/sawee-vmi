@@ -113,12 +113,16 @@ async function loadOpts(){
     OPTS = d.exists() ? (d.data().options||null) : null;
   }catch(e){ OPTS = null; }
 }
-async function loadRows(){
+/* ประหยัดโควตา: ฝั่ง รพ. อ่านเฉพาะปีงบนี้ (+ปีหน้าที่นัดล่วงหน้า) · เปิดแท็บซ้ำภายใน 5 นาทีใช้ข้อมูลเดิม (ปุ่ม "โหลดใหม่" อ่านใหม่) */
+let LOADED_AT = 0;
+async function loadRows(force){
+  if(!force && LOADED_AT && Date.now()-LOADED_AT < 300000) return;
   const {db, fs} = C;
-  const col = fs.collection(db,'foot_referrals');
-  const q = C.isRpst() ? fs.query(col, fs.where('hcode','==',C.myHcode())) : col;
+  const col = fs.collection(db,'foot_referrals'), fy = fiscalBE(localISO());
+  const q = C.isRpst() ? fs.query(col, fs.where('hcode','==',C.myHcode())) : fs.query(col, fs.where('fy','in',[fy, fy+1]));
   const s = await fs.getDocs(q);
   ROWS = s.docs.map(d=>({id:d.id, ...d.data()}));
+  LOADED_AT = Date.now();
 }
 const roundOf = h => ROUNDS.find(r=>r.hcode===h);
 
@@ -127,7 +131,7 @@ export async function renderFoot(ctx){
   C = ctx;
   const root = C.$('foot-root'); if(!root) return;
   root.innerHTML = '<div class="sub" style="padding:20px">กำลังโหลด...</div>';
-  try{ await Promise.all([loadRounds(), loadOpts(), loadRows()]); }
+  try{ await Promise.all([ROUNDS?null:loadRounds(), OPTS!==null?null:loadOpts(), loadRows()]); }
   catch(e){ root.innerHTML = `<div class="msg err">โหลดไม่สำเร็จ: ${C.esc(e.code||e.message)}${e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':''}</div>`; return; }
   if(C.isRpst()) VIEW.hcode = C.myHcode();
   root.innerHTML = `
@@ -156,7 +160,7 @@ export async function renderFoot(ctx){
   C.$('ft-f-h')?.addEventListener('change', e=>{ VIEW.hcode=e.target.value; VIEW.date=null; paintList(); });
   C.$('ft-f-d').addEventListener('change', e=>{ VIEW.date=e.target.value; paintList(); });
   C.$('ft-f-s').addEventListener('change', paintList);
-  C.$('ft-reload').addEventListener('click', async ()=>{ await loadRows(); paintList(); });
+  C.$('ft-reload').addEventListener('click', async ()=>{ await loadRows(true); paintList(); });
   paintList();
   if(C.isAdmin()) paintRounds();
 }
@@ -549,7 +553,7 @@ function paintRounds(){
   const {esc} = C, el = C.$('ft-rounds');
   const byH = Object.fromEntries(ROUNDS.filter(r=>r.hcode).map(r=>[r.hcode, r]));
   const unmatched = ROUNDS.filter(r=>!r.hcode);
-  el.innerHTML = `${unmatched.length?`<div class="msg warn">จับคู่ชื่อกับ รพ.สต. ในระบบไม่ได้: ${unmatched.map(r=>esc(r.name)).join(', ')} — ใส่วันให้หน่วยที่ถูกต้องด้านล่าง</div>`:''}
+  el.innerHTML = `${unmatched.length?`<div class="msg amber">จับคู่ชื่อกับ รพ.สต. ในระบบไม่ได้: ${unmatched.map(r=>esc(r.name)).join(', ')} — ใส่วันให้หน่วยที่ถูกต้องด้านล่าง</div>`:''}
     <div class="tbl-wrap"><table><thead><tr><th>รพ.สต.</th><th>วันตรวจ (ค.ศ.)</th><th>เวลา</th></tr></thead><tbody>${
     C.RPST.map(u=>{ const r = byH[u.hcode]||{dates:[], time:''};
       return `<tr><td>${esc(u.name)}</td>

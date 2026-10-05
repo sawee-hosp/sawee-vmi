@@ -247,6 +247,21 @@ tbody tr:hover{background:#FAFCFA}
 .ap-pick .ap-opt:hover{border-color:var(--ok);background:var(--ok-dim)}
 .ap-pick .ap-opt.sel{background:var(--ok);color:#fff;border-color:var(--ok)}
 .rem-fb{display:flex;gap:12px;flex-wrap:wrap;align-items:baseline;margin-bottom:4px}.rem-fb b{color:var(--muted,#555);font-weight:600;margin-right:3px}
+
+/* แถบแจ้งปัญหาฐานข้อมูล + แถบโควตา + แจ้งเตือนเคสค้าง */
+.fs-alert{position:sticky;top:0;z-index:1000;padding:10px 16px;font-size:14.5px;line-height:1.5}
+.fs-alert.q{background:#B3261E;color:#fff}.fs-alert.o{background:#FDEAE8;color:#B3261E;border-bottom:1px solid #B3261E}
+.fs-alert.s{background:#FFF4DC;color:#8A5A00;border-bottom:1px solid #E0B85A}
+.fs-alert button{margin-left:8px;border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:2px 10px;cursor:pointer}
+#quota-bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 18px 0;padding:6px 12px;border:1px solid var(--line);
+  border-radius:10px;background:#fff;font-size:12.5px;color:var(--muted)}
+#quota-bar .qb{display:flex;align-items:center;gap:6px}
+#quota-bar .qt{width:110px;height:8px;border-radius:5px;background:#eee;overflow:hidden}
+#quota-bar .qt i{display:block;height:100%;border-radius:5px}
+#stale-alert{margin:12px 18px 0;padding:12px 16px;border-radius:12px;background:#FFF8EC;border:1px solid #F0C774;color:#6B4A00;
+  display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14.5px}
+#stale-alert b.n{font-size:20px;color:#B3261E}
+#stale-alert button{border:1px solid #C98A00;background:#fff;color:#8A5A00;border-radius:8px;padding:5px 12px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -322,6 +337,8 @@ tbody tr:hover{background:#FAFCFA}
     <button class="btn-ghost" id="btn-logout">ออกจากระบบ</button>
   </header>
   <nav id="nav"></nav>
+  <div id="quota-bar" class="hidden"></div>
+  <div id="stale-alert" class="hidden"></div>
   <div id="pend-alert" class="msg amber hidden" style="margin:12px 18px 0"></div>
   <div id="todo-alert" class="hidden"></div>
 
@@ -359,6 +376,8 @@ tbody tr:hover{background:#FAFCFA}
 
     <!-- ตรวจเท้าเบาหวาน (foot.js) -->
     <section id="tab-foot" class="hidden"><div id="foot-root"></div></section>
+    <!-- คัดกรอง NCDs (screen.js) -->
+    <section id="tab-screen" class="hidden"><div id="screen-root"></div></section>
 
     <!-- ผู้ป่วย Remission -->
     <section id="tab-remission" class="hidden">
@@ -774,9 +793,50 @@ tbody tr:hover{background:#FAFCFA}
 import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc,
-  updateDoc, query, where, orderBy, limit, serverTimestamp, writeBatch, onSnapshot }
+import { getFirestore, collection, doc, getDoc as _getDoc, getDocs as _getDocs, addDoc as _addDoc, setDoc as _setDoc,
+  deleteDoc as _deleteDoc, updateDoc as _updateDoc, query, where, orderBy, limit, serverTimestamp,
+  writeBatch as _writeBatch, onSnapshot as _onSnapshot, increment }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+/* ===== ทุกการอ่าน/เขียน Firestore ผ่านตัวห่อนี้ — ถ้าโควตาเต็ม/เน็ตหลุด/ช้าเกิน 15 วิ ขึ้นแถบแจ้งทันที (ไม่นิ่งเงียบ) ===== */
+let FS_SLOW = 0;
+function fsResetText(){
+  // โควตาฟรีรีเซ็ตเที่ยงคืนเวลาแปซิฟิก → แปลงเป็นเวลาไทย
+  const now = new Date(), la = new Date(now.toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));
+  const nx = new Date(la); nx.setHours(24,0,0,0);
+  const t = new Date(now.getTime() + (nx - la));
+  return t.toLocaleTimeString('th-TH',{timeZone:'Asia/Bangkok', hour:'2-digit', minute:'2-digit'});
+}
+function fsBanner(kind, detail){
+  let el = document.getElementById('fs-alert');
+  if(!el){ el = document.createElement('div'); el.id = 'fs-alert'; document.body.prepend(el); }
+  if(!kind){ if(el.dataset.kind!=='quota'){ el.className='hidden'; el.dataset.kind=''; } return; }
+  if(el.dataset.kind==='quota' && kind!=='quota') return;          // แถบโควตาเต็มสำคัญกว่า
+  el.dataset.kind = kind;
+  el.className = 'fs-alert ' + (kind==='quota'?'q':kind==='slow'?'s':'o');
+  el.innerHTML = kind==='quota'
+    ? `<b>⛔ โควตาฐานข้อมูลวันนี้เต็มแล้ว</b> — อ่าน/บันทึกข้อมูลไม่ได้ชั่วคราว (ข้อมูลที่เพิ่งกรอกยังไม่ถูกบันทึก)
+       จะใช้ได้อีกครั้งประมาณ <b>${fsResetText()} น.</b> · งานเร่งด่วนให้จดลงกระดาษไว้ก่อน แล้วแจ้ง admin <button onclick="this.parentElement.className='hidden'">ปิด</button>`
+    : kind==='slow'
+    ? `<b>⏳ ฐานข้อมูลตอบช้าผิดปกติ</b> — กำลังรอ... ถ้าเกิน 1 นาทีให้ตรวจอินเทอร์เน็ตแล้วกดโหลดหน้าใหม่`
+    : `<b>⚠️ เชื่อมต่อฐานข้อมูลไม่ได้</b> — ${detail||'ตรวจอินเทอร์เน็ต แล้วลองใหม่'} <button onclick="location.reload()">โหลดหน้าใหม่</button>`;
+}
+function fsFail(e){
+  const c = e?.code||'';
+  if(c==='resource-exhausted') fsBanner('quota');
+  else if(c==='unavailable' || c==='deadline-exceeded' || c==='internal') fsBanner('off', esc(e.message||c));
+}
+const fsCall = fn => (...a) => {
+  const t = setTimeout(()=>{ FS_SLOW++; fsBanner('slow'); }, 15000);
+  return fn(...a).then(v=>{ clearTimeout(t); if(FS_SLOW){ FS_SLOW=0; fsBanner(null); } return v; },
+                        e=>{ clearTimeout(t); if(FS_SLOW){ FS_SLOW=0; fsBanner(null); } fsFail(e); throw e; });
+};
+const getDoc = fsCall(_getDoc), getDocs = fsCall(_getDocs), addDoc = fsCall(_addDoc), setDoc = fsCall(_setDoc),
+      deleteDoc = fsCall(_deleteDoc), updateDoc = fsCall(_updateDoc);
+const writeBatch = db => { const b = _writeBatch(db); const c = b.commit.bind(b); b.commit = fsCall(c); return b; };
+const onSnapshot = (ref, next, err) => _onSnapshot(ref, next, e=>{ fsFail(e); err && err(e); });
+window.addEventListener('offline', ()=>fsBanner('off','อุปกรณ์นี้ไม่ได้ต่ออินเทอร์เน็ต'));
+window.addEventListener('online',  ()=>fsBanner(null));
 
 /* ================= CONFIG ================= */
 const FIREBASE_CONFIG = {
@@ -1037,7 +1097,7 @@ function agoText(t){
 function paintSync(){
   const r=SYNC_REQ||{}, w=SYNC_WATCH||{};
   const wAge = w.last_seen ? (Date.now()-new Date(String(w.last_seen).replace(' ','T')+'+07:00').getTime())/60000 : 1e9;
-  const online = wAge < 3;
+  const online = wAge < 8;   // เครื่อง server ส่งสัญญาณทุก 3 นาที
   // ถ้าค้างนานผิดปกติ (เครื่องดับกลางทาง) ให้กดใหม่ได้: running > 20 นาที, pending > 30 นาที
   const ageMin = t => t ? (Date.now()-new Date(String(t).replace(' ','T')+'+07:00').getTime())/60000 : 1e9;
   const busy = (r.status==='running' && ageMin(r.started_at_text)<20)
@@ -1060,7 +1120,7 @@ function initSync(){
   setInterval(paintSync, 30000);           // อัปเดตข้อความ "กี่นาทีที่แล้ว"
   $('btn-sync').addEventListener('click', async ()=>{
     const w=SYNC_WATCH;
-    const off = !w?.last_seen || (Date.now()-new Date(String(w.last_seen).replace(' ','T')+'+07:00').getTime())/60000 >= 3;
+    const off = !w?.last_seen || (Date.now()-new Date(String(w.last_seen).replace(' ','T')+'+07:00').getTime())/60000 >= 8;
     if(off && !confirm('เครื่อง pusher ดูเหมือนออฟไลน์อยู่ คำขอจะค้างไว้จนกว่าเครื่องจะเปิด sync_watch.php\nส่งคำขอไว้ก่อนไหม?')) return;
     const force = confirm('บังคับส่งข้อมูลซ้ำทั้งหมด (--force) ด้วยไหม?\n\nตกลง = ส่งทั้งหมด (ช้ากว่า ใช้เมื่อข้อมูลดูไม่ตรง)\nยกเลิก = ส่งเฉพาะที่เปลี่ยน (ปกติ)');
     try{
@@ -1069,6 +1129,8 @@ function initSync(){
         status:'pending', force, requested_by:ME.email,
         requested_at_text:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' '),
         started_at_text:null, finished_at_text:null, exit_code:null, log_tail:null });
+      // สะกิดเครื่อง server ให้รับคำขอทันที (เครื่องไม่ต้องคอยเช็คเอกสารนี้ถี่ ๆ)
+      addDoc(collection(db,'hn_lookup'), {kind:'sync', status:'pending', requested_uid:ME.uid, requested_at:serverTimestamp()}).catch(()=>{});
       await audit('request_sync', 'sync_control', {force});
     }catch(e){ alert('ส่งคำขอไม่สำเร็จ: '+(e.code||e.message)); $('btn-sync').disabled=false; }
   });
@@ -1077,11 +1139,25 @@ function initSync(){
 /* ================= ตรวจเท้าเบาหวาน — โค้ดอยู่ไฟล์ foot.js (วางโฟลเดอร์เดียวกับ refer.html) ================= */
 async function openFoot(){
   try{
-    const m = await import('./foot.js?v=20261004');
+    const m = await import('./foot.js?v=20261005b');
     await m.renderFoot({ db, $, esc, thDate, daysFrom, maskName, rpstName, audit, hn9, watcherState, qrDataUrl,
       RPST, ME, PROFILE, isAdmin, isRpst, isHospital, myHcode,
       fs:{collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, updateDoc, query, where, serverTimestamp, onSnapshot} });
   }catch(e){ $('foot-root').innerHTML = `<div class="msg err">เปิดหน้าตรวจเท้าไม่ได้: ${esc(e.message)} — ตรวจว่าอัปโหลดไฟล์ foot.js ไว้ข้าง refer.html แล้ว</div>`; }
+}
+
+/* ================= คัดกรอง NCDs (screen.js) + ประเมินการใช้งาน (feedback.js) ================= */
+const MOD_FS = () => ({collection, doc, getDoc, getDocs, addDoc, setDoc, deleteDoc, updateDoc, query, where, serverTimestamp, onSnapshot, increment});
+async function openScreen(){
+  try{
+    const m = await import('./screen.js?v=20261005b');
+    await m.renderScreen({ db, $, esc, thDate, maskName, rpstName, audit, RPST, ME, PROFILE, isAdmin, isRpst, isHospital, myHcode, fs:MOD_FS() });
+  }catch(e){ $('screen-root').innerHTML = `<div class="msg err">เปิดหน้าคัดกรองไม่ได้: ${esc(e.message)} — ตรวจว่าอัปโหลดไฟล์ screen.js ไว้ข้าง refer.html แล้ว</div>`; }
+}
+async function initFeedbackSafe(){
+  try{ const m = await import('./feedback.js?v=20261005');
+       await m.initFeedback({ db, esc, rpstName, ME, PROFILE, isAdmin, myRole, myHcode, fs:MOD_FS() }); }
+  catch(e){ console.warn('feedback.js', e); }   // ไม่มีไฟล์ = ไม่แสดงปุ่ม ระบบอื่นใช้ได้ตามปกติ
 }
 
 /* ================= NAV ================= */
@@ -1098,6 +1174,7 @@ const TABS = [
   {id:'intake', label:'รับข้อมูล NCDs', hospOnly:1},
   {id:'find', label:'🔍 เช็ค / ส่งตัวผู้ป่วย', hospOnly:1},
   {id:'foot', label:'🦶 ตรวจเท้าเบาหวาน', all:1},
+  {id:'screen', label:'🩺 คัดกรอง NCDs', all:1},
   {id:'adjreport', label:'รายงานปรับยา', seesAll:1},
   {id:'drugcat', label:'บัญชียา รพ.สต.', seesAll:1},
   {id:'drug', label:'วิธีใช้ยา',      seesAll:1},
@@ -1133,7 +1210,29 @@ function paintPendBadge(){
     $('btn-goto-pend')?.addEventListener('click', ()=>openTab('user'));
   }
 }
+/* แท็บที่ต้องใช้รายชื่อทั้งหมด — พยาบาลโหลดเต็มเมื่อเปิดครั้งแรกเท่านั้น */
+const NEED_FULL = ['list','remission','drugsum','cal','visit','batch','dash','clinics','intake','drugcat'];
+let FULL_LOADING = null;
+async function ensureFullList(){
+  if(LIST_FULL) return;
+  FULL_LOADING = FULL_LOADING || loadList().then(()=>loadLineStatus()).finally(()=>{ FULL_LOADING=null; });
+  await FULL_LOADING;
+}
+/* ปลุกเครื่อง server ให้ตอบเร็ว (ทุก 3 วิ) เมื่อมีคนเปิดหน้าที่ต้องถาม HOSxP — ส่งไม่เกิน 1 ครั้ง/5 นาที */
+let WAKE_AT = 0;
+function wakeWatcher(){
+  if(!(isHospital()||isAdmin()||isRpst()) || Date.now()-WAKE_AT < 300000) return;
+  WAKE_AT = Date.now();
+  addDoc(collection(db,'hn_lookup'), {kind:'wake', status:'pending', requested_uid:ME.uid, requested_at:serverTimestamp()}).catch(()=>{});
+}
 function openTab(id){
+  if(NEED_FULL.includes(id) && !LIST_FULL){
+    $('nav').querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.tab===id));
+    TABS.forEach(t=>show('tab-'+t.id, t.id===id));
+    ensureFullList().then(()=>{ if($('nav').querySelector('button.on')?.dataset.tab===id) openTab(id); });
+    return;
+  }
+  if(['find','foot','screen'].includes(id)) wakeWatcher();
   $('nav').querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.tab===id));
   TABS.forEach(t=>show('tab-'+t.id, t.id===id));
   if(id==='visit') renderVisitTab();
@@ -1144,6 +1243,7 @@ function openTab(id){
   if(id==='find')  { loadFindQueue(); renderSentList(); setTimeout(()=>$('f-hn')?.focus(), 50); }
   if(id==='remission') renderRemission();
   if(id==='foot')  openFoot();
+  if(id==='screen') openScreen();
   if(id==='drugsum')   renderDrugSum();
   if(id==='clinics') renderClinicMenu();
   if(id==='intake') renderIntake();
@@ -1160,11 +1260,13 @@ async function startApp(){
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
   buildNav();
   await audit('login');
-  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy(), loadClinicScope(), loadLineStatus()]);
+  await Promise.all([loadRpst(), loadOutreach(), loadDrugMap(), loadDrugPolicy(), loadClinicScope()]);
+  loadQuota(); setInterval(loadQuota, 15*60000);
+  initFeedbackSafe();
   if(isAdmin()){
     initSync();
     loadPending();
-    setInterval(loadPending, 120000);   // เช็คคำขอใหม่ทุก 2 นาที แอดมินจะได้ไม่พลาด
+    setInterval(loadPending, 600000);   // เช็คคำขอลงทะเบียนใหม่ทุก 10 นาที (เดิม 2 นาที — ประหยัดโควตา)
   }
   $('who-role').textContent = roleLabel(PROFILE.role) +
     (myHcode() ? ' · ' + rpstName(myHcode()) : '');
@@ -1174,7 +1276,10 @@ async function startApp(){
       RPST.map(r=>`<option value="${esc(r.hcode)}">${esc(r.name)}</option>`).join('');
     $('sel-hcode').addEventListener('change', e=>{ VIEW_HCODE=e.target.value; loadList(); });
   }else $('th-unit').classList.add('hidden');
-  await loadList();
+  // พยาบาล/เภสัชกร: หน้าแรกคือหน้าส่งตัว → โหลดเฉพาะเคส 30 วันล่าสุดก่อน (ไม่ต้องอ่านทั้งหมดหลายพันเอกสารทุกครั้งที่เข้า)
+  // เปิดแท็บที่ต้องใช้ข้อมูลทั้งหมด (รายชื่อ/แดชบอร์ด/สรุปยา ฯลฯ) จึงค่อยโหลดเต็ม ครั้งเดียวต่อการเข้าใช้
+  await loadList(isHospital() ? {recent:30} : {});
+  loadLineStatus().then(()=>{ if(!$('tab-find')?.classList.contains('hidden')) renderSentList(); });
 }
 /* ================= แจ้งเตือนนัดทาง LINE =================
    ผู้ป่วยสแกน QR บนใบนัด → หน้า LIFF (liff.html) → ยินยอม → line_links (มี userId, admin อ่านได้) + line_status/{hn} (ทุกคนเห็น)
@@ -1207,18 +1312,30 @@ function lineResultText(res){
   return 'ส่ง LINE ไม่ได้: '+(res.error||'');
 }
 let LINE_ST = {}, LINE_ACK = {};
-async function loadLineStatus(){
-  try{ const s = await getDocs(collection(db,'line_status')); LINE_ST = {};
-       s.docs.forEach(d=>{ LINE_ST[d.id] = d.data(); }); }
-  catch(e){ LINE_ST = {}; }
-  // ใบรับทราบ (ปุ่ม "รับทราบ" ในข้อความ LINE) — รพ.สต. อ่านได้เฉพาะของหน่วยตัวเอง
+/* อ่านเฉพาะสถานะ LINE ของผู้ป่วยที่อยู่ในรายชื่อที่โหลดมา (ทีละ 30 HN) และใบรับทราบเฉพาะเคสที่เคยส่งข้อความ
+   เดิมอ่านทั้ง collection ทุกครั้งที่เข้าใช้ — โตขึ้นเรื่อย ๆ ตามจำนวนคนผูก LINE / ข้อความที่ส่ง */
+const LINE_DONE_HN = new Set(), LINE_DONE_ACK = new Set();
+async function inChunks(coll, field, vals, done, each){
+  const todo = [...new Set(vals.map(String))].filter(v=>v && !done.has(v));
+  for(let i=0;i<todo.length;i+=30){
+    const part = todo.slice(i,i+30);
+    const s = await getDocs(query(collection(db,coll), where(field,'in',part)));
+    s.docs.forEach(each); part.forEach(v=>done.add(v));
+  }
+}
+async function loadLineStatus(force){
+  if(force){ LINE_DONE_HN.clear(); LINE_DONE_ACK.clear(); }
+  try{ await inChunks('line_status', 'hn', LIST.map(r=>r.hn), LINE_DONE_HN, d=>{ LINE_ST[d.id] = d.data(); }); }catch(e){}
+  // ใบรับทราบ (ปุ่ม "รับทราบ" ในข้อความ LINE) — เฉพาะเคสที่มีการส่งข้อความแล้ว (มี line_last)
   try{
-    const q = isRpst() ? query(collection(db,'line_acks'), where('hcode','==',myHcode()), limit(2000))
-                       : query(collection(db,'line_acks'), limit(3000));
-    const s = await getDocs(q); LINE_ACK = {};
-    s.docs.forEach(d=>{ const a=d.data(), k=a.doc_id, cur=LINE_ACK[k];
-      if(!cur || String(a.sent_at||'') > String(cur.sent_at||'')) LINE_ACK[k] = {...a, id:d.id}; });
-  }catch(e){ LINE_ACK = {}; }
+    const ids = LIST.filter(r=>r.line_last || r.workflow?.line_notify).map(r=>r.id);
+    const each = d=>{ const a=d.data(), k=a.doc_id, cur=LINE_ACK[k];
+      if(!cur || String(a.sent_at||'') > String(cur.sent_at||'')) LINE_ACK[k] = {...a, id:d.id}; };
+    if(isRpst()){ // rules ของ รพ.สต. ต้องกรอง hcode ด้วย → อ่านของหน่วยตัวเองครั้งเดียว
+      if(!LINE_DONE_ACK.has('*')){ const s = await getDocs(query(collection(db,'line_acks'), where('hcode','==',myHcode()), limit(2000)));
+        s.docs.forEach(each); LINE_DONE_ACK.add('*'); }
+    } else await inChunks('line_acks', 'doc_id', ids, LINE_DONE_ACK, each);
+  }catch(e){}
 }
 /* สถานะข้อความล่าสุดของเคส: ตอบรับแล้ว / ส่งแล้วรอตอบรับ / ส่งไม่สำเร็จ / รอส่ง */
 function lineMsgTag(r){
@@ -1289,15 +1406,20 @@ async function loadRpst(){
 }
 
 /* ================= LIST ================= */
-async function loadList(){
+let LIST_FULL = false;
+async function loadList(opt={}){
   $('tb-list').innerHTML = '<tr><td colspan="7" class="loading">กำลังโหลด...</td></tr>';
   const scope = isRpst() ? myHcode() : VIEW_HCODE;
   try{
     // ไม่ใช้ orderBy คู่กับ where เพื่อเลี่ยงการต้องสร้าง composite index
     // ข้อมูลระดับพันรายการ เรียงในเบราว์เซอร์เร็วกว่ารอ index
-    const q1 = scope
+    const since = opt.recent ? new Date(Date.now()-opt.recent*864e5).toISOString().slice(0,10) : null;
+    const q1 = since && !scope
+      ? query(collection(db,'referrals'), where('refer_date','>=',since), limit(1500))
+      : scope
       ? query(collection(db,'referrals'), where('hcode','==',scope), limit(3000))
       : query(collection(db,'referrals'), limit(3000));
+    LIST_FULL = !(since && !scope);
     const s = await getDocs(q1);
     LIST = s.docs.map(d=>({id:d.id, ...d.data()}))
                  .sort((a,b)=>String(b.refer_date||'').localeCompare(String(a.refer_date||'')));
@@ -1305,7 +1427,7 @@ async function loadList(){
     renderList();
     // audit view_list ถูกเอาออกเพื่อประหยัดโควตา
   }catch(e){
-    $('tb-list').innerHTML = `<tr><td colspan="7" class="empty">โหลดไม่สำเร็จ: ${esc(e.message)}</td></tr>`;
+    $('tb-list').innerHTML = `<tr><td colspan="7" class="empty">โหลดไม่สำเร็จ: ${e.code==='resource-exhausted'?'โควตาฐานข้อมูลวันนี้เต็ม — ใช้ได้อีกครั้งประมาณ '+fsResetText()+' น.':esc(e.message)}</td></tr>`;
   }
 }
 const stOf = r => r.workflow?.status || 'new';
@@ -1369,6 +1491,8 @@ function filtered(){
 }
 /* แจ้งเตือนตัวใหญ่ใต้เมนู: ส่งต่อใหม่ / รับตัวแล้วรอนัด / เลยวันนัดยังไม่บันทึก + badge บนแท็บรายชื่อ */
 function paintTodoAlert(){
+  paintStaleAlert();
+  if(!LIST_FULL){ $('todo-alert').classList.add('hidden'); $('nav-badge-list')?.classList.add('hidden'); return; }   // ยังโหลดไม่ครบ ไม่แสดงตัวเลขที่ไม่ครบ
   const nNew  = REFER_LIST().filter(r=>stOf(r)==='new').length;
   const nWait = REFER_LIST().filter(r=>stOf(r)==='acknowledged').length;
   const nLate = REFER_LIST().filter(r=>stOf(r)==='scheduled' && r.workflow?.appoint_date && daysFrom(r.workflow.appoint_date)<0).length;
@@ -1394,6 +1518,57 @@ function paintTodoAlert(){
   }));
 }
 const REFER_LIST = () => LIST.filter(r=>r.case_type!=='data_only');
+
+/* ===== แจ้งเตือนแบบนุ่มนวล: ผู้ป่วยส่งต่อค้างไม่ได้รับการยืนยัน =====
+   รพ.สต.: นับเคส "ส่งต่อใหม่" ที่ส่งมาเกิน STALE_DAYS วันแล้วยังไม่กดรับ — แสดงเมื่อมี ≥ STALE_MIN คน หรือมีคนค้างเกิน 7 วัน
+   admin/พยาบาล (เมื่อโหลดรายชื่อครบ): สรุปว่าหน่วยไหนค้างกี่คน · ปิดได้ (ซ่อนจนกว่าจะโหลดหน้าใหม่) */
+const STALE_DAYS = 3, STALE_MIN = 5;
+let STALE_HIDE = false;
+function paintStaleAlert(){
+  const el = $('stale-alert'); if(!el) return;
+  const stale = REFER_LIST().filter(r=>stOf(r)==='new' && r.refer_date && daysFrom(r.refer_date) <= -STALE_DAYS);
+  const oldest = stale.reduce((m,r)=>Math.max(m, -daysFrom(r.refer_date)), 0);
+  const showIt = !STALE_HIDE && stale.length && (stale.length >= STALE_MIN || oldest >= 7) && (isRpst() || LIST_FULL);
+  if(!showIt){ el.classList.add('hidden'); return; }
+  let body;
+  if(isRpst()){
+    body = `<span style="font-size:22px">🗂️</span><div style="flex:1;min-width:240px">มีผู้ป่วยค้างไม่ได้รับการยืนยัน <b class="n">${stale.length}</b> คน
+      <span style="color:#8A6A2A">(ส่งมาเกิน ${STALE_DAYS} วัน · นานสุด ${oldest} วัน)</span><br>
+      กรุณาจัดการ เช่น <b>กดรับตัวผู้ป่วย</b> หรือ <b>แจ้ง "ไม่ใช่คนของเรา"</b> หากไม่ใช่ผู้ป่วยในพื้นที่ — รพ.สวี จะย้ายหรือลบออกให้</div>
+      <button id="stale-go">ดูรายชื่อที่ค้าง</button><button id="stale-x" title="ซ่อนจนกว่าจะเข้าใช้ครั้งหน้า">ไว้ทีหลัง</button>`;
+  } else {
+    const by = {}; stale.forEach(r=>{ by[r.hcode]=(by[r.hcode]||0)+1; });
+    const top = Object.entries(by).sort((a,b)=>b[1]-a[1]);
+    body = `<span style="font-size:22px">🗂️</span><div style="flex:1;min-width:240px">มีผู้ป่วยค้างไม่ได้รับการยืนยันจาก รพ.สต. <b class="n">${stale.length}</b> คน (เกิน ${STALE_DAYS} วัน)<br>
+      <span style="font-size:13.5px">${top.slice(0,8).map(([h,n])=>`${esc(rpstName(h))} <b>${n}</b>`).join(' · ')}${top.length>8?' ...':''}</span></div>
+      <button id="stale-go">ดูรายชื่อ</button><button id="stale-x">ซ่อน</button>`;
+  }
+  el.innerHTML = body; el.classList.remove('hidden');
+  $('stale-go').addEventListener('click', ()=>{ openTab('list'); FILTER='new'; $('q').value=''; renderList(); $('tab-list').scrollIntoView({behavior:'smooth'}); });
+  $('stale-x').addEventListener('click', ()=>{ STALE_HIDE = true; el.classList.add('hidden'); });
+}
+
+/* ===== แถบโควตา Firestore วันนี้ (ข้อมูลจากเครื่อง server ทุก 15 นาที — Cloud Monitoring) =====
+   admin/พยาบาล เห็นตลอด · รพ.สต. เห็นเฉพาะเมื่อใช้เกิน 80% · เกิน 100% ขึ้นแถบแดงเตือนทุกคน */
+async function loadQuota(){
+  const el = $('quota-bar'); if(!el) return;
+  let q;
+  try{ const d = await getDoc(doc(db,'sync_control','quota')); q = d.exists() ? d.data() : null; }catch(e){ q = null; }
+  if(!q){ if(isAdmin()){ el.innerHTML = '<span>แถบโควตา: ยังไม่มีข้อมูล — ต้องใช้ sync_watch รุ่นใหม่ + สิทธิ์ Monitoring Viewer</span>'; el.classList.remove('hidden'); } return; }
+  if(q.error){ if(isAdmin()){ el.innerHTML = `<span>แถบโควตา: <b style="color:var(--warn)">${esc(q.error)}</b> (ตั้งสิทธิ์ครั้งเดียวใน Google Cloud Console)</span>`; el.classList.remove('hidden'); } return; }
+  const L = q.limits||{reads:50000, writes:20000, deletes:20000};
+  const items = [['อ่าน', q.reads||0, L.reads], ['เขียน', q.writes||0, L.writes], ['ลบ', q.deletes||0, L.deletes]];
+  const maxPct = Math.max(...items.map(([,v,l])=>v*100/l));
+  const age = (Date.now()-new Date(String(q.at).replace(' ','T')+'+07:00').getTime())/60000;
+  if(maxPct >= 100) fsBanner('quota');
+  if(isRpst() && maxPct < 80){ el.classList.add('hidden'); return; }
+  const col = p => p>=90?'#B3261E':p>=70?'#C98A00':'#1F7A4D';
+  el.innerHTML = `<span><b>โควตาฐานข้อมูลวันนี้</b></span>${items.map(([t,v,l])=>{ const p=Math.min(100,v*100/l);
+    return `<span class="qb">${t}<span class="qt"><i style="width:${p}%;background:${col(p)}"></i></span>${v.toLocaleString()}/${(l/1000)}k</span>`; }).join('')}
+    <span>รีเซ็ต ${esc(String(q.reset_at||'').slice(11,16)||fsResetText())} น.${age>40?` · <span style="color:var(--warn)">ข้อมูลเมื่อ ${esc(String(q.at).slice(11,16))} น. (เครื่อง server อาจปิด)</span>`:''}</span>
+    ${maxPct>=80?`<b style="color:${col(maxPct)}">ใช้ไปแล้ว ${Math.round(maxPct)}% — ลดการกดโหลดซ้ำ/เปิดหลายแท็บ</b>`:''}`;
+  el.classList.remove('hidden');
+}
 function renderList(){
   paintTodoAlert(); paintRemBadge();
   const cnt={}; REFER_LIST().forEach(r=>{ const s=stOf(r); cnt[s]=(cnt[s]||0)+1; });
@@ -2357,8 +2532,10 @@ function renderOrderAlerts(target){
 async function loadVisits(){
   try{
     const scope = isRpst() ? myHcode() : null;
+    // ฝั่ง รพ.: อ่านเฉพาะ 180 วันล่าสุด (เดิมอ่านทั้งหมดสูงสุด 2,000 เอกสารทุกครั้ง)
+    const since = new Date(Date.now()-180*864e5).toISOString().slice(0,10);
     const q1 = scope ? query(collection(db,'visits'), where('hcode','==',scope), limit(2000))
-                     : query(collection(db,'visits'), limit(2000));
+                     : query(collection(db,'visits'), where('date','>=',since), limit(2000));
     const s = await getDocs(q1);
     VISITS = s.docs.map(d=>({id:d.id, ...d.data()}));
   }catch(e){ VISITS=[]; }
@@ -3020,7 +3197,7 @@ const watcherState = async () => {
   try{
     const d = await getDoc(doc(db,'sync_control','watcher'));
     const w = d.exists() ? d.data() : null, t = w?.last_seen;
-    const fresh = !!t && (Date.now()-new Date(String(t).replace(' ','T')+'+07:00').getTime())/60000 < 3;
+    const fresh = !!t && (Date.now()-new Date(String(t).replace(' ','T')+'+07:00').getTime())/60000 < 8;
     return fresh ? (w.lookup ? 'fast' : 'old') : 'off';
   }catch(e){ return 'unknown'; }   // อ่านสถานะเครื่องไม่ได้ ลองถามไปก่อน
 };
@@ -3038,7 +3215,7 @@ async function checkHosxp(hn, last){
   let done=false;
   // เครื่องรุ่นใหม่ตอบภายใน ~3-6 วิ · รุ่นเก่าเช็คทุก 20 วิ
   const timer = setTimeout(()=>{ if(done) return; done=true; LOOKUP_UNSUB?.();
-    $('f-hx').innerHTML=''; renderNurseSend(hn, null); }, ws==='fast' ? 15000 : 30000);
+    $('f-hx').innerHTML=''; renderNurseSend(hn, null); }, 40000);   // เครื่องอาจอยู่ในจังหวะเช็คทุก 30 วิ (ช่วงไม่มีคนใช้)
   LOOKUP_UNSUB = onSnapshot(ref, d=>{
     const x=d.data(); if(!x || x.status==='pending' || done) return;
     done=true; clearTimeout(timer); LOOKUP_UNSUB?.();
@@ -3364,9 +3541,9 @@ async function cancelReferral(r){
   }catch(e){ alert('ยกเลิกไม่สำเร็จ: '+(e.code||e.message)+(e.code==='permission-denied'?' — ต้อง Publish firestore.rules ชุดใหม่':'')); return false; }
 }
 
-$('f-sent-days')?.addEventListener('change', renderSentList);
+$('f-sent-days')?.addEventListener('change', async ()=>{ if(+$('f-sent-days').value>30 && !LIST_FULL){ await ensureFullList(); } renderSentList(); });
 $('f-sent-mine')?.addEventListener('change', renderSentList);
-$('f-sent-reload')?.addEventListener('click', async ()=>{ await Promise.all([loadList(), loadLineStatus()]); renderSentList(); });
+$('f-sent-reload')?.addEventListener('click', async ()=>{ await loadList(isHospital() && !LIST_FULL ? {recent:30} : {}); await loadLineStatus(true); renderSentList(); });
 
 async function loadFindQueue(){
   show('f-push-now', isAdmin());
@@ -4207,8 +4384,10 @@ async function renderAdjReport(){
 async function loadAdjReport(){
   $('tb-adjreport').innerHTML = '<tr><td colspan="7" class="loading">กำลังโหลด...</td></tr>';
   try{
-    const s = await getDocs(query(collection(db,'visits'), limit(3000)));
     const from = $('adj-from').value, to = $('adj-to').value, hc = $('adj-hcode').value;
+    // อ่านเฉพาะช่วงวันที่ที่เลือก (เดิมอ่าน visits ทั้งหมด 3,000 เอกสารทุกครั้งที่เปิดรายงาน)
+    const qs = [where('date','>=',from||'2000-01-01')]; if(to) qs.push(where('date','<=',to));
+    const s = await getDocs(query(collection(db,'visits'), ...qs, limit(3000)));
     let rows = s.docs.map(d=>({id:d.id, ...d.data()}))
       .filter(v => v.attended!==false && (v.meds||[]).some(m=>m.action!=='continue'))
       .filter(v => !from || v.date>=from).filter(v => !to || v.date<=to)

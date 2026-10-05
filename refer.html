@@ -1287,7 +1287,7 @@ async function startApp(){
 const LIFF_URL = 'https://liff.line.me/2011801491-uJ1WbgA9';
 /* URL ของ LINE Hub (Google Apps Script Web App) — Deploy แล้วคัดลอกมาวางตรงนี้ (ลงท้าย /exec)
    Hub รับแค่เลขที่คิว เนื้อหาข้อความสร้างเองจากข้อมูลนัด — URL นี้เปิดเผยได้ ไม่ใช่ความลับ */
-const LINE_HUB_URL = 'https://script.google.com/macros/s/AKfycbxdASemtPuL7w0EnDuMqSwjMZRN6Jm8MfUVTKdlL2mXzHwpFivCY1sIxF209hkQaI8Ukg/exec';
+const LINE_HUB_URL = '';
 async function callHub(body, ms){
   if(!LINE_HUB_URL) return {ok:false, error:'ยังไม่ได้ตั้งค่า LINE_HUB_URL ใน refer.html'};
   const ctl = new AbortController(), t = setTimeout(()=>ctl.abort(), ms||25000);

@@ -332,7 +332,10 @@ tbody tr:hover{background:#FAFCFA}
     <div class="who"><b id="who-name"></b><span id="who-role"></span></div>
     <div id="sync-wrap" class="hidden" style="display:flex;align-items:center;gap:8px;margin-right:8px">
       <span id="sync-st" class="sub" style="font-size:12px;text-align:right;line-height:1.3"></span>
-      <button class="btn-sm" id="btn-sync" title="สั่งเครื่อง pusher ใน รพ. ให้ดึงข้อมูลจาก HOSxP ส่งให้ รพ.สต. ทันที">⟳ Sync ตอนนี้</button>
+      <button class="btn-sm" id="btn-sync" title="sync เฉพาะเคสใหม่และที่มีความเคลื่อนไหว">⟳ Sync</button>
+      <button class="btn-sm btn-force-sync" id="btn-force-sync"
+        style="background:transparent;border:1px solid var(--warn);color:var(--warn);opacity:.55;font-size:11px;padding:2px 7px"
+        title="Force sync ทุกเคสใหม่ — เปลืองโควตา กดเฉพาะเมื่อข้อมูลดูผิด">⚠ Force</button>
     </div>
     <button class="btn-ghost" id="btn-logout">ออกจากระบบ</button>
   </header>
@@ -1103,7 +1106,9 @@ function paintSync(){
   const busy = (r.status==='running' && ageMin(r.started_at_text)<20)
             || (r.status==='pending' && ageMin(r.requested_at_text)<30);
   $('btn-sync').disabled = busy;
-  $('btn-sync').textContent = r.status==='running' ? '⟳ กำลัง sync...' : r.status==='pending' ? '⟳ รอเครื่องรับคำสั่ง...' : '⟳ Sync ตอนนี้';
+  $('btn-force-sync').disabled = busy;
+  $('btn-sync').textContent = r.status==='running' ? '⟳ syncing...' : r.status==='pending' ? '⟳ รอ...' : '⟳ Sync';
+  $('btn-force-sync').style.opacity = busy ? '.3' : '.55';
   let line1 = r.status==='done'  ? `sync ล่าสุด ${agoText(r.finished_at_text)} ✓`
             : r.status==='error' ? `<span style="color:var(--warn)">sync ล่าสุดผิดพลาด (${esc(r.finished_at_text||'')})</span>`
             : r.status==='running' ? `เริ่ม ${agoText(r.started_at_text)}`
@@ -1118,21 +1123,41 @@ function initSync(){
   onSnapshot(doc(db,'sync_control','request'), d=>{ SYNC_REQ=d.exists()?d.data():null; paintSync(); }, ()=>{});
   onSnapshot(doc(db,'sync_control','watcher'), d=>{ SYNC_WATCH=d.exists()?d.data():null; paintSync(); }, ()=>{});
   setInterval(paintSync, 30000);           // อัปเดตข้อความ "กี่นาทีที่แล้ว"
-  $('btn-sync').addEventListener('click', async ()=>{
+  async function doSync(force){
     const w=SYNC_WATCH;
     const off = !w?.last_seen || (Date.now()-new Date(String(w.last_seen).replace(' ','T')+'+07:00').getTime())/60000 >= 8;
     if(off && !confirm('เครื่อง pusher ดูเหมือนออฟไลน์อยู่ คำขอจะค้างไว้จนกว่าเครื่องจะเปิด sync_watch.php\nส่งคำขอไว้ก่อนไหม?')) return;
-    const force = confirm('บังคับส่งข้อมูลซ้ำทั้งหมด (--force) ด้วยไหม?\n\nตกลง = ส่งทั้งหมด (ช้ากว่า ใช้เมื่อข้อมูลดูไม่ตรง)\nยกเลิก = ส่งเฉพาะที่เปลี่ยน (ปกติ)');
     try{
-      $('btn-sync').disabled=true;
+      $('btn-sync').disabled=true; $('btn-force-sync').disabled=true;
       await setDoc(doc(db,'sync_control','request'), {
         status:'pending', force, requested_by:ME.email,
         requested_at_text:new Date(Date.now()+7*3600e3).toISOString().slice(0,19).replace('T',' '),
         started_at_text:null, finished_at_text:null, exit_code:null, log_tail:null });
-      // สะกิดเครื่อง server ให้รับคำขอทันที (เครื่องไม่ต้องคอยเช็คเอกสารนี้ถี่ ๆ)
       addDoc(collection(db,'hn_lookup'), {kind:'sync', status:'pending', requested_uid:ME.uid, requested_at:serverTimestamp()}).catch(()=>{});
       await audit('request_sync', 'sync_control', {force});
-    }catch(e){ alert('ส่งคำขอไม่สำเร็จ: '+(e.code||e.message)); $('btn-sync').disabled=false; }
+    }catch(e){ alert('ส่งคำขอไม่สำเร็จ: '+(e.code||e.message)); $('btn-sync').disabled=false; $('btn-force-sync').disabled=false; }
+  }
+  // Sync ปกติ — เฉพาะเคสใหม่/มีความเคลื่อนไหว (ไม่ถาม)
+  $('btn-sync').addEventListener('click', ()=> doSync(false));
+  // Force sync — ต้องคลิก 2 ครั้ง (hover ทำให้ opacity เต็ม ครั้งแรก + confirm ครั้งที่สอง)
+  let _forceArmed = false, _forceTimer;
+  $('btn-force-sync').addEventListener('mouseenter', ()=>{
+    $('btn-force-sync').style.opacity='1';
+  });
+  $('btn-force-sync').addEventListener('mouseleave', ()=>{
+    $('btn-force-sync').style.opacity='.55'; _forceArmed=false;
+    clearTimeout(_forceTimer);
+  });
+  $('btn-force-sync').addEventListener('click', ()=>{
+    if(!_forceArmed){
+      _forceArmed=true;
+      $('btn-force-sync').textContent='⚠ กดอีกครั้งยืนยัน';
+      _forceTimer=setTimeout(()=>{ _forceArmed=false; $('btn-force-sync').textContent='⚠ Force'; },3000);
+      return;
+    }
+    clearTimeout(_forceTimer); _forceArmed=false;
+    $('btn-force-sync').textContent='⚠ Force';
+    if(confirm('Force sync จะส่งข้อมูลซ้ำทุกเคส (~436 คน)\nใช้โควตา Firestore มากกว่าปกติมาก\n\nยืนยันทำต่อ?')) doSync(true);
   });
 }
 

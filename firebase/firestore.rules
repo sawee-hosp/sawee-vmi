@@ -1,5 +1,5 @@
 rules_version = '2';
-// Sawee Rxfill Firestore Rules v6.5 — v6.2 + ใบเบิกภายในสถานะ Draft (รอส่ง)
+// Sawee Rxfill Firestore Rules v6.6 — v6.5 + ผู้เบิกแก้ผู้ลงนามท้ายใบ (sign_people) ได้ทุกสถานะ
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -388,7 +388,12 @@ service cloud.firestore {
                         && request.resource.data.get('invs_status', '') == resource.data.get('invs_status', '')
                         && request.resource.data.deptId == resource.data.deptId
                         && request.resource.data.kind == resource.data.kind
-                        && request.resource.data.created_by_uid == resource.data.created_by_uid);
+                        && request.resource.data.created_by_uid == resource.data.created_by_uid)
+                    // v6.6 ผู้เบิกแก้ชื่อ/ตำแหน่งผู้ลงนามท้ายใบได้ทุกสถานะ (แตะได้เฉพาะ sign_people + เวลาแก้)
+                    || (ownsDept(resource.data.deptId)
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sign_people', 'updated_at'])
+                        && request.resource.data.sign_people is list
+                        && request.resource.data.sign_people.size() <= 4);
 
       allow delete: if isAdmin();
     }

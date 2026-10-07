@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.9.0: ตำแหน่งยาจาก sawee_location.LOC_CODE (ว่าง/0 = ไม่มีตำแหน่ง) · คำค้นหาเพิ่ม inst_name.REF_CODE
  *   v2.7.0: คำค้นหาจาก inst_name, ตำแหน่งจากตาราง location (ตามคลัง), รองรับ HOSxP ที่เก็บวันที่เป็น พ.ศ. (date_mode)
  *   v2.8.0: ประหยัดโควตา Firestore — เติม updated_at เมื่อแก้ใบเบิก · CLI sync เขียน/อ่านเฉพาะที่เปลี่ยน (ดู cli/*.php)
  *   v2.6.1: sync_hosxp_codes รองรับคอลัมน์ INV_CODE, กรอง INVALID_DATE, ส่ง CONVER_FACT
@@ -21,7 +22,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.8.0';
+const BRIDGE_VERSION = '2.9.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -762,8 +763,13 @@ if ($action==='invs_extras') {
         $kwSql=trim((string)($ex['keyword_sql'] ?? ''));
         // ชื่อพ้องของ INVS อยู่ในตาราง inst_name (INST_NAME + WORKING_CODE)
         if ($kwSql==='' && tableHasColumn($db,'inst_name','INST_NAME') && tableHasColumn($db,'inst_name','WORKING_CODE')) {
-            $kwSql="SELECT TRIM(WORKING_CODE) AS working_code, TRIM(INST_NAME) AS keyword FROM inst_name WHERE INST_NAME IS NOT NULL AND TRIM(INST_NAME)<>''";
-            $detected['keyword']='inst_name.INST_NAME';
+            // v2.9.0: แถวที่ WORKING_CODE ว่างใช้ REF_CODE แทน + ส่ง REF_CODE เป็นคำค้นหาอีกคำ
+            $hasRef=tableHasColumn($db,'inst_name','REF_CODE');
+            $wcExpr=$hasRef ? "COALESCE(NULLIF(TRIM(WORKING_CODE),''),TRIM(REF_CODE))" : 'TRIM(WORKING_CODE)';
+            $kwSql="SELECT {$wcExpr} AS working_code, TRIM(INST_NAME) AS keyword FROM inst_name WHERE INST_NAME IS NOT NULL AND TRIM(INST_NAME)<>''";
+            if ($hasRef) $kwSql.=" UNION ALL SELECT TRIM(WORKING_CODE) AS working_code, TRIM(REF_CODE) AS keyword FROM inst_name
+                                   WHERE TRIM(COALESCE(WORKING_CODE,''))<>'' AND TRIM(COALESCE(REF_CODE,''))<>'' AND TRIM(REF_CODE)<>TRIM(WORKING_CODE)";
+            $detected['keyword']='inst_name.INST_NAME'.($hasRef ? ' + REF_CODE' : '');
         }
         if ($kwSql==='') {
             $res=$db->query("SELECT TABLE_NAME t, GROUP_CONCAT(COLUMN_NAME) cols FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() GROUP BY TABLE_NAME
@@ -780,8 +786,16 @@ if ($action==='invs_extras') {
         $locSql=trim((string)($ex['location_sql'] ?? ''));
         $locFallbackSql='';
         $sidEsc=$db->real_escape_string($stockId);
+        $locFull=false; // true = แหล่งนี้คือตำแหน่งทั้งหมด (ยาที่ไม่มีแถว/LOC_CODE ว่างหรือ 0 = ไม่มีตำแหน่ง)
+        // v2.9.0 ตาราง sawee_location (WORKING_CODE + DEPT_ID + LOC_CODE) ที่ รพ.ดูแลเอง — ใช้เป็นแหล่งหลัก
+        if ($locSql==='' && tableHasColumn($db,'sawee_location','LOC_CODE') && tableHasColumn($db,'sawee_location','WORKING_CODE')) {
+            $locSql="SELECT TRIM(WORKING_CODE) AS working_code, TRIM(LOC_CODE) AS location FROM sawee_location"
+                .(tableHasColumn($db,'sawee_location','DEPT_ID') ? " WHERE TRIM(DEPT_ID)='{$sidEsc}'" : '')." ORDER BY working_code";
+            $detected['location']="sawee_location.LOC_CODE (คลัง {$stockId})";
+            $locFull=true;
+        }
         // ตาราง location ของ INVS: ตำแหน่งยาต่อคลัง (LOCATION_ID + WORKING_CODE + DEPT_ID) — ใช้ก่อน แล้วเติมที่ขาดจาก lot
-        if ($locSql==='' && tableHasColumn($db,'location','LOCATION_ID') && tableHasColumn($db,'location','WORKING_CODE')) {
+        elseif ($locSql==='' && tableHasColumn($db,'location','LOCATION_ID') && tableHasColumn($db,'location','WORKING_CODE')) {
             $locSql="SELECT TRIM(WORKING_CODE) AS working_code, TRIM(LOCATION_ID) AS location FROM location WHERE LOCATION_ID IS NOT NULL AND TRIM(LOCATION_ID)<>''"
                 .(tableHasColumn($db,'location','DEPT_ID') ? " AND DEPT_ID='{$sidEsc}'" : '')." ORDER BY working_code";
             $detected['location']="location.LOCATION_ID (คลัง {$stockId})";
@@ -801,16 +815,21 @@ if ($action==='invs_extras') {
                          GROUP BY TRIM(WORKING_CODE), TRIM(LOCATION) ORDER BY working_code, qty DESC";
                 $detected['location']="inv_md_c.LOCATION (คลัง {$stockId})";
             }
-        } else { $detected['location']='config.location_sql'; }
+        } elseif (trim((string)($ex['location_sql'] ?? ''))!=='') { $detected['location']='config.location_sql'; }
         $locations=[]; $seen=[];
         foreach (array_filter([$locSql,$locFallbackSql]) as $q) {
             $res=$db->query($q);
-            while ($r=$res->fetch_assoc()) { $wc=cleanText($r['working_code'] ?? ''); $lc=cleanText($r['location'] ?? ''); if ($wc==='' || $lc==='' || isset($seen[$wc])) continue; $seen[$wc]=true; $locations[]=['working_code'=>$wc,'location'=>$lc]; }
+            while ($r=$res->fetch_assoc()) {
+                $wc=cleanText($r['working_code'] ?? ''); $lc=cleanText($r['location'] ?? '');
+                if ($lc==='0') $lc='';
+                if ($wc==='' || ($lc==='' && !$locFull) || isset($seen[$wc])) continue;
+                $seen[$wc]=true; $locations[]=['working_code'=>$wc,'location'=>$lc];
+            }
             $res->free();
         }
         $db->close();
         logBridge($config,'INFO','INVS_EXTRAS',['admin_uid'=>$admin['uid'],'keywords'=>count($keywords),'locations'=>count($locations),'detected'=>$detected]);
-        respond(['ok'=>true,'action'=>'invs_extras','detected'=>$detected,'keywords'=>$keywords,'locations'=>$locations,'bridge_version'=>BRIDGE_VERSION]);
+        respond(['ok'=>true,'action'=>'invs_extras','detected'=>$detected,'keywords'=>$keywords,'locations'=>$locations,'location_full'=>$locFull,'bridge_version'=>BRIDGE_VERSION]);
     } catch (Throwable $e) {
         if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
         respondError('BRIDGE_ERROR',$e->getMessage(),500);

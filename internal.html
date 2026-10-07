@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.5.2"></script>
+  <script src="shared.js?v=6.6.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.5.2';
+      var need = '6.6.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -355,17 +355,26 @@
     const FormPrintModal = ({ ctx, req, onClose }) => {
       const [formNo, setFormNo] = useState(() => internalFormNoFor(req, ctx.reqs));
       const [formDate, setFormDate] = useState(() => safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at));
+      // v6.6 ผู้ลงนาม 4 จุด — ใบนี้ → ใบก่อนของหน่วยงาน → ผู้สร้าง/ผู้อนุมัติ
+      const [signers, setSigners] = useState(() => internalSignersFor(req, (ctx.reqs.filter(r => r.id !== req.id && Array.isArray(r.sign_people))
+        .sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people));
       const [busy, setBusy] = useState(false);
       const doPrint = async () => {
         setBusy(true);
         try {
+          let changed = false;
           if (formNo !== safeText(req.form_no) || formDate !== safeText(req.form_date)) {
-            try { await db.collection('internal_requisitions').doc(req.id).update({ form_no: safeText(formNo), form_date: formDate, fiscal_year: fiscalYearBEOfYmd(formDate) }); await ctx.reload(); }
+            try { await db.collection('internal_requisitions').doc(req.id).update({ form_no: safeText(formNo), form_date: formDate, fiscal_year: fiscalYearBEOfYmd(formDate) }); changed = true; }
             catch (e) { /* ใบที่อนุมัติแล้วผู้เบิกแก้ไม่ได้ — ใช้ค่าที่แก้เฉพาะการพิมพ์ครั้งนี้ */ }
           }
+          if (!sameSigners(signers, req.sign_people)) {
+            try { await db.collection('internal_requisitions').doc(req.id).update({ sign_people: signersForSave(signers) }); changed = true; }
+            catch (e) { ctx.showToast('พิมพ์ได้ แต่จำผู้ลงนามในใบนี้ไม่สำเร็จ: ' + (e?.message || e), 'warn'); }
+          }
+          if (changed) await ctx.reload();
           await printHtmlDocument(buildInternalReqFormHtml({
             req, formNo, formDate, deptName: req.dept_name || ctx.dept?.dept_name, drugTypes: ctx.drugTypes,
-            locOf: (id) => safeText(ctx.drugById.get(String(id))?.invs_location)
+            locOf: (id) => safeText(ctx.drugById.get(String(id))?.invs_location), signers
           }));
           await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_PRINT', 'internal_requisitions', req.id, { form_no: formNo });
           onClose();
@@ -373,13 +382,14 @@
         } finally { setBusy(false); }
       };
       return (
-        <Modal isOpen onClose={onClose} title="พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์" maxWidth="max-w-md">
+        <Modal isOpen onClose={onClose} title="พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์" maxWidth="max-w-xl">
           <div className="space-y-4">
             <label className="block"><span className="text-sm font-bold text-slate-600">เลขที่</span>
               <input id="form-no" value={formNo} onChange={e => setFormNo(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl font-mono" /></label>
             <label className="block"><span className="text-sm font-bold text-slate-600">วันที่</span>
               <input id="form-date" type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl" />
               <span className="text-xs text-slate-500">{thaiDateLong(formDate)}</span></label>
+            <InternalSignersEditor value={signers} onChange={setSigners} />
             <p className="text-xs text-slate-500">เลขที่สร้างอัตโนมัติ = ลำดับใบของหน่วยงานในปีงบประมาณ / ปีงบ (พ.ศ.) แก้ได้ก่อนพิมพ์</p>
             <div className="flex justify-end gap-2">
               <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button>
@@ -903,6 +913,12 @@ ORDER BY d.name`;
       const [filter, setFilter] = useState('all');
       const [search, setSearch] = useState('');
       const [sortBy, setSortBy] = useState('name');
+      // v6.6 ซ่อนหมวดที่ไม่ต้องเบิก (5 = ยาโครงการฯ, 6 = วัคซีน) — ไม่อยู่ในตาราง/ใบเบิก/ใบพิมพ์ · จำค่าไว้ในเครื่อง
+      const [hideTypes, setHideTypes] = useState(() => { try { const v = JSON.parse(localStorage.getItem('rxfill_ph_hide_types') || 'null'); if (Array.isArray(v)) return v.map(String); } catch (e) { /* storage blocked */ } return ['5', '6']; });
+      const toggleHideType = (t) => setHideTypes(prev => { const next = prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]; try { localStorage.setItem('rxfill_ph_hide_types', JSON.stringify(next)); } catch (e) { /* ignore */ } return next; });
+      // v6.6 ผู้ลงนาม 4 จุดท้ายใบ — บันทึกไปกับใบ (sign_people)
+      const [signers, setSigners] = useState(() => internalSignersFor(editReq || { created_by_name: safeText(ctx.currentUser?.name), created_by_position: safeText(ctx.currentUser?.position) },
+        (ctx.reqs.filter(r => r.kind === 'pharmacy' && r.id !== editReq?.id && Array.isArray(r.sign_people)).sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people));
       const [showUnmatched, setShowUnmatched] = useState(false);
       const [showEstimate, setShowEstimate] = useState(false); // v6.4 พิมพ์ประมาณการ (ไม่ส่ง VMI)
       const [roundTarget, setRoundTarget] = useState(true);     // ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ
@@ -945,7 +961,7 @@ ORDER BY d.name`;
       const patchRow = (id, patch) => setRowState(prev => { const m = new Map(prev); m.set(id, { ...(m.get(id) || {}), ...patch }); return m; });
 
       // รวมรายการ: มียอดใช้ + (ประวัติเบิก/มีสต็อก) + เพิ่มเอง
-      const derived = useMemo(() => {
+      const derivedAll = useMemo(() => {
         const ids = new Set([...rowState.keys(), ...usageByDrug.keys()]);
         if (showHistory) historyIds.forEach(id => ids.add(id));
         const out = [];
@@ -982,6 +998,8 @@ ORDER BY d.name`;
         });
         return out;
       }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue]);
+      const derived = useMemo(() => derivedAll.filter(r => !hideTypes.includes(String(r.base.type))), [derivedAll, hideTypes]);
+      const hiddenByType = useMemo(() => { const m = {}; derivedAll.forEach(r => { const t = String(r.base.type); if (hideTypes.includes(t)) m[t] = (m[t] || 0) + 1; }); return m; }, [derivedAll, hideTypes]);
 
       const visible = useMemo(() => {
         let rows = derived;
@@ -999,6 +1017,7 @@ ORDER BY d.name`;
         const sorted = [...rows];
         if (sortBy === 'value') sorted.sort((a, b) => b.value - a.value || a.base.name.localeCompare(b.base.name, 'th'));
         else if (sortBy === 'usage') sorted.sort((a, b) => (b.usage * b.base.price / safePackSize(b.base.packSize)) - (a.usage * a.base.price / safePackSize(a.base.packSize)));
+        else if (sortBy === 'loc') sorted.sort((a, b) => Number(a.base.type) - Number(b.base.type) || compareByLocation(a.drug?.invs_location, a.base.name, b.drug?.invs_location, b.base.name));
         else sorted.sort((a, b) => a.base.name.localeCompare(b.base.name, 'th'));
         return sorted;
       }, [derived, filter, search, sortBy]);
@@ -1127,7 +1146,7 @@ ORDER BY d.name`;
                   usage_source: usageMeta.source, usage_file: usageMeta.fileName || '', usage_fetched_at: usageMeta.fetchedAt || null,
                   round_days: roundDays, min_order_value: minOrderValue, prev_req_id: prevReq?.id || '', prev_period_to: lastPeriodTo || '', skipped_suggest_count: stats.skip,
                   zero_rows: zeroRows, unmatched: unmatched.slice(0, 300), unmatched_count: unmatched.length,
-                  suggested_item_count: stats.suggest, changed_item_count: stats.changed
+                  suggested_item_count: stats.suggest, changed_item_count: stats.changed, sign_people: signersForSave(signers)
                 } };
       };
       // บันทึกเก็บไว้ "รอส่ง" — ยังไม่เข้าคิวแอดมิน ไม่หักสต็อก กลับมาแก้/พิมพ์/ส่งได้ภายหลัง
@@ -1267,14 +1286,20 @@ ORDER BY d.name`;
               <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
                 <input type="checkbox" checked={showHistory} onChange={e => setShowHistory(e.target.checked)} className="w-4 h-4 accent-teal-600" /> แสดงยาที่เคยเบิก/มีสต็อก แม้ไม่มีการใช้
               </label>
+              {['5', '6'].map(t => (
+                <label key={t} className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer" title="ซ่อนจากตาราง ใบเบิก และใบพิมพ์">
+                  <input type="checkbox" id={`ph-hide-type-${t}`} checked={hideTypes.includes(t)} onChange={() => toggleHideType(t)} className="w-4 h-4 accent-teal-600" />
+                  ซ่อน{(ctx.drugTypes || DEFAULT_DRUG_TYPES)[t] || `หมวด ${t}`} (หมวด {t}){hiddenByType[t] ? <span className="text-xs text-slate-400">{fmtNum(hiddenByType[t])}</span> : null}
+                </label>
+              ))}
             </div>
             <div className="p-4 border-b grid gap-3 md:grid-cols-[1fr_1fr_auto] items-center">
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="กรองในตาราง: ชื่อยา / รหัส / icode" aria-label="กรองในตาราง" className="px-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-teal-500" />
               <DrugSearchBox ctx={ctx} excludeIds={rowIds} placeholder="+ เพิ่มยา / เวชภัณฑ์มิใช่ยา ที่ไม่มีในรายการ (ไม่มียอดจาก HOSxP — กรอกคงเหลือ/จำนวนจ่ายเอง หรือเว้นว่างไว้เขียนในกระดาษ)"
-                onPick={d => { patchRow(String(d.drug_id), { base: baseItemFromDrug(ctx, d), source: 'manual', dispenseManual: 0 }); setFilter('all'); setSearch(d.drug_name); }} />
+                onPick={d => { patchRow(String(d.drug_id), { base: baseItemFromDrug(ctx, d), source: 'manual', dispenseManual: 0 }); if (hideTypes.includes(String(d.type || '1'))) toggleHideType(String(d.type || '1')); setFilter('all'); setSearch(d.drug_name); }} />
               <div className="flex gap-2 items-center">
                 <select value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="เรียงตาม" className="p-2.5 border border-slate-300 rounded-xl text-sm">
-                  <option value="name">เรียงชื่อยา</option><option value="value">มูลค่าเบิก</option><option value="usage">มูลค่าที่ใช้</option>
+                  <option value="name">เรียงชื่อยา</option><option value="loc">หมวด + ตำแหน่งยา (แบบใบเบิก)</option><option value="value">มูลค่าเบิก</option><option value="usage">มูลค่าที่ใช้</option>
                 </select>
               </div>
             </div>
@@ -1374,18 +1399,18 @@ ORDER BY d.name`;
           {showEstimate && (() => {
             // v6.5 พิมพ์ใบเบิกห้องยาแบบเดียวกับใบจริง (หัวกระดาษ วันที่ ลายเซ็น) โดยยังไม่ส่งเข้าคิว/VMI
             const typesSrc = ctx.drugTypes || DEFAULT_DRUG_TYPES;
-            const rows = derived.filter(r => String(r.base.type) !== '6' && (r.usage > 0 || r.dispense > 0 || r.source === 'manual'));
+            const rows = derived.filter(r => r.usage > 0 || r.dispense > 0 || r.source === 'manual'); // หมวดที่ซ่อน (5/6) ถูกกรองออกแล้วใน derived
             const roundT = (r) => { const pack = safePackSize(r.base.packSize); return roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target; };
             const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source }));
             const cur = effEdit();
             const formNo = estForm.no;
             const formDate = estForm.date;
-            const fakeReq = { kind: 'pharmacy', dept_name: ctx.dept?.dept_name || '', note, items, created_by_name: safeText(ctx.currentUser?.name), created_by_position: safeText(ctx.currentUser?.position) };
+            const fakeReq = { kind: 'pharmacy', dept_name: ctx.dept?.dept_name || '', note, items, created_by_name: safeText(ctx.currentUser?.name), created_by_position: safeText(ctx.currentUser?.position), sign_people: signers };
             const locOf = (id) => safeText(ctx.drugById.get(String(id))?.invs_location);
             const head = ['ที่', 'ชื่อยา/เวชภัณฑ์', 'หน่วย', 'บรรจุ', 'ยอดใช้', 'ยอดเหลือ', 'Target Stock', 'จำนวนจ่าย', 'ราคา/หน่วย', 'มูลค่า (บาท)', 'คงเหลือ', 'รหัส'];
             const aoa = () => {
               const out = [[`ใบเบิกวัสดุ/เวชภัณฑ์ — ${fakeReq.dept_name}`], [`เลขที่ ${formNo || '-'} · วันที่ ${thaiDateLong(formDate)} · ยอดใช้ ${thaiDateLong(from)} ถึง ${thaiDateLong(to)} (${calcDays} วัน) · จำนวนเป็นหน่วยย่อย`], [], head];
-              const sorted = items.slice().sort((a, b) => Number(a.type) - Number(b.type) || (locOf(a.drugId) || 'ฮ').localeCompare(locOf(b.drugId) || 'ฮ', 'th', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'th'));
+              const sorted = items.slice().sort((a, b) => Number(a.type) - Number(b.type) || compareByLocation(locOf(a.drugId), a.name, locOf(b.drugId), b.name));
               let i = 0, lastType = null, total = 0;
               sorted.forEach(r => {
                 if (String(r.type) !== lastType) { out.push([typesSrc[r.type] || `หมวด ${r.type}`]); lastType = String(r.type); }
@@ -1397,7 +1422,7 @@ ORDER BY d.name`;
             };
             const fileBase = `ใบเบิก_${safeText(fakeReq.dept_name).replace(/[\\/:*?"<>|\s]+/g, '_')}_${safeText(formNo).replace(/\//g, '-') || toYmd(new Date())}`;
             const maybeSave = async () => { if (keepDraft) await saveDraft({ quiet: true }); };
-            const doPrint = async () => { await maybeSave(); await printHtmlDocument(buildInternalReqFormHtml({ req: fakeReq, formNo, formDate, deptName: fakeReq.dept_name, drugTypes: ctx.drugTypes, locOf, blankQty: !fillQty, includeUsed: true })); };
+            const doPrint = async () => { await maybeSave(); await printHtmlDocument(buildInternalReqFormHtml({ req: fakeReq, formNo, formDate, deptName: fakeReq.dept_name, drugTypes: ctx.drugTypes, locOf, blankQty: !fillQty, includeUsed: true, signers })); };
             const doXlsx = async () => {
               if (typeof XLSX === 'undefined' || !XLSX.utils) return ctx.showToast('โหลดตัวสร้าง Excel ไม่สำเร็จ — ใช้ CSV แทน', 'error');
               await maybeSave();
@@ -1426,6 +1451,7 @@ ORDER BY d.name`;
                     <label className="flex items-start gap-2 text-sm font-bold text-slate-700 cursor-pointer"><input id="ph-est-round" type="checkbox" checked={roundTarget} onChange={e => setRoundTarget(e.target.checked)} className="w-4 h-4 mt-0.5" /><span>ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ<span className="block text-xs font-normal text-slate-500">เช่น 1,250 เม็ด บรรจุ 1,000 → 2,000</span></span></label>
                     <label className="flex items-start gap-2 text-sm font-bold text-slate-700 cursor-pointer"><input id="ph-est-keep" type="checkbox" checked={keepDraft && !sent} disabled={sent} onChange={e => setKeepDraft(e.target.checked)} className="w-4 h-4 mt-0.5" /><span>บันทึกเก็บไว้ใน "รอส่ง" ด้วย<span className="block text-xs font-normal text-slate-500">กลับมาแก้ไข/พิมพ์ซ้ำ/ส่งได้จาก "ใบเบิกของฉัน"{cur?.status === 'Draft' ? ' · ใบนี้บันทึกไว้แล้ว จะอัปเดตใบเดิม' : ''}</span></span></label>
                   </div>
+                  <InternalSignersEditor value={signers} onChange={setSigners} />
                   <div className="text-xs text-slate-500">{items.length} รายการ · มูลค่า {fmtMoney(items.reduce((s, it) => s + internalItemValue(it), 0))} บาท</div>
                   <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
                     {!sent && <button id="ph-est-save" onClick={async () => { const id = await saveDraft(); if (id) setShowEstimate(false); }} disabled={!!busy} className="px-4 py-2.5 rounded-xl bg-white border-2 border-teal-600 text-teal-700 font-bold disabled:opacity-40"><i className="fa-solid fa-floppy-disk mr-2"></i>บันทึกอย่างเดียว</button>}
@@ -1705,7 +1731,7 @@ ORDER BY d.name`;
             location: safeText(drug.invs_location), usage, autoUsage, dailyAvg, projected, autoPacks, packs: ed.packs ?? autoPacks,
             usageEdited: ed.usage !== undefined, packsEdited: ed.packs !== undefined, discontinued: isDrugDiscontinuedAll(drug), icodes: u.icodes, manualIcodes: u.manualIcodes || [] });
         });
-        return out.sort((a, b) => (a.location || 'ฮ').localeCompare(b.location || 'ฮ', 'th') || a.name.localeCompare(b.name, 'th'));
+        return out.sort((a, b) => compareByLocation(a.location, a.name, b.location, b.name));
       }, [matched, meta, projectDays, bufferPct, ctx.drugById, edits]);
       const shown = useMemo(() => { const k = normalizeForMatch(search); return k ? rows.filter(r => normalizeForMatch(r.name + ' ' + r.drugId).includes(k)) : rows; }, [rows, search]);
       const total = rows.reduce((s, r) => s + r.packs * r.price, 0);

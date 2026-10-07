@@ -1492,6 +1492,7 @@ ORDER BY d.name`;
 
     // ===== สต็อกห้องยา (นับเริ่มต้น / ปรับยอด) =====
     // ===== v6.3 ประมาณการใช้ยา (ห้องยา): ดึงยอดใช้ HOSxP โดยไม่สร้างใบเบิก แล้วแปลงเป็นหน่วยใหญ่ + พิมพ์ได้ =====
+    // v6.3.1: แก้ตัวเลขรายแถวได้ · จับคู่ icode ที่ไม่ match ทีละตัว · ส่งออก PDF / Excel / CSV
     const UsageEstimateView = ({ ctx }) => {
       const today = toYmd(new Date());
       const yesterday = addDaysYmd(today, -1);
@@ -1509,15 +1510,19 @@ ORDER BY d.name`;
       const [busy, setBusy] = useState('');
       const [search, setSearch] = useState('');
       const [showUnmatched, setShowUnmatched] = useState(false);
+      const [edits, setEdits] = useState({});        // drugId → { usage?, packs? } ตัวเลขที่ผู้ใช้แก้
+      const [extraMap, setExtraMap] = useState({});  // icode → drugId จับคู่เพิ่มเฉพาะตัวที่เลือก (ใช้ในหน้านี้)
+      const [saveMap, setSaveMap] = useState(true);  // แอดมิน: บันทึกการจับคู่ลง master ด้วย
       const fileRef = useRef(null);
       const days = from && to && to >= from ? daysBetweenInclusive(from, to) : 0;
+      const resetWork = () => { setEdits({}); setExtraMap({}); };
 
       const fetchHosxp = async () => {
         if (!days) return ctx.showToast('ช่วงวันที่ไม่ถูกต้อง', 'error');
         setBusy('bridge');
         try {
           const data = await callInvsBridge('hosxp_usage', '', { date_from: from, date_to: to });
-          setRaw(data.rows || []); setMeta({ source: 'HOSxP', from, to, days: data.days || days });
+          setRaw(data.rows || []); setMeta({ source: 'HOSxP', from, to, days: data.days || days }); resetWork();
           ctx.showToast(data.count ? `ดึงยอดใช้ ${fmtNum(data.count)} รายการแล้ว` : 'HOSxP คืนข้อมูล 0 รายการ — ตรวจช่วงวันที่', data.count ? 'success' : 'warn');
         } catch (e) { ctx.showToast((e?.message || String(e)) + ' — ถ้าเครื่องนี้ไม่มี Bridge ใช้ "นำเข้าไฟล์" แทน', 'error'); }
         finally { setBusy(''); }
@@ -1527,31 +1532,100 @@ ORDER BY d.name`;
         if (!days) return ctx.showToast('เลือกช่วงวันที่ให้ตรงกับไฟล์ก่อน', 'error');
         setBusy('file');
         parseTabularFile(file, (rows) => {
-          try { const parsed = parseUsageFileRows(rows); setRaw(parsed.rows); setMeta({ source: 'ไฟล์ ' + file.name, from, to, days }); ctx.showToast(`อ่านไฟล์ ${fmtNum(parsed.rows.length)} รายการ`); }
+          try { const parsed = parseUsageFileRows(rows); setRaw(parsed.rows); setMeta({ source: 'ไฟล์ ' + file.name, from, to, days }); resetWork(); ctx.showToast(`อ่านไฟล์ ${fmtNum(parsed.rows.length)} รายการ`); }
           catch (e) { ctx.showToast(e.message, 'error'); }
           finally { setBusy(''); if (fileRef.current) fileRef.current.value = ''; }
         }, (e) => { setBusy(''); ctx.showToast('อ่านไฟล์ไม่สำเร็จ: ' + (e?.message || e), 'error'); }, { header: true });
       };
 
-      const matched = useMemo(() => raw ? matchUsage(raw, ctx.drugs) : null, [raw, ctx.drugs]);
+      // จับคู่ตาม master + จับคู่เพิ่มที่ผู้ใช้เลือก (เฉพาะ icode ที่เลือก)
+      const matched = useMemo(() => {
+        if (!raw) return null;
+        const base = matchUsage(raw, ctx.drugs);
+        const byDrug = new Map(base.byDrug);
+        const unmatched = [];
+        base.unmatched.forEach(u => {
+          const target = extraMap[u.icode];
+          if (!target) { unmatched.push(u); return; }
+          const cur = byDrug.get(target) || { opd: 0, ipd: 0, icodes: [], hosxpNames: [], hosxpUnits: '' };
+          const rawRow = raw.find(r => String(r.icode) === String(u.icode)) || {};
+          byDrug.set(target, { ...cur, opd: cur.opd + toNonNegativeNumber(rawRow.opd_qty), ipd: cur.ipd + toNonNegativeNumber(rawRow.ipd_qty),
+            icodes: [...cur.icodes, String(u.icode)], manualIcodes: [...(cur.manualIcodes || []), String(u.icode)] });
+        });
+        return { byDrug, unmatched };
+      }, [raw, ctx.drugs, extraMap]);
+
       const rows = useMemo(() => {
         if (!matched || !meta) return [];
         const out = [];
         matched.byDrug.forEach((u, id) => {
           const drug = ctx.drugById.get(id); if (!drug) return;
-          const usage = Math.round((u.opd + u.ipd) * getHosxpMultiplier(drug) * 1000) / 1000;
-          if (usage <= 0) return;
+          const autoUsage = Math.round((u.opd + u.ipd) * getHosxpMultiplier(drug) * 1000) / 1000;
+          const ed = edits[id] || {};
+          const usage = ed.usage ?? autoUsage;
+          if (usage <= 0 && ed.packs === undefined) return;
           const pack = safePackSize(drug.pack_size);
           const dailyAvg = usage / Math.max(1, meta.days);
           const projected = Math.ceil(dailyAvg * Math.max(0, toNonNegativeNumber(projectDays)) * (1 + toNonNegativeNumber(bufferPct) / 100) - 1e-9);
+          const autoPacks = Math.ceil(projected / pack - 1e-9);
           out.push({ drugId: id, name: safeText(drug.drug_name), unit: ctx.unitName(drug), packSize: pack, price: toNonNegativeNumber(drug.price), type: String(drug.type || '1'),
-            location: safeText(drug.invs_location), usage, dailyAvg, projected, packs: Math.ceil(projected / pack - 1e-9), discontinued: isDrugDiscontinuedAll(drug), icodes: u.icodes });
+            location: safeText(drug.invs_location), usage, autoUsage, dailyAvg, projected, autoPacks, packs: ed.packs ?? autoPacks,
+            usageEdited: ed.usage !== undefined, packsEdited: ed.packs !== undefined, discontinued: isDrugDiscontinuedAll(drug), icodes: u.icodes, manualIcodes: u.manualIcodes || [] });
         });
         return out.sort((a, b) => (a.location || 'ฮ').localeCompare(b.location || 'ฮ', 'th') || a.name.localeCompare(b.name, 'th'));
-      }, [matched, meta, projectDays, bufferPct, ctx.drugById]);
+      }, [matched, meta, projectDays, bufferPct, ctx.drugById, edits]);
       const shown = useMemo(() => { const k = normalizeForMatch(search); return k ? rows.filter(r => normalizeForMatch(r.name + ' ' + r.drugId).includes(k)) : rows; }, [rows, search]);
       const total = rows.reduce((s, r) => s + r.packs * r.price, 0);
+      const editedCount = Object.keys(edits).length;
 
+      const setEdit = (id, key, v) => setEdits(prev => {
+        const cur = { ...(prev[id] || {}) };
+        if (v === null || v === undefined) delete cur[key]; else cur[key] = v;
+        const next = { ...prev };
+        if (Object.keys(cur).length) next[id] = cur; else delete next[id];
+        return next;
+      });
+      // แก้ยอดใช้ → คำนวณจำนวนเบิกใหม่ (ยกเลิกจำนวนเบิกที่แก้มือของแถวนั้น)
+      const editUsage = (id, v) => setEdits(prev => { const cur = { ...(prev[id] || {}) }; delete cur.packs; if (v === null) delete cur.usage; else cur.usage = v; const next = { ...prev }; if (Object.keys(cur).length) next[id] = cur; else delete next[id]; return next; });
+
+      const mapUnmatched = async (u, drug) => {
+        setExtraMap(m => ({ ...m, [u.icode]: String(drug.drug_id) }));
+        if (ctx.isAdmin && saveMap) {
+          try {
+            const codes = String(drug.hosxp_code || '').split(/[,;\s]+/).filter(Boolean);
+            if (!codes.includes(String(u.icode))) codes.push(String(u.icode));
+            await db.collection('master_drugs').doc(String(drug.drug_id)).update({ hosxp_code: codes.join(','), hosxp_mapped_at: firebase.firestore.FieldValue.serverTimestamp(), hosxp_mapped_by: safeText(ctx.currentUser.name) });
+            await writeAuditLog(ctx.currentUser, 'HOSXP_CODE_MAP', 'master_drugs', drug.drug_id, { icode: u.icode, from: 'usage_estimate' });
+            ctx.showToast(`จับคู่ ${u.icode} → ${drug.drug_name} และบันทึกลง master แล้ว`);
+            return;
+          } catch (e) { ctx.showToast('จับคู่ในหน้านี้แล้ว แต่บันทึกลง master ไม่สำเร็จ: ' + e.message, 'warn'); return; }
+        }
+        ctx.showToast(`จับคู่ ${u.icode} → ${drug.drug_name} (ใช้ในหน้านี้)`);
+      };
+      const unmapIcode = (icode) => setExtraMap(m => { const n = { ...m }; delete n[icode]; return n; });
+
+      // ----- ส่งออก -----
+      const exportHeader = ['ที่', 'รหัส INVS', 'รายการ', 'หมวด', 'ตำแหน่ง', 'หน่วยย่อย', 'ขนาดบรรจุ', 'ใช้จริง (หน่วยย่อย)', 'ใช้จริง (หน่วยใหญ่)', 'เฉลี่ย/วัน', `ประมาณการ ${projectDays} วัน (หน่วยย่อย)`, 'ต้องเบิก (หน่วยใหญ่)', 'ราคา/หน่วยใหญ่', 'มูลค่า (บาท)', 'แก้ไขเอง', 'icode HOSxP'];
+      const exportRows = () => shown.map((r, i) => [i + 1, r.drugId, r.name, (ctx.drugTypes || DEFAULT_DRUG_TYPES)[r.type] || r.type, r.location, r.unit, r.packSize,
+        r.usage, Math.round(r.usage / r.packSize * 100) / 100, Math.round(r.dailyAvg * 10) / 10, r.projected, r.packs, r.price, Math.round(r.packs * r.price * 100) / 100,
+        [r.usageEdited ? 'ยอดใช้' : '', r.packsEdited ? 'จำนวนเบิก' : ''].filter(Boolean).join(', '), (r.icodes || []).join(',')]);
+      const fileBase = () => `ประมาณการใช้ยา_${safeText(ctx.dept?.dept_name || 'ห้องยา').replace(/[\\/:*?"<>|\s]+/g, '_')}_${meta.from}_${meta.to}`;
+      const titleLines = () => [[`ประมาณการใช้ยา — ${ctx.dept?.dept_name || ''}`], [`ยอดใช้ ${thaiDateLong(meta.from)} ถึง ${thaiDateLong(meta.to)} (${meta.days} วัน) · ประมาณการ ${projectDays} วัน${bufferPct ? ` + เผื่อ ${bufferPct}%` : ''} · ไม่ใช่ใบเบิก`], []];
+      const exportXlsx = () => {
+        if (typeof XLSX === 'undefined' || !XLSX.utils) return ctx.showToast('โหลดตัวสร้าง Excel ไม่สำเร็จ — ใช้ CSV แทน', 'error');
+        const aoa = [...titleLines(), exportHeader, ...exportRows(), [], ['', '', `รวม ${shown.length} รายการ`, '', '', '', '', '', '', '', '', '', '', Math.round(shown.reduce((s, r) => s + r.packs * r.price, 0) * 100) / 100]];
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [4, 10, 34, 14, 9, 9, 8, 12, 11, 9, 14, 12, 11, 12, 12, 14].map(w => ({ wch: w }));
+        const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'ประมาณการ');
+        if (matched?.unmatched?.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['icode', 'ชื่อใน HOSxP', 'หน่วย', 'จำนวน'], ...matched.unmatched.map(u => [u.icode, u.name, u.units, u.qty])]), 'จับคู่ไม่ได้');
+        XLSX.writeFile(wb, fileBase() + '.xlsx');
+      };
+      const exportCsv = () => {
+        const esc = v => { const t = String(v ?? ''); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+        const blob = new Blob(['﻿' + [...titleLines(), exportHeader, ...exportRows()].map(r => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileBase() + '.csv'; document.body.appendChild(a); a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      };
       const print = () => printHtmlDocument(buildUsageEstimateHtml({
         rows: shown, deptName: ctx.dept?.dept_name || '', from: meta.from, to: meta.to, days: meta.days, projectDays, bufferPct,
         drugTypes: ctx.drugTypes, unmatched: matched?.unmatched?.length || 0
@@ -1561,7 +1635,7 @@ ORDER BY d.name`;
         <div className="space-y-5 animate-fade-in">
           <div>
             <h2 className="text-2xl font-extrabold text-slate-800">ประมาณการใช้ยา</h2>
-            <p className="text-sm text-slate-500">ดึงยอดใช้จริงจาก HOSxP มาคำนวณปริมาณที่ต้องใช้ล่วงหน้า แปลงเป็นหน่วยใหญ่ (÷ ขนาดบรรจุ) และพิมพ์ได้ — <b>ไม่สร้าง/ไม่ส่งใบเบิก</b> และไม่แก้สต็อก</p>
+            <p className="text-sm text-slate-500">ดึงยอดใช้จริงจาก HOSxP มาคำนวณปริมาณที่ต้องใช้ล่วงหน้า แปลงเป็นหน่วยใหญ่ (÷ ขนาดบรรจุ) แก้ตัวเลขได้ และส่งออกได้ — <b>ไม่สร้าง/ไม่ส่งใบเบิก</b> และไม่แก้สต็อก</p>
           </div>
           <div className="bg-white rounded-2xl border p-4 flex flex-wrap items-end gap-3">
             <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">ยอดใช้ตั้งแต่</span><input id="est-from" type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} className="p-2.5 border rounded-xl" /></label>
@@ -1579,37 +1653,70 @@ ORDER BY d.name`;
             <div className="bg-white rounded-2xl border p-10 text-center text-slate-400">เลือกช่วงวันที่แล้วกด "ดึงยอดใช้จาก HOSxP"</div>
           ) : (
             <div className="bg-white rounded-2xl border overflow-hidden">
-              <div className="p-4 flex flex-wrap items-center gap-3 border-b">
-                <div className="text-sm text-slate-600">ยอดใช้ {thaiDateShort(meta.from)} – {thaiDateShort(meta.to)} ({meta.days} วัน, {meta.source}) · <b>{rows.length}</b> รายการ · มูลค่าประมาณ <b>{fmtMoney(total)}</b> บาท</div>
-                {matched?.unmatched?.length > 0 && <button onClick={() => setShowUnmatched(v => !v)} className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">จับคู่ไม่ได้ {matched.unmatched.length} รายการ</button>}
-                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="กรอง: ชื่อยา / รหัส" aria-label="กรองรายการประมาณการ" className="ml-auto p-2 border rounded-xl text-sm w-56" />
-                <button id="est-print" onClick={print} disabled={!shown.length} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-print mr-2"></i>พิมพ์</button>
+              <div className="p-4 flex flex-wrap items-center gap-2 border-b">
+                <div className="text-sm text-slate-600 mr-2">ยอดใช้ {thaiDateShort(meta.from)} – {thaiDateShort(meta.to)} ({meta.days} วัน, {meta.source}) · <b>{rows.length}</b> รายการ · มูลค่าประมาณ <b>{fmtMoney(total)}</b> บาท</div>
+                {matched?.unmatched?.length > 0 && <button id="est-unmatched" onClick={() => setShowUnmatched(v => !v)} className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5"><i className="fa-solid fa-link mr-1"></i>จับคู่ไม่ได้ {matched.unmatched.length} รายการ</button>}
+                {editedCount > 0 && <button onClick={() => setEdits({})} className="text-xs font-bold text-slate-600 bg-slate-100 rounded-lg px-2.5 py-1.5"><i className="fa-solid fa-rotate-left mr-1"></i>คืนค่าที่แก้ ({editedCount})</button>}
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="กรอง: ชื่อยา / รหัส" aria-label="กรองรายการประมาณการ" className="ml-auto p-2 border rounded-xl text-sm w-52" />
+                <div className="flex gap-1.5" role="group" aria-label="ส่งออก">
+                  <button id="est-print" onClick={print} disabled={!shown.length} title="พิมพ์ หรือเลือก 'บันทึกเป็น PDF' ในหน้าต่างพิมพ์" className="px-3 py-2 rounded-xl bg-slate-800 text-white font-bold text-sm disabled:opacity-40"><i className="fa-solid fa-file-pdf mr-1.5"></i>พิมพ์ / PDF</button>
+                  <button id="est-xlsx" onClick={exportXlsx} disabled={!shown.length} className="px-3 py-2 rounded-xl bg-emerald-600 text-white font-bold text-sm disabled:opacity-40"><i className="fa-solid fa-file-excel mr-1.5"></i>Excel</button>
+                  <button id="est-csv" onClick={exportCsv} disabled={!shown.length} className="px-3 py-2 rounded-xl bg-white border font-bold text-sm text-slate-700 disabled:opacity-40"><i className="fa-solid fa-file-csv mr-1.5"></i>CSV</button>
+                </div>
               </div>
-              {showUnmatched && <div className="px-4 py-3 bg-amber-50 text-xs text-amber-900 border-b max-h-40 overflow-auto">{matched.unmatched.map(u => <div key={u.icode}>{u.icode} · {u.name} · {fmtNum(u.qty)} {u.units}</div>)}</div>}
+              {showUnmatched && matched?.unmatched?.length > 0 && (
+                <div className="px-4 py-3 bg-amber-50/60 border-b space-y-2">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-amber-900">
+                    <span><b>ยา HOSxP ที่ยังไม่มีรหัส INVS</b> — เลือกยาให้เฉพาะตัวที่ต้องการ ยอดใช้จะถูกรวมเข้าตารางทันที</span>
+                    {ctx.isAdmin && <label className="inline-flex items-center gap-1.5 font-bold"><input type="checkbox" checked={saveMap} onChange={e => setSaveMap(e.target.checked)} /> บันทึกการจับคู่ลง master ด้วย (ครั้งหน้าจับคู่อัตโนมัติ)</label>}
+                    {!ctx.isAdmin && <span className="text-amber-700">การจับคู่ใช้ในหน้านี้เท่านั้น — ถ้าต้องการให้จำถาวร แจ้งแอดมิน</span>}
+                  </div>
+                  <div className="max-h-72 overflow-auto rounded-xl border border-amber-200 bg-white divide-y">
+                    {matched.unmatched.map(u => (
+                      <div key={u.icode} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+                        <div className="min-w-[14rem] flex-1"><div className="font-semibold">{u.name || '-'}</div><div className="text-[11px] text-slate-400 font-mono">icode {u.icode} · {fmtNum(u.qty)} {u.units}</div></div>
+                        <div className="w-80 max-w-full" data-icode={u.icode}><DrugSearchBox ctx={ctx} placeholder="ค้นหายา INVS เพื่อจับคู่..." onPick={d => mapUnmatched(u, d)} /></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {Object.keys(extraMap).length > 0 && (
+                <div className="px-4 py-2 border-b text-xs text-slate-600 flex flex-wrap gap-2 items-center">
+                  <span className="font-bold">จับคู่เพิ่มในหน้านี้:</span>
+                  {Object.entries(extraMap).map(([ic, id]) => (
+                    <span key={ic} className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-800 rounded-full pl-2 pr-1 py-0.5">{ic} → {ctx.drugById.get(id)?.drug_name || id}
+                      <button onClick={() => unmapIcode(ic)} aria-label={`ยกเลิกการจับคู่ ${ic}`} className="w-5 h-5 rounded-full hover:bg-indigo-200">×</button></span>
+                  ))}
+                </div>
+              )}
               <div className="overflow-x-auto">
                 <table id="est-table" className="w-full text-sm">
                   <thead className="bg-slate-50 text-xs text-slate-500"><tr>
                     <th className="p-2 text-left">รายการ</th><th className="p-2 text-left">หน่วย / บรรจุ</th>
-                    <th className="p-2 text-right">ใช้จริง (หน่วยย่อย)</th><th className="p-2 text-right">ใช้จริง (หน่วยใหญ่)</th><th className="p-2 text-right">เฉลี่ย/วัน</th>
-                    <th className="p-2 text-right">ประมาณการ {projectDays} วัน</th><th className="p-2 text-right bg-teal-50 text-teal-800">ต้องเบิก (หน่วยใหญ่)</th><th className="p-2 text-right">มูลค่า</th>
+                    <th className="p-2 text-right">ใช้จริง (หน่วยย่อย) <i className="fa-solid fa-pen text-[9px]"></i></th><th className="p-2 text-right">ใช้จริง (หน่วยใหญ่)</th><th className="p-2 text-right">เฉลี่ย/วัน</th>
+                    <th className="p-2 text-right">ประมาณการ {projectDays} วัน</th><th className="p-2 text-right bg-teal-50 text-teal-800">ต้องเบิก (หน่วยใหญ่) <i className="fa-solid fa-pen text-[9px]"></i></th><th className="p-2 text-right">มูลค่า</th>
                   </tr></thead>
                   <tbody>
                     {!shown.length && <tr><td colSpan="8" className="p-8 text-center text-slate-400">ไม่มีรายการ</td></tr>}
                     {shown.map(r => (
                       <tr key={r.drugId} className={`border-t ${r.discontinued ? 'text-slate-400' : ''}`}>
-                        <td className="p-2"><div className="font-semibold">{r.name}</div><div className="text-[11px] text-slate-400 font-mono">{r.drugId}{r.location ? ` · ${r.location}` : ''}{r.discontinued ? ' · ยกเลิกใช้' : ''}</div></td>
+                        <td className="p-2"><div className="font-semibold">{r.name}</div><div className="text-[11px] text-slate-400 font-mono">{r.drugId}{r.location ? ` · ${r.location}` : ''}{r.discontinued ? ' · ยกเลิกใช้' : ''}{r.manualIcodes.length ? <span className="ml-1 text-indigo-600 font-sans font-bold">+จับคู่ {r.manualIcodes.join(',')}</span> : null}</div></td>
                         <td className="p-2 text-xs">{r.unit}{r.packSize > 1 ? ` · บรรจุ ${fmtNum(r.packSize)}` : ''}</td>
-                        <td className="p-2 text-right tabular-nums">{fmtNum(r.usage)}</td>
+                        <td className="p-2 text-right"><NumCell value={r.usage} touched={r.usageEdited} ariaLabel={`ยอดใช้ ${r.name}`} onCommit={v => editUsage(r.drugId, v === null ? null : v)} />
+                          {r.usageEdited && <div className="text-[10px] text-slate-400">เดิม {fmtNum(r.autoUsage)}</div>}</td>
                         <td className="p-2 text-right tabular-nums">{(r.usage / r.packSize).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
                         <td className="p-2 text-right tabular-nums">{r.dailyAvg.toLocaleString('th-TH', { maximumFractionDigits: 1 })}</td>
                         <td className="p-2 text-right tabular-nums">{fmtNum(r.projected)}</td>
-                        <td className="p-2 text-right tabular-nums font-extrabold bg-teal-50/60 text-teal-900">{fmtNum(r.packs)}</td>
+                        <td className="p-2 text-right bg-teal-50/60"><NumCell value={r.packs} touched={r.packsEdited} ariaLabel={`ต้องเบิก ${r.name}`} className="font-extrabold" onCommit={v => setEdit(r.drugId, 'packs', v === null ? null : Math.round(v * 100) / 100)} />
+                          {r.packsEdited && <div className="text-[10px] text-slate-400">คำนวณ {fmtNum(r.autoPacks)}</div>}</td>
                         <td className="p-2 text-right tabular-nums">{fmtMoney(r.packs * r.price)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <div className="px-4 py-2 text-[11px] text-slate-400 border-t">ช่องที่มีรูปดินสอแก้ได้ (Enter เพื่อยืนยัน · ลบให้ว่างเพื่อกลับเป็นค่าที่คำนวณ) · ตัวเลขที่แก้ใช้เฉพาะหน้านี้และในไฟล์ที่ส่งออก ไม่บันทึกลงระบบ</div>
             </div>
           )}
         </div>

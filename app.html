@@ -212,11 +212,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.3.0"></script>
+  <script src="shared.js?v=6.4.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.3.0';
+      var need = '6.4.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1870,6 +1870,14 @@ const CreateReqView = ({ ctx, round = null }) => {
       const [editingActualDrugId, setEditingActualDrugId] = useState(null);
       const [focusDrugId, setFocusDrugId] = useState(null);
       const [targetHelpData, setTargetHelpData] = useState(null);
+      // v6.4 ผู้ป่วย NCDs ออกหน่วย (จาก Sawee Refer) ที่นัดในเดือนของใบเบิกนี้
+      const [ncdsRounds, setNcdsRounds] = useState([]);
+      useEffect(() => {
+        let alive = true;
+        if (!hospId) return;
+        loadNcdsRounds(ctx, hospId, {}).then(rows => { if (alive) setNcdsRounds(rows || []); }).catch(() => {});
+        return () => { alive = false; };
+      }, [hospId]);
 
       useEffect(() => {
         if (!editingReq?.is_printed) return;
@@ -2054,6 +2062,49 @@ const CreateReqView = ({ ctx, round = null }) => {
         if (delta < -0.000001) return { type: 'less', qty: Math.abs(delta) };
         return null;
       };
+
+      // ----- v6.4 ปรับค่าผู้ป่วย NCDs ออกหน่วย -----
+      // รอบออกหน่วยที่อยู่ในช่วงใบเบิกนี้ (ตั้งแต่วันนี้ ถึงสิ้นเดือนที่เบิก) → แสดงยอดใช้ของผู้ป่วยที่นัด และบวกเป็น "ขอเพิ่ม" ในหมวดยาโรคเรื้อรัง
+      const ncdsWindow = useMemo(() => {
+        const last = new Date(currentYear, currentMonth, 0);
+        return { from: toYmd(new Date()), to: toYmd(last) };
+      }, [currentMonth, currentYear]);
+      const ncdsEligible = useMemo(() => ncdsRounds.filter(r => String(r.round_date) >= ncdsWindow.from && String(r.round_date) <= ncdsWindow.to)
+        .sort((a, b) => String(a.round_date).localeCompare(String(b.round_date))), [ncdsRounds, ncdsWindow]);
+      const ncdsByDrug = useMemo(() => {
+        const idx = buildHosxpIndex(ctx.appDb.drugs);
+        const m = new Map();
+        ncdsEligible.forEach(r => (r.items || []).forEach(it => {
+          const drug = it.icode ? idx.get(String(it.icode)) : null;
+          if (!drug) return;
+          const id = String(drug.drug_id);
+          const qty = Math.ceil(toNonNegativeNumber(it.qty_needed) * getHosxpMultiplier(drug));
+          const cur = m.get(id) || { qty: 0, patients: 0, dates: [] };
+          cur.qty += qty; cur.patients += toNonNegativeNumber(it.patients);
+          if (!cur.dates.includes(r.round_date)) cur.dates.push(r.round_date);
+          m.set(id, cur);
+        }));
+        return m;
+      }, [ncdsEligible, ctx.appDb.drugs]);
+      const ncdsDatesLabel = ncdsEligible.map(r => ncdsThaiDate(r.round_date)).join(', ');
+      const ncdsAppliedCount = items.filter(i => toNonNegativeNumber(i.ncdsOutreachQty) > 0).length;
+      const applyNcdsOutreach = () => {
+        let applied = 0;
+        setWorkingItems(prev => prev.map(item => {
+          const d = ncdsByDrug.get(String(item.drugId));
+          if (!d || item.isDiscontinued || String(item.type) === '6') return item;
+          applied++;
+          const base = recalcWorkingItem(item, { manualQtyOverride: false });
+          return { ...recalcWorkingItem(base, { finalRequestedQty: toNonNegativeNumber(base.systemSuggestedQty) + d.qty, manualQtyOverride: true }), ncdsOutreachQty: d.qty, ncdsOutreachDates: d.dates, ncdsOutreachPatients: d.patients };
+        }));
+        const missing = [...ncdsByDrug.keys()].filter(id => !items.some(i => String(i.drugId) === id)).length;
+        ctx.showToast(`ปรับยอดผู้ป่วยออกหน่วย ${ncdsDatesLabel} แล้ว${missing ? ` · ยา ${missing} รายการยังไม่อยู่ในใบเบิก (เพิ่มเองได้ที่ "เพิ่มรายการยา")` : ''}`);
+      };
+      const clearNcdsOutreach = () => setWorkingItems(prev => prev.map(item => {
+        if (!toNonNegativeNumber(item.ncdsOutreachQty)) return item;
+        const { ncdsOutreachQty, ncdsOutreachDates, ncdsOutreachPatients, ...rest } = item;
+        return recalcWorkingItem(rest, { manualQtyOverride: false });
+      }));
 
       const getLocalFuzzyCache = () => {
         try { return JSON.parse(localStorage.getItem('sawee_rxfill_fuzzy_cache_v1') || '{}') || {}; }
@@ -2344,7 +2395,8 @@ const CreateReqView = ({ ctx, round = null }) => {
                 sourceImports: Array.isArray(item.sourceImports) ? item.sourceImports.map(src => ({ rawName: safeText(src?.rawName), rawUsage: toNonNegativeNumber(src?.rawUsage), normalizedUsage: toNonNegativeNumber(src?.normalizedUsage) })).filter(src => src.rawName || src.rawUsage > 0 || src.normalizedUsage > 0) : [],
                 systemStock: toSafeNumber(item.systemStock), actualStock: item.actualStockTouched ? toNonNegativeNumber(item.actualStock) : null, actualStockTouched: !!item.actualStockTouched,
                 systemSuggestedQty: toNonNegativeNumber(item.systemSuggestedQty), currentSuggestedQty: toNonNegativeNumber(item.currentSuggestedQty ?? item.systemSuggestedQty), finalRequestedQty: toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty), manualQtyOverride: !!item.manualQtyOverride,
-                maximumApplied: !!item.maximumApplied, maximumBeforeQty: toNonNegativeNumber(item.maximumBeforeQty)
+                maximumApplied: !!item.maximumApplied, maximumBeforeQty: toNonNegativeNumber(item.maximumBeforeQty),
+                ...(toNonNegativeNumber(item.ncdsOutreachQty) > 0 ? { ncdsOutreachQty: toNonNegativeNumber(item.ncdsOutreachQty), ncdsOutreachDates: Array.isArray(item.ncdsOutreachDates) ? item.ncdsOutreachDates.map(String) : [], ncdsOutreachPatients: toNonNegativeNumber(item.ncdsOutreachPatients) } : {})
               };
               const locked = lockRequisitionItem(base);
               locked.systemSuggestedQty = toNonNegativeNumber(item.systemSuggestedQty);
@@ -2809,6 +2861,14 @@ const CreateReqView = ({ ctx, round = null }) => {
 
             {(priceChangedItems.length > 0 || packChangedItems.length > 0) && <div className="no-print mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900"><div className="font-black"><i className="fa-solid fa-triangle-exclamation mr-2"></i>ข้อมูล INVS ต่างจากใบเบิกครั้งก่อน</div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1"><span>ราคาเปลี่ยน <b>{priceChangedItems.length}</b> รายการ</span><span>Pack เปลี่ยน <b>{packChangedItems.length}</b> รายการ</span></div><div className="mt-1 text-amber-700">เป็นการแจ้งเตือนเท่านั้น ระบบใช้ราคาและ Pack ปัจจุบันจาก INVS และไม่ขัดขวางการส่งใบเบิก</div></div>}
 
+            {ncdsEligible.length > 0 && (
+              <div className="no-print mb-3 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-xs text-emerald-900 flex flex-wrap items-center gap-3">
+                <span><i className="fa-solid fa-people-group mr-2"></i>มีผู้ป่วย NCDs นัดออกหน่วย รอบวันที่ <b>{ncdsDatesLabel}</b> · ยา {ncdsByDrug.size} รายการ (หมวดยาโรคเรื้อรัง)</span>
+                {ncdsAppliedCount
+                  ? <><span className="font-bold">ปรับแล้ว {ncdsAppliedCount} รายการ</span><button type="button" onClick={clearNcdsOutreach} className="px-3 py-1 rounded-lg border border-slate-300 bg-white text-slate-600 font-bold">ยกเลิกการปรับ</button></>
+                  : <button type="button" id="ncds-outreach-apply" onClick={applyNcdsOutreach} className="px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700">ปรับค่าผู้ป่วยออกหน่วย รอบวันที่ {ncdsDatesLabel}</button>}
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className={`official-table w-full text-[11px] border-collapse border border-black mb-2 ${showCalc?'min-w-[1500px]':'min-w-[1250px]'}`}>
                 <OfficialTableHead cols={[
@@ -2822,14 +2882,21 @@ const CreateReqView = ({ ctx, round = null }) => {
                   { label:'คงเหลือจริง', width:'9%', className:'no-print', when: showCalc },
                   { label:'ระบบแนะนำเติม', width:'9%', className:'no-print', when: showCalc },
                   { label:'จำนวนจ่าย', width:'9%', className:'col-dispense' },
-                  { label:'ราคา/หน่วย', width:'8%' },
+                  { label:'ราคา/หน่วย', width:'5%' },
                   { label:'มูลค่า (บาท)', width:'9%' },
-                  { label:'คงเหลือ', width:'6%' },
+                  { label:'คงเหลือ', width:'9%' },
                   { label:'รหัส', width:'7%' }
                 ]} />
                 {workingTypeKeys.map(typeKey => (
                   <tbody key={typeKey}>
-                    <tr className="highlight-row"><td colSpan={showCalc?14:12} className="font-bold text-left px-2 py-1 border-y border-black">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey] || `หมวด ${typeKey}`}</td></tr>
+                    <tr className="highlight-row"><td colSpan={showCalc?14:12} className="font-bold text-left px-2 py-1 border-y border-black">
+                      {(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[typeKey] || `หมวด ${typeKey}`}
+                      {String(typeKey) === '25' && ncdsEligible.length > 0 && (
+                        ncdsAppliedCount
+                          ? <span className="no-print ml-3 inline-flex items-center gap-2 text-[11px] font-bold text-emerald-800">รวมยอดผู้ป่วยออกหน่วย {ncdsDatesLabel} แล้ว {ncdsAppliedCount} รายการ<button type="button" onClick={clearNcdsOutreach} className="px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-600 hover:bg-slate-50">ยกเลิกการปรับ</button></span>
+                          : <button type="button" onClick={applyNcdsOutreach} className="no-print ml-3 px-2.5 py-0.5 rounded-lg bg-emerald-600 text-white text-[11px] font-bold hover:bg-emerald-700"><i className="fa-solid fa-people-group mr-1"></i>ปรับค่าผู้ป่วยออกหน่วย รอบวันที่ {ncdsDatesLabel} ({ncdsByDrug.size} รายการ)</button>
+                      )}
+                    </td></tr>
                     {(workingGroupedItems[typeKey] || []).map(item => {
                       const drug = ctx.findDrug(item.drugId);
                       const unitObj = drug ? ctx.findUnit(drug.unit_id) : null;
@@ -2868,7 +2935,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                               <button type="button" onClick={()=>setTargetHelpData({item:{...item},drug,unitName:displayUnit})} className="no-print w-4 h-4 rounded-full border border-slate-400 text-slate-500 hover:bg-slate-100 text-[10px] font-black leading-none" title="อธิบาย Target Stock">?</button>
                             </div>
                           </td>
-                          <td className="text-center">{formatQty(item.usage,item.packSize)}</td>
+                          <td className="text-center">{formatQty(item.usage,item.packSize)}{toNonNegativeNumber(item.ncdsOutreachQty) > 0 && <div className="text-[9px] font-bold text-emerald-700 leading-tight whitespace-nowrap" title={`ผู้ป่วยนัดออกหน่วย ${toNonNegativeNumber(item.ncdsOutreachPatients)} คน`}>+ออกหน่วย {formatQty(item.ncdsOutreachQty,item.packSize)}</div>}</td>
                           <td className="text-center text-blue-700">{formatQty(Math.max(0,toSafeNumber(item.systemStock)),item.packSize)}</td>
 
                           {showCalc && <td className="no-print text-center">
@@ -4360,16 +4427,16 @@ const ViewReqView = ({ ctx }) => {
              <table className="official-table w-full text-[11px] border-collapse border border-black mb-2 relative">
                 <OfficialTableHead cols={[
                    { label:'ที่', width:'5%' },
-                   { label:'ชื่อยา/เวชภัณฑ์', width:'31%' },
+                   { label:'ชื่อยา/เวชภัณฑ์', width:'29%' },
                    { label:'หน่วย', width:'6%' },
-                   { label:'บรรจุ', width:'6%' },
+                   { label:'บรรจุ', width:'5%' },
                    { label:'Target Stock', width:'6%' },
                    { label:'ยอดใช้', width:'6%' },
                    { label:'เครดิต', width:'6%' },
-                   { label:'จำนวนจ่าย', width:'7%', className:'col-dispense' },
-                   { label:'ราคา/หน่วย', width:'8%' },
-                   { label:'มูลค่า (บาท)', width:'9%' },
-                   { label:'คงเหลือ', width:'4%' },
+                   { label:'จำนวนจ่าย', width:'8%', className:'col-dispense' },
+                   { label:'ราคา/หน่วย', width:'5%' },
+                   { label:'มูลค่า (บาท)', width:'8%' },
+                   { label:'คงเหลือ', width:'8%' },
                    { label:'รหัส', width:'6%' },
                    // ช่องปุ่มลบ (แสดงเฉพาะตอนแก้ไข ไม่แสดงตอนพิมพ์)
                    { label:<i className="fa-solid fa-trash"></i>, width:'4%', className:'no-print text-red-500', when: canEdit }
@@ -8702,6 +8769,115 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+    // ===== v6.4 ตัวชี้วัดการเบิก รพ.สต.: ใช้ / เบิก / ขอเพิ่ม / ขอลด แยกราย รพ.สต. และรายใบเบิก =====
+    const kpiOfRequisition = (r) => {
+      const k = { used: 0, usedValue: 0, req: 0, reqValue: 0, more: 0, moreValue: 0, less: 0, lessValue: 0, approvedValue: 0, items: 0, creditZeroUsed: 0, creditItems: 0, noSuggest: 0 };
+      (r.items || []).forEach(it => {
+        if (String(it.type) === '6') return;
+        k.items += 1;
+        const pack = safePackSize(it.packSize), price = toNonNegativeNumber(it.price);
+        const val = (q) => isNonBillableInRequisition(it) ? 0 : (q / pack) * price;
+        const usage = toNonNegativeNumber(it.usage);
+        const final = toNonNegativeNumber(it.finalRequestedQty ?? it.dispenseQty);
+        if (usage > 0) { k.used += 1; k.usedValue += getUsageItemValue(it); }
+        if (final > 0) { k.req += 1; k.reqValue += val(final); }
+        if (r.status === 'Completed') k.approvedValue += getRequisitionItemValue(it);
+        if (it.systemSuggestedQty === undefined || it.systemSuggestedQty === null) { if (final > 0) k.noSuggest += 1; }
+        else {
+          const delta = final - toNonNegativeNumber(it.systemSuggestedQty);
+          if (delta > 1e-6) { k.more += 1; k.moreValue += val(delta); }
+          else if (delta < -1e-6) { k.less += 1; k.lessValue += val(-delta); }
+        }
+        if (usage > 0) { k.creditItems += 1; if (toSafeNumber(it.prevExcess) <= 0) k.creditZeroUsed += 1; }
+      });
+      return k;
+    };
+    const RpstKpiView = ({ ctx }) => {
+      const isAdmin = normalizeUserRole(ctx.currentUser?.role) === 'admin';
+      const fyNow = getFiscalInfo(new Date().getMonth() + 1, new Date().getFullYear()).fiscalYear;
+      const [fy, setFy] = useState(fyNow);
+      const [month, setMonth] = useState('all');
+      const [open, setOpen] = useState(() => new Set());
+      const reqs = useMemo(() => (ctx.appDb.requisitions || []).filter(r => !String(r.id || '').startsWith('HIST-') && r.status !== 'Draft' && r.month && r.year)
+        .map(r => ({ ...r, _fy: Number(r.fiscal_year) || getFiscalInfo(Number(r.month), Number(r.year)).fiscalYear, _k: kpiOfRequisition(r) })), [ctx.appDb.requisitions]);
+      const years = useMemo(() => [...new Set([fyNow, ...reqs.map(r => r._fy)])].sort((a, b) => b - a), [reqs, fyNow]);
+      const filtered = reqs.filter(r => r._fy === Number(fy) && (month === 'all' || `${r.year}-${r.month}` === month));
+      const monthsInFy = [...new Set(reqs.filter(r => r._fy === Number(fy)).map(r => `${r.year}-${r.month}`))]
+        .sort((a, b) => { const [ya, ma] = a.split('-').map(Number), [yb, mb] = b.split('-').map(Number); return ya - yb || ma - mb; });
+      const sum = (list) => list.reduce((s, r) => { Object.keys(r._k).forEach(key => { s[key] = (s[key] || 0) + r._k[key]; }); s.n = (s.n || 0) + 1; return s; }, {});
+      const byHosp = useMemo(() => {
+        const m = new Map();
+        filtered.forEach(r => { const id = String(r.hospitalId); if (!m.has(id)) m.set(id, []); m.get(id).push(r); });
+        return [...m.entries()].map(([id, list]) => ({ id, name: ctx.findHospital(id)?.hospital_name || id, list: list.sort((a, b) => (a.year - b.year) || (a.month - b.month)), k: sum(list) }))
+          .sort((a, b) => String(a.name).localeCompare(String(b.name), 'th'));
+      }, [filtered]);
+      const total = sum(filtered);
+      const money = (v) => toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const pct = (a, b) => b ? Math.round(a / b * 1000) / 10 : 0;
+      const reqLabel = (r) => `${THAI_MONTHS[Number(r.month) - 1]} ${Number(r.year) + 543}${r.requisition_no ? ` · ${r.requisition_no}` : ''}`;
+      const statusLabel = (s) => ({ Pending: 'รอจัดยา', Approving: 'กำลังอนุมัติ', Completed: 'จัดยาแล้ว', Rejected: 'ส่งกลับ', ApprovalFailed: 'อนุมัติล้มเหลว' }[s] || s);
+      const exportCsv = () => {
+        const head = ['รพ.สต.', 'ใบเบิก', 'สถานะ', 'รายการที่มีการใช้', 'มูลค่าใช้', 'รายการที่เบิก', 'มูลค่าขอเบิก', 'ขอเพิ่ม (รายการ)', 'มูลค่าขอเพิ่ม', 'ขอลด (รายการ)', 'มูลค่าขอลด', '% รายการที่ปรับ', 'ยามีใช้แต่เครดิต=0', 'มูลค่าอนุมัติ'];
+        const line = (name, label, status, k) => [name, label, status, k.used, k.usedValue.toFixed(2), k.req, k.reqValue.toFixed(2), k.more, k.moreValue.toFixed(2), k.less, k.lessValue.toFixed(2), pct(k.more + k.less, k.req), k.creditZeroUsed, k.approvedValue.toFixed(2)];
+        const rows = [];
+        byHosp.forEach(h => { rows.push(line(h.name, `รวม ${h.k.n} ใบ`, '', h.k)); h.list.forEach(r => rows.push(line(h.name, reqLabel(r), statusLabel(r.status), r._k))); });
+        downloadCsv(`ตัวชี้วัดการเบิก_รพสต_${fy}${month !== 'all' ? '_' + month : ''}.csv`, [head, ...rows]);
+      };
+      const Cell = ({ n, v, tone }) => <td className={`p-2 text-right tabular-nums ${tone || ''}`}><div className="font-bold">{n.toLocaleString('th-TH')}</div><div className="text-[10px] opacity-70">{money(v)}</div></td>;
+      const KRow = ({ k, label, sub, onClick, isOpen, child }) => (
+        <tr className={`border-t ${child ? 'bg-slate-50/60 text-[13px]' : 'hover:bg-slate-50 cursor-pointer'}`} onClick={onClick}>
+          <td className={`p-2 ${child ? 'pl-8' : 'font-bold'}`}>{!child && <i className={`fa-solid fa-chevron-${isOpen ? 'down' : 'right'} text-slate-400 mr-2 text-xs`}></i>}{label}{sub && <div className="text-[11px] text-slate-400 font-normal">{sub}</div>}</td>
+          <Cell n={k.used} v={k.usedValue} />
+          <Cell n={k.req} v={k.reqValue} />
+          <Cell n={k.more} v={k.moreValue} tone="text-red-700" />
+          <Cell n={k.less} v={k.lessValue} tone="text-blue-700" />
+          <td className="p-2 text-right tabular-nums">{pct(k.more + k.less, k.req)}%</td>
+          <td className={`p-2 text-right tabular-nums ${k.creditZeroUsed && k.creditZeroUsed === k.creditItems ? 'text-red-600 font-bold' : k.creditZeroUsed ? 'text-amber-700' : 'text-slate-400'}`}>{k.creditZeroUsed}/{k.creditItems}{k.creditZeroUsed && k.creditZeroUsed === k.creditItems ? <div className="text-[10px]">เครดิต 0 ทั้งใบ</div> : null}</td>
+          <td className="p-2 text-right tabular-nums">{money(k.approvedValue)}</td>
+        </tr>
+      );
+      return (
+        <div className="bg-white rounded-2xl shadow-sm p-4 lg:p-8 animate-fade-in border border-slate-100">
+          <div className="flex flex-wrap justify-between items-start gap-4 mb-5 pb-4 border-b">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-800"><i className="fa-solid fa-gauge mr-2 text-emerald-600"></i>ตัวชี้วัดการเบิก รพ.สต.</h2>
+              <p className="text-sm text-slate-500 mt-1">นับเป็นจำนวนรายการยา และมูลค่า (บาท) · ขอเพิ่ม/ขอลด = จำนวนที่ รพ.สต. ส่ง เทียบกับที่ระบบแนะนำ · กดชื่อ รพ.สต. เพื่อดูรายใบเบิก</p>
+            </div>
+            <div className="flex flex-wrap gap-2 items-end">
+              <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">ปีงบ</span><select id="kpi-fy" value={fy} onChange={e => { setFy(Number(e.target.value)); setMonth('all'); }} className="border rounded-xl p-2 font-bold">{years.map(y => <option key={y} value={y}>{y}</option>)}</select></label>
+              <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">เดือนที่เบิก</span><select id="kpi-month" value={month} onChange={e => setMonth(e.target.value)} className="border rounded-xl p-2 font-bold"><option value="all">ทั้งปีงบ</option>{monthsInFy.map(m => { const [y, mo] = m.split('-').map(Number); return <option key={m} value={m}>{THAI_MONTHS[mo - 1]} {y + 543}</option>; })}</select></label>
+              <button onClick={exportCsv} disabled={!filtered.length} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold disabled:opacity-40"><i className="fa-solid fa-file-csv mr-2"></i>ส่งออก CSV</button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+            {[['ใบเบิก', total.n || 0, ''], ['รายการที่มีการใช้', total.used || 0, money(total.usedValue)], ['รายการที่เบิก', total.req || 0, money(total.reqValue)], ['ขอเพิ่ม', total.more || 0, money(total.moreValue)], ['ขอลด', total.less || 0, money(total.lessValue)]].map(([l, n, v]) => (
+              <div key={l} className="rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">{l}</div><div className="text-2xl font-extrabold tabular-nums">{Number(n).toLocaleString('th-TH')}</div>{v && <div className="text-[11px] text-slate-400">{v} บาท</div>}</div>
+            ))}
+          </div>
+          <div className="overflow-x-auto border rounded-xl">
+            <table id="kpi-table" className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr>
+                <th className="p-2 text-left">รพ.สต. / ใบเบิก</th><th className="p-2 text-right">มีการใช้<br/><span className="font-normal">รายการ · บาท</span></th><th className="p-2 text-right">ขอเบิก</th>
+                <th className="p-2 text-right text-red-700">ขอเพิ่ม</th><th className="p-2 text-right text-blue-700">ขอลด</th><th className="p-2 text-right">% ปรับ</th>
+                <th className="p-2 text-right" title="ยาที่มียอดใช้ แต่เครดิตตั้งต้นเป็น 0">ใช้แต่<br/>เครดิต=0</th><th className="p-2 text-right">มูลค่าอนุมัติ</th>
+              </tr></thead>
+              <tbody>
+                {!byHosp.length && <tr><td colSpan="8" className="p-8 text-center text-slate-400">ไม่มีใบเบิกตามเงื่อนไข</td></tr>}
+                {byHosp.map(h => (
+                  <React.Fragment key={h.id}>
+                    <KRow k={h.k} label={h.name} sub={`${h.k.n} ใบ`} isOpen={open.has(h.id)} onClick={() => setOpen(prev => { const n = new Set(prev); n.has(h.id) ? n.delete(h.id) : n.add(h.id); return n; })} />
+                    {open.has(h.id) && h.list.map(r => <KRow key={r.id} child k={r._k} label={reqLabel(r)} sub={statusLabel(r.status) + (r._k.noSuggest ? ` · ${r._k.noSuggest} รายการไม่มีค่าระบบแนะนำ (ใบรุ่นเก่า)` : '')} />)}
+                  </React.Fragment>
+                ))}
+              </tbody>
+              {byHosp.length > 0 && <tfoot><KRow k={{ used: 0, usedValue: 0, req: 0, reqValue: 0, more: 0, moreValue: 0, less: 0, lessValue: 0, approvedValue: 0, creditZeroUsed: 0, creditItems: 0, ...total }} label="รวมทุก รพ.สต." child={false} isOpen={false} /></tfoot>}
+            </table>
+          </div>
+          <p className="text-xs text-slate-400 mt-3">"ใช้แต่เครดิต=0" = จำนวนยาที่มียอดใช้ในใบนั้นแต่เครดิตตั้งต้น (ยอดคงเหลือจากรอบก่อน) เป็น 0 — ถ้าเป็นทั้งใบ (สีแดง) มักแปลว่าไม่มีข้อมูลเครดิตของ รพ.สต. นั้นในระบบ ควรตรวจสอบ</p>
+        </div>
+      );
+    };
+
     // ===== v5.9 ยา NCDs ตามนัด (จาก Sawee Refer → ncds_demand_inbox) =====
     const ncdsToday = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
     const ncdsThaiDate = (ymd) => {
@@ -9365,6 +9541,7 @@ const AdminConfigView = ({ ctx }) => {
               <button onClick={() => requestView('dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-house w-6 text-center mr-2"></i> แดชบอร์ด</button>
               {currentUser?.role === 'hospital' && <button onClick={() => { if (currentView !== 'create_req') setEditReqId(null); requestView('create_req'); }} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='create_req'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-packing w-6 text-center mr-2"></i> เบิกยา / เติมยา</button>}
               {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('vaccine_req')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='vaccine_req'?'bg-violet-600 text-white shadow-lg shadow-violet-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-syringe w-6 text-center mr-2"></i> เบิกวัคซีน (ว.3/1)</button>}
+              {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('rpst_kpi')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='rpst_kpi'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-gauge w-6 text-center mr-2"></i> ตัวชี้วัด รพ.สต.</button>}
               <button onClick={() => requestView('drug_history')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='drug_history'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-chart-line w-6 text-center mr-2"></i> ประวัติการใช้ยา</button>
               {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('my_stock')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='my_stock'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> {normalizeUserRole(currentUser?.role)==='admin'?'คลังยา รพ.สต.':'ชั้นยาของฉัน'}</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('internal_queue')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='internal_queue'?'bg-teal-600 text-white shadow-lg shadow-teal-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-list-ol w-6 text-center mr-2"></i> คิวใบเบิกภายใน รพ.{appDb.internalPendingCount ? <span className="ml-auto text-[11px] bg-amber-400 text-slate-900 rounded-full px-2 py-0.5">{appDb.internalPendingCount}</span> : null}</button>}
@@ -9400,6 +9577,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}
               {currentView === 'req_summary' && currentUser?.role === 'admin' && <ReqSummaryView ctx={ctx} />}
+              {currentView === 'rpst_kpi' && <RpstKpiView ctx={ctx} />}
               {currentView === 'item_usage_report' && <ItemUsageReportView ctx={ctx} />}
               {currentView === 'drug_history' && <DrugHistoryView ctx={ctx} />}
               {currentView === 'vaccine_req' && <VaccineReqView ctx={ctx} />}

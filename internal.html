@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.3.0"></script>
+  <script src="shared.js?v=6.4.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.3.0';
+      var need = '6.4.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -900,6 +900,8 @@ ORDER BY d.name`;
       const [search, setSearch] = useState('');
       const [sortBy, setSortBy] = useState('name');
       const [showUnmatched, setShowUnmatched] = useState(false);
+      const [showEstimate, setShowEstimate] = useState(false); // v6.4 พิมพ์ประมาณการ (ไม่ส่ง VMI)
+      const [roundTarget, setRoundTarget] = useState(true);     // ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ
       const [showSql, setShowSql] = useState(false);
       const [diag, setDiag] = useState(null);
       const runDiag = async () => {
@@ -1311,12 +1313,71 @@ ORDER BY d.name`;
               <div className="text-sm text-slate-500">เบิก {fmtNum(stats.order)} รายการ · <span className="font-bold text-slate-800 tnum">{fmtMoney(stats.value)}</span> บาท</div>
               <div className="flex gap-2 justify-end">
                 <button onClick={onDone} className="px-5 py-3 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">ยกเลิก</button>
+                <button id="ph-estimate" onClick={() => setShowEstimate(true)} disabled={!derived.length} title="พิมพ์/ส่งออกยอดเพื่อตรวจสอบ — ไม่ส่งใบเบิก" className="px-5 py-3 rounded-xl bg-white border-2 border-teal-600 text-teal-700 font-bold hover:bg-teal-50 disabled:opacity-40"><i className="fa-solid fa-print mr-2"></i>พิมพ์ประมาณการใช้ยา</button>
                 <button onClick={submit} disabled={!!busy || !stats.order} className="px-7 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40">
                   {busy === 'submit' ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังส่ง...</> : <><i className="fa-solid fa-paper-plane mr-2"></i>{editReq ? 'ส่งใบที่แก้ไข' : 'ส่งใบเบิก'}</>}
                 </button>
               </div>
             </div>
           </div>
+
+          {showEstimate && (() => {
+            // ยอดที่ใช้พิมพ์: ยามียอดใช้ / มีจำนวนเบิก / เพิ่มเอง (ไม่รวมวัคซีน) — ไม่เขียนข้อมูลใด ๆ
+            const typesSrc = ctx.drugTypes || DEFAULT_DRUG_TYPES;
+            const estRows = derived.filter(r => String(r.base.type) !== '6' && (r.usage > 0 || r.dispense > 0 || r.source === 'manual'))
+              .map(r => {
+                const pack = safePackSize(r.base.packSize);
+                const target = roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target;
+                return { drugId: r.id, name: r.base.name, unit: r.base.unit, packSize: pack, price: toNonNegativeNumber(r.base.price), type: String(r.base.type || '1'),
+                  location: safeText(r.drug?.invs_location), target, usage: r.usage, credit: r.onHand };
+              })
+              .sort((a, b) => Number(a.type) - Number(b.type) || (a.location || 'ฮ').localeCompare(b.location || 'ฮ', 'th') || a.name.localeCompare(b.name, 'th'));
+            const meta = { deptName: ctx.dept?.dept_name || '', from: usageMeta?.from || from, to: usageMeta?.to || to, days: calcDays, coverDays, roundTarget, roundLabel: round ? `รอบเบิก ${roundFormNo(round)} · ${thaiDateLong(round.round_date)}` : '' };
+            const head = ['ที่', 'ชื่อยา/เวชภัณฑ์', 'หน่วย', 'บรรจุ', 'Target Stock', 'ยอดใช้', 'เครดิต', 'จำนวนจ่าย', 'ราคา/หน่วย', 'มูลค่า (บาท)', 'คงเหลือ', 'รหัส'];
+            const aoa = () => {
+              const out = [[`ใบประมาณการใช้ยา — ${meta.deptName} (สำหรับตรวจสอบ ยังไม่ใช่ใบเบิก)`], [`ยอดใช้ ${thaiDateLong(meta.from)} ถึง ${thaiDateLong(meta.to)} (${meta.days} วัน) · Target ${coverDays} วัน${roundTarget ? ' ปัดเป็นจำนวนเต็มหน่วยบรรจุ' : ''}${meta.roundLabel ? ' · ' + meta.roundLabel : ''} · จำนวนเป็นหน่วยย่อย`], [], head];
+              let i = 0, lastType = null;
+              estRows.forEach(r => {
+                if (r.type !== lastType) { out.push([typesSrc[r.type] || `หมวด ${r.type}`]); lastType = r.type; }
+                i += 1; out.push([i, r.name, r.unit, r.packSize, r.target, r.usage, r.credit, '', r.price, '', '', r.drugId]);
+              });
+              return out;
+            };
+            const fileBase = `ประมาณการใช้ยา_${safeText(meta.deptName).replace(/[\\/:*?"<>|\s]+/g, '_')}_${meta.from}_${meta.to}`;
+            const doPrint = () => printHtmlDocument(buildPharmacyEstimateFormHtml({ ...meta, rows: estRows, drugTypes: ctx.drugTypes }));
+            const doXlsx = () => {
+              if (typeof XLSX === 'undefined' || !XLSX.utils) return ctx.showToast('โหลดตัวสร้าง Excel ไม่สำเร็จ — ใช้ CSV แทน', 'error');
+              const ws = XLSX.utils.aoa_to_sheet(aoa());
+              ws['!cols'] = [5, 36, 8, 7, 12, 10, 10, 14, 10, 12, 10, 10].map(w => ({ wch: w }));
+              const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'ประมาณการ'); XLSX.writeFile(wb, fileBase + '.xlsx');
+            };
+            const doCsv = () => {
+              const esc = v => { const t = String(v ?? ''); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+              const blob = new Blob(['\ufeff' + aoa().map(r => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileBase + '.csv'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+            };
+            return (
+              <Modal isOpen onClose={() => setShowEstimate(false)} title="พิมพ์ประมาณการใช้ยา" maxWidth="max-w-xl">
+                <div className="space-y-4">
+                  <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-3 text-sm"><i className="fa-solid fa-circle-info mr-2"></i>ใช้พิมพ์มาตรวจสอบเท่านั้น <b>ยังไม่ส่งใบเบิก (ไม่ส่ง VMI)</b> และไม่บันทึกอะไรในระบบ — ถ้าจะเบิกจริงให้กดปุ่ม "ส่งใบเบิก" เอง</div>
+                  <div className="text-sm text-slate-600 space-y-1">
+                    <div>ยอดใช้ {thaiDateLong(meta.from)} – {thaiDateLong(meta.to)} ({meta.days} วัน) · Target {coverDays} วัน</div>
+                    <div><b>{estRows.length}</b> รายการ · ใส่ Target Stock / ยอดใช้ / เครดิต ให้ · <b>เว้นช่องจำนวนจ่าย มูลค่า คงเหลือ</b> ไว้กรอกเอง</div>
+                    {!usageMeta && <div className="text-red-600 font-bold">ยังไม่ได้ดึงยอดใช้จาก HOSxP — ยอดใช้จะเป็น 0</div>}
+                  </div>
+                  <label className="flex items-start gap-2 text-sm font-bold text-slate-700 bg-slate-50 rounded-xl p-3 cursor-pointer">
+                    <input id="ph-est-round" type="checkbox" checked={roundTarget} onChange={e => setRoundTarget(e.target.checked)} className="w-4 h-4 mt-0.5" />
+                    <span>ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ (ไม่มีเศษหน่วยย่อย)<span className="block text-xs font-normal text-slate-500">เช่น Target 1,250 เม็ด บรรจุ 1,000 → 2,000 เม็ด (= 2 กล่อง)</span></span>
+                  </label>
+                  <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
+                    <button id="ph-est-print" onClick={doPrint} disabled={!estRows.length} className="px-4 py-2.5 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-file-pdf mr-2"></i>พิมพ์ / PDF</button>
+                    <button id="ph-est-xlsx" onClick={doXlsx} disabled={!estRows.length} className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-file-excel mr-2"></i>Excel</button>
+                    <button id="ph-est-csv" onClick={doCsv} disabled={!estRows.length} className="px-4 py-2.5 rounded-xl bg-white border font-bold text-slate-700 disabled:opacity-40"><i className="fa-solid fa-file-csv mr-2"></i>CSV</button>
+                  </div>
+                </div>
+              </Modal>
+            );
+          })()}
 
           <Modal isOpen={showUnmatched} onClose={() => setShowUnmatched(false)} title={`icode ที่ยังไม่จับคู่รหัส INVS (${unmatched.length})`} maxWidth="max-w-4xl">
             <p className="text-sm text-slate-500 mb-4">รายการเหล่านี้มีการใช้ใน HOSxP แต่ยังไม่มีรหัส INVS ที่ผูก hosxp_code ไว้ จึงไม่ถูกนำมาคำนวณ

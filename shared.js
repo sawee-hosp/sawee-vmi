@@ -1,5 +1,5 @@
 // ============================================================
-// Sawee Rxfill — shared.js (v6.3.0)
+// Sawee Rxfill — shared.js (v6.4.0)
 // ไฟล์รวม: Firebase init, ค่าคงที่, utility functions
 // ใช้ร่วมกันทุกหน้า — ห้ามมี JSX (ไม่ผ่าน Babel)
 // ============================================================
@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.3.0';
+const APP_VERSION = '6.4.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1074,8 +1074,8 @@ const buildInternalReqFormHtml = (opts) => {
     '<table class="items"><thead><tr>' +
     '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
     (isPharmacy ? '<th style="width:8%">จำนวน<br>ที่ใช้</th>' : '') +
-    '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:7%">ราคา/<br>หน่วย</th><th style="width:10%">มูลค่า<br>(บาท)</th>' +
-    '<th style="width:7%">' + (isPharmacy ? 'เครดิต<br>คงเหลือ' : 'คง<br>เหลือ') + '</th><th style="width:7%">รหัส</th>' +
+    '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:5%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
+    '<th style="width:10%">' + (isPharmacy ? 'เครดิต<br>คงเหลือ' : 'คง<br>เหลือ') + '</th><th style="width:7%">รหัส</th>' +
     '</tr></thead><tbody>' + body +
     '<tr class="note"><td colspan="' + colCount + '"><b>หมายเหตุ:</b> ข้อมูลยา จำนวนเต็มคือจำนวนหน่วยเบิกหลัก และเลขในวงเล็บคือจำนวนที่แตกออกจากหน่วยเบิกหลักตามขนาดบรรจุ' + (req.note ? ' · ' + esc(req.note) : '') + '</td></tr>' +
     '</tbody></table>' +
@@ -1716,5 +1716,50 @@ const buildUsageEstimateHtml = (opts) => {
     '<tbody>' + (body || '<tr><td colspan="9" class="c">ไม่มีรายการ</td></tr>') + '</tbody>' +
     '<tfoot><tr class="tot"><td colspan="8" class="r">รวม ' + i + ' รายการ · มูลค่าประมาณ</td><td class="r">' + money(grand) + '</td></tr></tfoot></table>' +
     '<div class="note">หมายเหตุ: เอกสารประมาณการเพื่อวางแผน ไม่ใช่ใบเบิก · หน่วยใหญ่ = จำนวนหน่วยย่อย ÷ ขนาดบรรจุ (ปัดขึ้นเป็นจำนวนเต็มในช่องต้องเบิก)' + (opts.unmatched ? ' · ยา HOSxP ที่ยังจับคู่รหัส INVS ไม่ได้ ' + opts.unmatched + ' รายการ ไม่รวมในตาราง' : '') + '</div>' +
+    '<div class="stamp">พิมพ์เมื่อ: ' + stamp + '</div></body></html>';
+};
+
+// ใบ "ประมาณการใช้ยา" ของห้องยา จากหน้าสร้างใบเบิก (สำหรับพิมพ์มาตรวจ — ไม่ใช่การส่งใบเบิก)
+// หัวตารางแบบใบเบิก รพ.สต. · เว้นช่องจำนวนจ่าย/มูลค่า/คงเหลือ ให้กรอกด้วยมือ
+// rows: [{ drugId, name, unit, packSize, price, type, target, usage, credit }]
+const buildPharmacyEstimateFormHtml = (opts) => {
+  const esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  const q = function (v, pack) { return formatQty(toNonNegativeNumber(v), safePackSize(pack)); };
+  const types = opts.drugTypes || DEFAULT_DRUG_TYPES;
+  const groups = new Map();
+  (opts.rows || []).forEach(function (r) { const k = String(r.type || '1'); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const order = Array.from(groups.keys()).sort(function (a, b) { return Number(a) - Number(b); });
+  let i = 0;
+  const body = order.map(function (k) {
+    return '<tr class="grp"><td colspan="12">' + esc(types[k] || ('หมวด ' + k)) + '</td></tr>' + groups.get(k).map(function (r) {
+      i += 1;
+      return '<tr><td class="c">' + i + '</td><td>' + esc(r.name) + '</td><td class="c">' + esc(r.unit) + '</td><td class="c">' + esc(safePackSize(r.packSize)) + '</td>' +
+        '<td class="c">' + q(r.target, r.packSize) + '</td><td class="c">' + q(r.usage, r.packSize) + '</td><td class="c">' + q(r.credit, r.packSize) + '</td>' +
+        '<td class="fill"></td><td class="r">' + toNonNegativeNumber(r.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</td><td class="fill"></td><td class="fill"></td>' +
+        '<td class="c code">' + esc(r.drugId) + '</td></tr>';
+    }).join('');
+  }).join('');
+  const now = new Date();
+  const stamp = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ประมาณการใช้ยา ' + esc(opts.deptName) + '</title>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">' +
+    '<style>@page{size:A4;margin:10mm 8mm}body{font-family:Sarabun,"TH Sarabun New",sans-serif;font-size:12.5px;color:#000;margin:0}' +
+    'h1{font-size:16px;text-align:center;margin:0}.sub{text-align:center;margin:2px 0 4px}.meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 16px;margin-bottom:6px}' +
+    '.badge{display:inline-block;border:1px solid #000;padding:0 6px;font-weight:700;font-size:11px}' +
+    'table{border-collapse:collapse;width:100%;table-layout:fixed}th,td{border:1px solid #000;padding:2px 3px;font-size:10.5px;vertical-align:middle;word-wrap:break-word}' +
+    'th{background:#e5e5e5;font-weight:700;text-align:center;line-height:1.2}.c{text-align:center}.r{text-align:right}.code{font-family:Consolas,monospace;font-size:9.5px}' +
+    '.grp td{background:#f2f2f2;font-weight:700}.fill{background:#fff}thead{display:table-header-group}tr{page-break-inside:avoid}' +
+    '.note{font-size:10px;margin-top:4px}.sigs{display:flex;justify-content:space-around;margin-top:22px;font-size:12px}.sigs div{text-align:center}.stamp{position:fixed;bottom:0;right:0;font-size:9px;color:#555}</style></head><body>' +
+    '<h1>ใบประมาณการใช้ยา — ' + esc(opts.deptName) + '</h1>' +
+    '<div class="sub"><span class="badge">สำหรับตรวจสอบ · ยังไม่ใช่ใบเบิก (ยังไม่ส่ง VMI)</span></div>' +
+    '<div class="meta"><span>ยอดใช้ HOSxP ' + esc(thaiDateLong(opts.from)) + ' ถึง ' + esc(thaiDateLong(opts.to)) + ' (' + esc(opts.days) + ' วัน)</span>' +
+    '<span>สำรอง (Target) ' + esc(opts.coverDays) + ' วัน' + (opts.roundTarget ? ' · ปัด Target เป็นจำนวนเต็มหน่วยบรรจุ' : '') + '</span>' +
+    (opts.roundLabel ? '<span>' + esc(opts.roundLabel) + '</span>' : '') + '</div>' +
+    '<table><colgroup><col style="width:4%"><col style="width:25%"><col style="width:6%"><col style="width:5%"><col style="width:7%"><col style="width:7%"><col style="width:7%">' +
+    '<col style="width:12%"><col style="width:5%"><col style="width:8%"><col style="width:8%"><col style="width:6%"></colgroup>' +
+    '<thead><tr><th>ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th>หน่วย</th><th>บรรจุ</th><th>Target Stock</th><th>ยอดใช้</th><th>เครดิต</th><th>จำนวนจ่าย</th><th>ราคา/<br>หน่วย</th><th>มูลค่า<br>(บาท)</th><th>คงเหลือ</th><th>รหัส</th></tr></thead>' +
+    '<tbody>' + (body || '<tr><td colspan="12" class="c">ไม่มีรายการ</td></tr>') + '</tbody></table>' +
+    '<div class="note">หมายเหตุ: จำนวนเต็มคือจำนวนหน่วยเบิกหลัก ตัวเลขในวงเล็บคือจำนวนที่แตกจากหน่วยเบิกหลัก · เครดิต = คงเหลือในระบบหลังหักยอดใช้ช่วงนี้ · ช่องจำนวนจ่าย/มูลค่า/คงเหลือ เว้นไว้ให้กรอกเมื่อตรวจ</div>' +
+    '<div class="sigs"><div>ลงชื่อ ..................................... ผู้ประมาณการ</div><div>ลงชื่อ ..................................... ผู้ตรวจสอบ</div></div>' +
     '<div class="stamp">พิมพ์เมื่อ: ' + stamp + '</div></body></html>';
 };

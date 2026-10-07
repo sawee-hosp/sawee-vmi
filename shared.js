@@ -1,5 +1,5 @@
 // ============================================================
-// Sawee Rxfill — shared.js (v6.0.0)
+// Sawee Rxfill — shared.js (v6.3.0)
 // ไฟล์รวม: Firebase init, ค่าคงที่, utility functions
 // ใช้ร่วมกันทุกหน้า — ห้ามมี JSX (ไม่ผ่าน Babel)
 // ============================================================
@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.1.0';
+const APP_VERSION = '6.3.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1125,4 +1125,596 @@ const daysToNextRound = (list, round, fallback) => {
   if (!next) return fallback;
   const d = daysBetweenInclusive(round.round_date, next.round_date) - 1;
   return d > 0 ? d : fallback;
+};
+
+
+// ════════════════════════════════════════════════════════════
+// v6.2 ประหยัดโควตา Firestore (Read-saver)
+//  • เก็บข้อมูลที่โหลดแล้วไว้ในเครื่อง (IndexedDB) แยกตามผู้ใช้
+//  • รอบถัดไปดึงเฉพาะเอกสารที่เปลี่ยนหลังเวลาล่าสุด (where updated_at > เวลาเดิม)
+//    → ถ้าไม่มีอะไรเปลี่ยน เสีย 1 read ต่อคอลเลกชัน แทนการอ่านทั้งคอลเลกชัน
+//  • ทุกการเขียนเข้าคอลเลกชันที่แคชไว้ จะถูกเติม updated_at อัตโนมัติ (write hook)
+//  • การลบเอกสาร จะทิ้ง "ป้ายลบ" ไว้ใน cache_tombstones ให้เครื่องอื่นลบออกจากแคชด้วย
+//  • แอดมินสั่ง "ล้างแคชทุกเครื่อง" ได้ (config/app_meta.cache_epoch)
+// ════════════════════════════════════════════════════════════
+const RX_CACHE_SCHEMA = 1;
+const RX_FULL_TTL_MS = 21 * 24 * 3600 * 1000; // กันพลาด: โหลดเต็มใหม่ทุก 3 สัปดาห์
+const RX_TOMB_COL = 'cache_tombstones';
+// ฟิลด์เวลาที่ใช้ดึงเฉพาะส่วนที่เปลี่ยน ของแต่ละคอลเลกชัน
+const RX_DELTA_FIELDS = {
+  master_drugs: 'updated_at', master_hospitals: 'updated_at', master_unit: 'updated_at', master_depts: 'updated_at',
+  req_rounds: 'updated_at', config_par: 'updated_at', current_excess: 'last_updated', historical_usages: 'updated_at',
+  requisitions: 'updated_at', vaccine_requisitions: 'updated_at', internal_requisitions: 'updated_at', internal_stock: 'updated_at'
+};
+const rxStats = { reads: 0, log: [] };
+const rxMissingIndexes = new Map(); // คอลเลกชัน → ลิงก์สร้าง index ใน Firebase console
+try { window.__rxStats = rxStats; window.__rxMissingIndexes = rxMissingIndexes; } catch (e) { /* no window */ }
+const rxCountReads = (label, n) => {
+  rxStats.reads += n; rxStats.log.push([label, n]);
+  if (rxStats.log.length > 300) rxStats.log.shift();
+};
+
+// --- IndexedDB key-value (ถ้าเบราว์เซอร์ไม่ให้ใช้ จะเก็บในหน่วยความจำแทน) ---
+const rxKv = (function () {
+  const mem = new Map();
+  let dbp = null;
+  const open = function () {
+    if (dbp) return dbp;
+    dbp = new Promise(function (resolve) {
+      try {
+        if (typeof indexedDB === 'undefined') return resolve(null);
+        const req = indexedDB.open('sawee-rxfill-cache', 1);
+        req.onupgradeneeded = function () { req.result.createObjectStore('kv'); };
+        req.onsuccess = function () { resolve(req.result); };
+        req.onerror = function () { resolve(null); };
+        req.onblocked = function () { resolve(null); };
+      } catch (e) { resolve(null); }
+    });
+    return dbp;
+  };
+  return {
+    get: async function (k) {
+      if (mem.has(k)) return mem.get(k);
+      const d = await open(); if (!d) return undefined;
+      return new Promise(function (resolve) {
+        try { const q = d.transaction('kv').objectStore('kv').get(k); q.onsuccess = function () { if (q.result !== undefined) mem.set(k, q.result); resolve(q.result); }; q.onerror = function () { resolve(undefined); }; }
+        catch (e) { resolve(undefined); }
+      });
+    },
+    set: async function (k, v) {
+      mem.set(k, v);
+      const d = await open(); if (!d) return;
+      await new Promise(function (resolve) {
+        try { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = resolve; t.onerror = resolve; t.onabort = resolve; }
+        catch (e) { resolve(); }
+      });
+    },
+    clear: async function () {
+      mem.clear();
+      const d = await open(); if (!d) return;
+      await new Promise(function (resolve) {
+        try { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').clear(); t.oncomplete = resolve; t.onerror = resolve; }
+        catch (e) { resolve(); }
+      });
+    }
+  };
+})();
+
+// --- แปลง Timestamp ↔ ข้อมูลที่เก็บได้ ---
+const rxIsTs = (v) => v && typeof v === 'object' && typeof v.seconds === 'number' && typeof v.toMillis === 'function';
+const rxEncode = (v) => {
+  if (v === null || typeof v !== 'object') return v;
+  if (rxIsTs(v)) return { __ts: [v.seconds, v.nanoseconds || 0] };
+  if (Array.isArray(v)) return v.map(rxEncode);
+  const o = {};
+  Object.keys(v).forEach(function (k) { o[k] = rxEncode(v[k]); });
+  return o;
+};
+const rxMakeTs = (pair) => {
+  const s = pair[0], n = pair[1] || 0;
+  const T = firebase.firestore && firebase.firestore.Timestamp;
+  if (T) return new T(s, n);
+  return { seconds: s, nanoseconds: n, toMillis: function () { return s * 1000 + Math.floor(n / 1e6); }, toDate: function () { return new Date(s * 1000 + Math.floor(n / 1e6)); } };
+};
+const rxDecode = (v) => {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map(rxDecode);
+  if (v.__ts && Array.isArray(v.__ts)) return rxMakeTs(v.__ts);
+  const o = {};
+  Object.keys(v).forEach(function (k) { o[k] = rxDecode(v[k]); });
+  return o;
+};
+const rxTsOf = (v) => {
+  if (!v || typeof v !== 'object') return null;
+  if (Array.isArray(v.__ts)) return v.__ts;
+  if (typeof v.seconds === 'number') return [v.seconds, v.nanoseconds || 0];
+  return null;
+};
+const rxCmp = (a, b) => (a[0] - b[0]) || (a[1] - b[1]);
+const rxIndexError = (e) => {
+  const msg = String((e && e.message) || e || '');
+  return (e && e.code === 'failed-precondition') || /requires an index|create_composite|create it here/i.test(msg);
+};
+const rxIndexLink = (e) => { const m = /https:\/\/console\.firebase\.google\.com\S+/.exec(String((e && e.message) || '')); return m ? m[0] : ''; };
+
+// --- ค่ากลางของระบบ (1 read): cache_epoch + สถานะแบบประเมิน ---
+const rxMeta = { epoch: 0, feedback: null, at: 0, loaded: false };
+const rxLoadMeta = async (force) => {
+  if (!force && rxMeta.loaded && Date.now() - rxMeta.at < 30000) return rxMeta;
+  try {
+    const sn = await db.collection('config').doc('app_meta').get();
+    rxCountReads('config/app_meta', 1);
+    const d = sn.exists ? (sn.data() || {}) : {};
+    rxMeta.epoch = Number(d.cache_epoch) || 0;
+    rxMeta.feedback = d.feedback || null;
+  } catch (e) { console.warn('[rx] app_meta', e && e.message); }
+  rxMeta.at = Date.now(); rxMeta.loaded = true;
+  try { window.dispatchEvent(new CustomEvent('rx:meta', { detail: rxMeta })); } catch (e) { /* ignore */ }
+  return rxMeta;
+};
+
+// --- ป้ายลบ (tombstones) ---
+const rxSyncTombs = async (uid) => {
+  const key = RX_CACHE_SCHEMA + '|' + uid + '|__tombs';
+  let ent = await rxKv.get(key);
+  if (!ent || ent.epoch !== rxMeta.epoch) ent = null;
+  try {
+    if (!ent) {
+      // แคชใหม่: ไม่ต้องย้อนอ่านป้ายลบเก่า (คอลเลกชันอื่นจะโหลดเต็มอยู่แล้ว) จำแค่เวลาล่าสุด
+      const s = await db.collection(RX_TOMB_COL).orderBy('deleted_at', 'desc').limit(1).get();
+      rxCountReads(RX_TOMB_COL, 1);
+      const top = s.docs[0];
+      ent = { epoch: rxMeta.epoch, maxTs: (top && rxTsOf(top.data().deleted_at)) || [0, 0], rows: [] };
+      await rxKv.set(key, ent);
+    } else {
+      const s = await db.collection(RX_TOMB_COL).where('deleted_at', '>', rxMakeTs(ent.maxTs)).get();
+      rxCountReads(RX_TOMB_COL, Math.max(1, s.size));
+      if (s.size) {
+        const rows = ent.rows.slice(); let maxTs = ent.maxTs;
+        s.docs.forEach(function (d) {
+          const t = d.data(); const ts = rxTsOf(t.deleted_at); if (!ts) return;
+          rows.push([String(t.col), String(t.doc_id), ts]);
+          if (rxCmp(ts, maxTs) > 0) maxTs = ts;
+        });
+        const cutoff = Math.floor(Date.now() / 1000) - 60 * 86400;
+        ent = { epoch: ent.epoch, maxTs: maxTs, rows: rows.filter(function (r) { return r[2][0] > cutoff; }) };
+        await rxKv.set(key, ent);
+      }
+    }
+  } catch (e) {
+    console.warn('[rx] tombstones', e && e.message);
+    if (!ent) ent = { rows: [] };
+  }
+  return ent.rows;
+};
+
+// --- ซิงก์ 1 คอลเลกชัน (หรือ 1 ขอบเขต เช่น ราย รพ.สต.) ---
+// query: CollectionReference หรือ Query ที่กรองขอบเขตไว้แล้ว · scope: ชื่อขอบเขตในแคช
+const rxSync = async (opt) => {
+  const col = opt.col, uid = opt.uid || 'anon', scope = opt.scope || 'all';
+  const field = opt.deltaField === undefined ? RX_DELTA_FIELDS[col] : opt.deltaField;
+  const key = RX_CACHE_SCHEMA + '|' + uid + '|' + col + '|' + scope;
+  const label = col + (scope !== 'all' ? '[' + scope + ']' : '');
+  const ent = field ? await rxKv.get(key) : null;
+  const usable = ent && ent.epoch === rxMeta.epoch && Array.isArray(ent.maxTs) && (Date.now() - ent.fullAt) < (opt.ttlMs || RX_FULL_TTL_MS) && !opt.forceFull;
+  let rows = null, maxTs = null, fullAt = 0, changed = false;
+  const tsOf = function (d) { return rxTsOf(d && d[field]); };
+  if (usable) {
+    try {
+      const snap = await opt.query.where(field, '>', rxMakeTs(ent.maxTs)).get();
+      rxCountReads(label + ' Δ', Math.max(1, snap.size));
+      rows = new Map(ent.rows); maxTs = ent.maxTs; fullAt = ent.fullAt;
+      snap.docs.forEach(function (d) {
+        const data = rxEncode(d.data()); rows.set(d.id, data);
+        const t = tsOf(data); if (t && rxCmp(t, maxTs) > 0) maxTs = t;
+      });
+      changed = snap.size > 0;
+      rxMissingIndexes.delete(label);
+    } catch (e) {
+      if (!rxIndexError(e)) throw e;
+      rxMissingIndexes.set(col, rxIndexLink(e));
+      console.warn('[rx] ยังไม่มี index สำหรับดึงเฉพาะส่วนที่เปลี่ยนของ ' + label + ' — โหลดเต็มแทน', rxIndexLink(e));
+      rows = null;
+    }
+  }
+  if (!rows) {
+    const snap = await opt.query.get();
+    rxCountReads(label + ' full', Math.max(1, snap.size));
+    rows = new Map(); maxTs = [0, 0]; fullAt = Date.now(); changed = true;
+    snap.docs.forEach(function (d) {
+      const data = rxEncode(d.data()); rows.set(d.id, data);
+      const t = field ? tsOf(data) : null; if (t && rxCmp(t, maxTs) > 0) maxTs = t;
+    });
+  }
+  // เอาเอกสารที่ถูกลบออก (ป้ายลบใหม่กว่าเวลาแก้ไขล่าสุดของเอกสาร)
+  (opt.tombs || []).forEach(function (t) {
+    if (t[0] !== col || !rows.has(t[1])) return;
+    const ct = tsOf(rows.get(t[1]));
+    if (!ct || rxCmp(t[2], ct) > 0) { rows.delete(t[1]); changed = true; }
+  });
+  if (field && changed) await rxKv.set(key, { epoch: rxMeta.epoch, fullAt: fullAt, maxTs: maxTs, rows: Array.from(rows.entries()) });
+  const out = [];
+  rows.forEach(function (d, id) { out.push(Object.assign({ id: id }, rxDecode(d))); });
+  return out;
+};
+
+const rxClearLocalCache = () => rxKv.clear();
+// แอดมิน: ให้ทุกเครื่องโหลดข้อมูลเต็มใหม่ในการเปิดครั้งถัดไป
+const rxBumpEpoch = async () => {
+  await db.collection('config').doc('app_meta').set({ cache_epoch: firebase.firestore.FieldValue.increment(1), cache_epoch_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await rxLoadMeta(true);
+};
+// เอกสารที่ถูกแก้จากนอกเว็บ (เช่น Bridge) แตะ updated_at ให้เครื่องอื่นเห็นการเปลี่ยน
+const rxTouch = async (col, id) => {
+  const f = RX_DELTA_FIELDS[col]; if (!f || !id) return;
+  try { await db.collection(col).doc(String(id)).update({ [f]: firebase.firestore.FieldValue.serverTimestamp() }); }
+  catch (e) { console.warn('[rx] touch ' + col + '/' + id, e && e.message); }
+};
+
+// --- Write hooks: เติมฟิลด์เวลา + เขียนป้ายลบ ---
+const rxStampData = (col, data) => {
+  const f = RX_DELTA_FIELDS[col];
+  if (!f || !data || typeof data !== 'object' || Array.isArray(data)) return data;
+  if (Object.prototype.hasOwnProperty.call(data, f)) return data;
+  const o = Object.assign({}, data); o[f] = firebase.firestore.FieldValue.serverTimestamp();
+  return o;
+};
+const rxColOf = (ref) => { try { return (ref && ref.parent && ref.parent.id) || ''; } catch (e) { return ''; } };
+const rxWriteTombs = (list) => {
+  const items = (list || []).filter(function (x) { return x && RX_DELTA_FIELDS[x[0]]; });
+  if (!items.length || !auth.currentUser) return Promise.resolve();
+  try {
+    const b = db.batch();
+    items.forEach(function (x) {
+      b.set(db.collection(RX_TOMB_COL).doc(), { col: x[0], doc_id: String(x[1]), deleted_at: firebase.firestore.FieldValue.serverTimestamp(), by: auth.currentUser.uid });
+    });
+    return b.commit().catch(function (e) { console.warn('[rx] tombstone write failed (deploy rules v6.2?)', e && e.message); });
+  } catch (e) { return Promise.resolve(); }
+};
+const rxInstallWriteHooks = () => {
+  if (rxInstallWriteHooks.done) return;
+  rxInstallWriteHooks.done = true;
+  const patchWriter = function (proto, kind) {
+    if (!proto || proto.__rxHooked) return;
+    proto.__rxHooked = true;
+    const oSet = proto.set, oUpd = proto.update, oDel = proto['delete'];
+    if (kind === 'ref') {
+      proto.set = function (data, options) { return oSet.call(this, rxStampData(rxColOf(this), data), options); };
+      proto.update = function (data) {
+        if (arguments.length === 1) return oUpd.call(this, rxStampData(rxColOf(this), data));
+        return oUpd.apply(this, arguments);
+      };
+      proto['delete'] = function () {
+        const col = rxColOf(this), id = this.id;
+        return oDel.call(this).then(function (r) { rxWriteTombs([[col, id]]); return r; });
+      };
+    } else {
+      proto.set = function (ref, data, options) { return oSet.call(this, ref, rxStampData(rxColOf(ref), data), options); };
+      proto.update = function (ref, data) {
+        if (arguments.length === 2) return oUpd.call(this, ref, rxStampData(rxColOf(ref), data));
+        return oUpd.apply(this, arguments);
+      };
+      proto['delete'] = function (ref) {
+        if (!this.__rxTombs) this.__rxTombs = [];
+        this.__rxTombs.push([rxColOf(ref), ref.id]);
+        return oDel.call(this, ref);
+      };
+      if (kind === 'batch' && proto.commit) {
+        const oCommit = proto.commit;
+        proto.commit = function () {
+          const tombs = this.__rxTombs || [];
+          return oCommit.call(this).then(function (r) { rxWriteTombs(tombs); return r; });
+        };
+      }
+    }
+  };
+  try {
+    patchWriter(Object.getPrototypeOf(db.collection('_rx').doc('_rx')), 'ref');
+    patchWriter(Object.getPrototypeOf(db.batch()), 'batch');
+    const oRun = db.runTransaction.bind(db);
+    db.runTransaction = function (fn, options) {
+      let lastTx = null;
+      return oRun(function (tx) {
+        patchWriter(Object.getPrototypeOf(tx), 'tx');
+        tx.__rxTombs = []; lastTx = tx;
+        return fn(tx);
+      }, options).then(function (res) { if (lastTx) rxWriteTombs(lastTx.__rxTombs); return res; });
+    };
+  } catch (e) { console.warn('[rx] write hooks not installed', e); }
+};
+rxInstallWriteHooks();
+
+// ════════════════════════════════════════════════════════════
+// v6.2 แบบประเมินการใช้งาน (ปุ่มลอยมุมขวาล่าง + ชวนประเมินหลังทำงานเสร็จ)
+//  config/app_meta.feedback = { round_id, round_no, title, open, roles[] }  ← อ่านพร้อม cache_epoch (ไม่เสีย read เพิ่ม)
+//  feedback_rounds/{id}                       ← แอดมินสร้าง/เปิด/ปิดรอบ
+//  feedback_responses/{round_id}__{uid}       ← 1 คน 1 คำตอบต่อรอบ (แก้ไขได้)
+// ════════════════════════════════════════════════════════════
+const FEEDBACK_FUNCTIONS = {
+  hospital: [
+    ['rpst_round', 'เลือกรอบเบิก'], ['rpst_upload', 'อัปโหลด รบ.301 / ดึงยอดใช้'], ['rpst_calc', 'ระบบคำนวณจำนวนเบิก'],
+    ['rpst_print', 'พิมพ์ใบเบิก / แก้ตำแหน่งผู้ลงนาม'], ['rpst_stock', 'ชั้นยาของฉัน / คลังยา'], ['rpst_ncds', 'ยา NCDs ตามนัด'],
+    ['rpst_vaccine', 'เบิกวัคซีน ว.3/1'], ['rpst_history', 'ประวัติการใช้ยา']
+  ],
+  dept: [
+    ['int_round', 'เลือกรอบเบิก'], ['int_search', 'ค้นหายา / ใส่จำนวน (แพ็ค-หน่วยย่อย)'], ['int_template', 'ดึงรายการจากใบล่าสุด / ยาที่เบิกบ่อย'],
+    ['int_print', 'พิมพ์ใบเบิก'], ['int_track', 'ติดตามสถานะใบเบิก']
+  ],
+  pharmacy: [
+    ['int_round', 'เลือกรอบเบิก'], ['ph_hosxp', 'ดึงยอดใช้จาก HOSxP'], ['ph_suggest', 'ระบบแนะนำจำนวน / ข้ามรอบ'],
+    ['ph_credit', 'เครดิต / สต็อกห้องยา'], ['int_print', 'พิมพ์ใบเบิก'], ['int_track', 'ติดตามสถานะใบเบิก']
+  ],
+  admin: [
+    ['adm_review', 'ตรวจ / อนุมัติใบเบิก รพ.สต.'], ['adm_internal', 'คิวใบเบิกภายใน รพ.'], ['adm_invs', 'ส่งเข้า INVS'],
+    ['adm_master', 'จัดการฐานข้อมูลยา / หน่วยงาน'], ['adm_rounds', 'รอบเบิก'], ['adm_reports', 'สรุปการเบิก / รายงาน'], ['adm_map', 'VMI Map']
+  ]
+};
+const FEEDBACK_ROLES = { hospital: 'รพ.สต.', dept: 'หน่วยงาน', pharmacy: 'ห้องยา', admin: 'แอดมิน' };
+const FEEDBACK_SCALE = [[1, 'ต้องปรับ'], [2, 'พอใช้'], [3, 'ปานกลาง'], [4, 'ดี'], [5, 'ดีมาก']];
+const FEEDBACK_TIME = [['much_faster', 'เร็วขึ้นมาก'], ['faster', 'เร็วขึ้น'], ['same', 'เท่าเดิม'], ['slower', 'ช้าลง']];
+const rxTaskDone = (fn) => { try { window.dispatchEvent(new CustomEvent('rx:task-done', { detail: { fn: fn } })); } catch (e) { /* ignore */ } };
+const rxFbStore = {
+  get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } },
+  sget: function (k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } },
+  sset: function (k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+};
+
+// props: { user, unitId, unitName, page }
+const RxFeedbackWidget = (props) => {
+  const h = React.createElement;
+  const user = props.user || {};
+  const role = normalizeUserRole(user.role);
+  const [meta, setMeta] = React.useState(rxMeta.loaded ? rxMeta.feedback : null);
+  const [done, setDone] = React.useState(null); // null=ยังไม่รู้, true/false
+  const [open, setOpen] = React.useState(false);
+  const [prompt, setPrompt] = React.useState(null); // fnKey ที่ทำเสร็จ
+  const [hidden, setHidden] = React.useState(false);
+  const [focusFn, setFocusFn] = React.useState('');
+  const fb = meta && meta.open && meta.round_id && (!Array.isArray(meta.roles) || !meta.roles.length || meta.roles.indexOf(role) >= 0) ? meta : null;
+  const docId = fb ? (fb.round_id + '__' + user.uid) : '';
+  const doneKey = 'rx_fb_done_' + docId;
+
+  React.useEffect(function () {
+    const onMeta = function (e) { setMeta(e.detail && e.detail.feedback ? Object.assign({}, e.detail.feedback) : null); };
+    window.addEventListener('rx:meta', onMeta);
+    if (!rxMeta.loaded) rxLoadMeta().then(function () { setMeta(rxMeta.feedback ? Object.assign({}, rxMeta.feedback) : null); });
+    return function () { window.removeEventListener('rx:meta', onMeta); };
+  }, []);
+  React.useEffect(function () {
+    if (!fb || !user.uid) return;
+    setHidden(rxFbStore.sget('rx_fb_hide_' + fb.round_id) === '1');
+    if (rxFbStore.get(doneKey) === '1') { setDone(true); return; }
+    let alive = true;
+    db.collection('feedback_responses').doc(docId).get()
+      .then(function (sn) { rxCountReads('feedback_responses[own]', 1); if (!alive) return; setDone(sn.exists); if (sn.exists) rxFbStore.set(doneKey, '1'); })
+      .catch(function () { if (alive) setDone(false); });
+    return function () { alive = false; };
+  }, [docId]);
+  React.useEffect(function () {
+    if (!fb) return;
+    const onDone = function (e) {
+      const fn = (e.detail && e.detail.fn) || '';
+      if (done !== false) return;                                   // ตอบแล้ว/ยังไม่รู้ → ไม่รบกวน
+      const promptedKey = 'rx_fb_prompted_' + fb.round_id;
+      if (rxFbStore.sget(promptedKey) === '1') return;               // ชวนแล้วใน session นี้
+      const day = new Date().toISOString().slice(0, 10);
+      if (rxFbStore.get('rx_fb_prompt_day_' + fb.round_id) === day) return; // ชวนวันละครั้ง
+      rxFbStore.sset(promptedKey, '1'); rxFbStore.set('rx_fb_prompt_day_' + fb.round_id, day);
+      setTimeout(function () { setPrompt(fn || 'general'); }, 1200);
+    };
+    window.addEventListener('rx:task-done', onDone);
+    return function () { window.removeEventListener('rx:task-done', onDone); };
+  }, [fb && fb.round_id, done]);
+
+  if (!fb || !user.uid) return null;
+  const openForm = function (fn) { setFocusFn(fn || ''); setPrompt(null); setOpen(true); };
+  const pending = done === false;
+
+  const fab = hidden ? h('button', {
+    type: 'button', onClick: function () { setHidden(false); rxFbStore.sset('rx_fb_hide_' + fb.round_id, '0'); },
+    title: 'แสดงปุ่มประเมินการใช้งาน', 'aria-label': 'แสดงปุ่มประเมินการใช้งาน',
+    className: 'no-print fixed bottom-6 right-0 z-[115] w-3 h-12 rounded-l-lg bg-indigo-500/70 hover:bg-indigo-600 transition'
+  }) : h('div', { className: 'no-print fixed bottom-6 right-6 z-[115] group flex items-center' },
+    h('button', {
+      type: 'button', onClick: function () { setHidden(true); rxFbStore.sset('rx_fb_hide_' + fb.round_id, '1'); },
+      'aria-label': 'ซ่อนปุ่มประเมิน', title: 'ซ่อน (กลับมาได้ที่แถบเล็กขอบขวา)',
+      className: 'mr-1 w-6 h-6 rounded-full bg-white border text-slate-400 text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 transition shadow'
+    }, '×'),
+    h('button', {
+      type: 'button', id: 'rx-feedback-fab', onClick: function () { openForm(''); },
+      'aria-label': 'ประเมินการใช้งาน รอบที่ ' + fb.round_no,
+      className: 'relative flex items-center gap-2 h-12 pl-3.5 pr-3.5 group-hover:pr-4 rounded-full shadow-xl font-bold transition-all ' + (pending ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-white text-indigo-700 border border-indigo-200')
+    },
+      h('i', { className: 'fa-solid ' + (pending ? 'fa-star-half-stroke' : 'fa-circle-check') }),
+      h('span', { className: 'max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-[16rem] transition-all duration-300 text-sm' }, pending ? 'ประเมินการใช้งาน · รอบที่ ' + fb.round_no : 'ประเมินแล้ว · แก้ไขคำตอบ'),
+      pending ? h('span', { className: 'absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-amber-400 ring-2 ring-white' }) : null
+    )
+  );
+
+  const promptCard = prompt ? h('div', { role: 'dialog', 'aria-label': 'ชวนประเมินการใช้งาน', className: 'no-print fixed bottom-24 right-6 z-[116] w-[min(22rem,calc(100vw-3rem))] bg-white rounded-2xl shadow-2xl border border-indigo-100 p-4 animate-fade-in' },
+    h('div', { className: 'flex items-start gap-3' },
+      h('div', { className: 'w-9 h-9 shrink-0 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center' }, h('i', { className: 'fa-solid fa-check' })),
+      h('div', { className: 'text-sm' },
+        h('div', { className: 'font-extrabold text-slate-800' }, 'ทำรายการเสร็จเรียบร้อย'),
+        h('div', { className: 'text-slate-500 mt-0.5' }, 'ช่วยประเมินการใช้งานรอบที่ ' + fb.round_no + ' (ประมาณ 1 นาที) เพื่อปรับปรุงระบบให้ใช้ง่ายขึ้น')
+      )
+    ),
+    h('div', { className: 'flex justify-end gap-2 mt-3' },
+      h('button', { type: 'button', onClick: function () { setPrompt(null); }, className: 'px-3 py-1.5 rounded-lg text-sm font-bold text-slate-500 hover:bg-slate-100' }, 'ไว้ทีหลัง'),
+      h('button', { type: 'button', id: 'rx-feedback-prompt-go', onClick: function () { openForm(prompt); }, className: 'px-4 py-1.5 rounded-lg text-sm font-bold bg-indigo-600 text-white hover:bg-indigo-700' }, 'ประเมินเลย')
+    )
+  ) : null;
+
+  return h(React.Fragment, null, fab, promptCard,
+    open ? h(RxFeedbackForm, {
+      fb: fb, user: user, role: role, docId: docId, focusFn: focusFn, unitId: props.unitId, unitName: props.unitName, page: props.page,
+      onClose: function () { setOpen(false); },
+      onSaved: function () { rxFbStore.set(doneKey, '1'); setDone(true); }
+    }) : null);
+};
+
+const RxFeedbackForm = (p) => {
+  const h = React.createElement;
+  const fns = FEEDBACK_FUNCTIONS[p.role] || FEEDBACK_FUNCTIONS.hospital;
+  const [ans, setAns] = React.useState({ ratings: {}, overall: 0, ease: 0, speed: 0, time_saving: '', liked: '', improve: '', problems: '' });
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [saved, setSaved] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  React.useEffect(function () {
+    let alive = true;
+    db.collection('feedback_responses').doc(p.docId).get().then(function (sn) {
+      rxCountReads('feedback_responses[own]', 1);
+      if (alive && sn.exists) { const d = sn.data() || {}; setAns(function (a) { return Object.assign({}, a, { ratings: d.ratings || {}, overall: d.overall || 0, ease: d.ease || 0, speed: d.speed || 0, time_saving: d.time_saving || '', liked: d.liked || '', improve: d.improve || '', problems: d.problems || '' }); }); }
+    }).catch(function () { /* ยังไม่มีคำตอบ */ }).finally(function () { if (alive) setLoading(false); });
+    const onKey = function (e) { if (e.key === 'Escape') p.onClose(); };
+    window.addEventListener('keydown', onKey);
+    return function () { alive = false; window.removeEventListener('keydown', onKey); };
+  }, []);
+  React.useEffect(function () {
+    if (loading || !p.focusFn) return;
+    const el = document.getElementById('rx-fb-row-' + p.focusFn);
+    if (el) el.scrollIntoView({ block: 'center' });
+  }, [loading]);
+  const setRating = function (k, v) { setAns(function (a) { const r = Object.assign({}, a.ratings); r[k] = v; return Object.assign({}, a, { ratings: r }); }); };
+  const scaleRow = function (id, label, value, onPick, opts) {
+    opts = opts || {};
+    return h('div', { key: id, id: 'rx-fb-row-' + id, className: 'flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 border-b border-slate-100 ' + (p.focusFn === id ? 'bg-indigo-50/70 -mx-3 px-3 rounded-lg' : '') },
+      h('div', { className: 'flex-1 min-w-[11rem] text-sm font-semibold text-slate-700' }, label),
+      h('div', { className: 'flex gap-1', role: 'radiogroup', 'aria-label': label },
+        FEEDBACK_SCALE.map(function (sc) {
+          const on = value === sc[0];
+          return h('button', { key: sc[0], type: 'button', role: 'radio', 'aria-checked': on, title: sc[1], onClick: function () { onPick(sc[0]); },
+            className: 'w-10 h-9 rounded-lg text-sm font-extrabold border transition ' + (on ? 'bg-indigo-600 border-indigo-600 text-white shadow' : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-300') }, String(sc[0]));
+        }),
+        opts.na ? h('button', { type: 'button', role: 'radio', 'aria-checked': value === 0, onClick: function () { onPick(0); },
+          className: 'h-9 px-2.5 rounded-lg text-xs font-bold border transition ' + (value === 0 ? 'bg-slate-700 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-400 hover:border-slate-400') }, 'ไม่ได้ใช้') : null
+      )
+    );
+  };
+  const rated = fns.filter(function (f) { return ans.ratings[f[0]] !== undefined; }).length;
+  const canSave = ans.overall > 0;
+  const submit = async function () {
+    if (!canSave) { setErr('กรุณาให้คะแนน "ความพึงพอใจโดยรวม" อย่างน้อย 1 ข้อ'); return; }
+    setSaving(true); setErr('');
+    try {
+      const fv = firebase.firestore.FieldValue;
+      await db.collection('feedback_responses').doc(p.docId).set({
+        round_id: p.fb.round_id, round_no: Number(p.fb.round_no) || 0, uid: p.user.uid, name: safeText(p.user.name), role: p.role,
+        unit_id: safeText(p.unitId), unit_name: safeText(p.unitName), page: safeText(p.page),
+        ratings: ans.ratings, overall: ans.overall, ease: ans.ease || 0, speed: ans.speed || 0, time_saving: ans.time_saving,
+        liked: safeText(ans.liked).slice(0, 2000), improve: safeText(ans.improve).slice(0, 2000), problems: safeText(ans.problems).slice(0, 2000),
+        app_version: APP_VERSION, updated_at: fv.serverTimestamp()
+      }, { merge: true });
+      setSaved(true); p.onSaved();
+    } catch (e) { setErr('ส่งไม่สำเร็จ: ' + ((e && e.message) || e)); }
+    finally { setSaving(false); }
+  };
+  const textArea = function (key, label, ph) {
+    return h('label', { className: 'block' },
+      h('span', { className: 'text-sm font-bold text-slate-600' }, label),
+      h('textarea', { id: 'rx-fb-' + key, rows: 2, value: ans[key], placeholder: ph, onChange: function (e) { const v = e.target.value; setAns(function (a) { const o = Object.assign({}, a); o[key] = v; return o; }); },
+        className: 'mt-1 w-full p-2.5 border border-slate-200 rounded-xl text-sm resize-y focus:ring-2 focus:ring-indigo-300 outline-none' }));
+  };
+  const body = saved ? h('div', { className: 'py-10 text-center space-y-3' },
+    h('div', { className: 'w-14 h-14 mx-auto rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-2xl' }, h('i', { className: 'fa-solid fa-heart' })),
+    h('div', { className: 'text-xl font-extrabold text-slate-800' }, 'ขอบคุณสำหรับการประเมิน'),
+    h('div', { className: 'text-sm text-slate-500' }, 'คำตอบถูกบันทึกแล้ว แก้ไขได้ตลอดช่วงที่เปิดรับรอบนี้ ที่ปุ่มมุมขวาล่าง'),
+    h('button', { type: 'button', onClick: p.onClose, className: 'mt-2 px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold' }, 'ปิด')
+  ) : loading ? h('div', { className: 'py-16 flex justify-center' }, h('div', { className: 'loader' })) : h('div', { className: 'space-y-5' },
+    h('section', null,
+      h('div', { className: 'flex items-baseline justify-between gap-2' },
+        h('h4', { className: 'font-extrabold text-slate-800' }, '1. ฟังก์ชันที่ใช้งาน'),
+        h('span', { className: 'text-xs text-slate-400' }, '1 = ต้องปรับ · 5 = ดีมาก · ให้คะแนนแล้ว ' + rated + '/' + fns.length)),
+      h('div', null, fns.map(function (f) { return scaleRow(f[0], f[1], ans.ratings[f[0]], function (v) { setRating(f[0], v); }, { na: true }); }))
+    ),
+    h('section', null,
+      h('h4', { className: 'font-extrabold text-slate-800' }, '2. ภาพรวม'),
+      scaleRow('overall', 'ความพึงพอใจโดยรวม *', ans.overall, function (v) { setAns(function (a) { return Object.assign({}, a, { overall: v }); }); }),
+      scaleRow('ease', 'ใช้งานง่าย / เข้าใจง่าย', ans.ease, function (v) { setAns(function (a) { return Object.assign({}, a, { ease: v }); }); }),
+      scaleRow('speed', 'ความเร็วในการเปิด / บันทึก', ans.speed, function (v) { setAns(function (a) { return Object.assign({}, a, { speed: v }); }); }),
+      h('div', { className: 'py-2.5' },
+        h('div', { className: 'text-sm font-semibold text-slate-700 mb-1.5' }, 'เทียบกับวิธีเดิม ระบบนี้ทำให้งานเบิก'),
+        h('div', { className: 'flex flex-wrap gap-1.5', role: 'radiogroup' }, FEEDBACK_TIME.map(function (t) {
+          const on = ans.time_saving === t[0];
+          return h('button', { key: t[0], type: 'button', role: 'radio', 'aria-checked': on, onClick: function () { setAns(function (a) { return Object.assign({}, a, { time_saving: t[0] }); }); },
+            className: 'px-3.5 h-9 rounded-full text-sm font-bold border transition ' + (on ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300') }, t[1]);
+        }))
+      )
+    ),
+    h('section', { className: 'space-y-3' },
+      h('h4', { className: 'font-extrabold text-slate-800' }, '3. ข้อเสนอแนะ'),
+      textArea('liked', 'สิ่งที่ชอบ / ช่วยงานได้จริง', 'เช่น ไม่ต้องคีย์ยอดใช้เอง'),
+      textArea('improve', 'อยากให้ปรับปรุง / ฟังก์ชันที่อยากได้', 'เช่น อยากให้แจ้งเตือนเมื่อใบเบิกได้รับยาแล้ว'),
+      textArea('problems', 'ปัญหาที่พบ (ถ้ามี)', 'บอกหน้าที่ใช้และสิ่งที่เกิดขึ้น')
+    ),
+    err ? h('div', { className: 'text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3' }, err) : null,
+    h('div', { className: 'flex flex-wrap justify-between items-center gap-2 pt-3 border-t' },
+      h('span', { className: 'text-xs text-slate-400' }, 'ผู้ดูแลระบบเห็นชื่อและหน่วยของผู้ตอบ เพื่อติดต่อกลับเมื่อมีปัญหา'),
+      h('div', { className: 'flex gap-2' },
+        h('button', { type: 'button', onClick: p.onClose, className: 'px-4 py-2.5 rounded-xl bg-slate-100 font-bold text-slate-600' }, 'ไว้ทีหลัง'),
+        h('button', { type: 'button', id: 'rx-fb-submit', onClick: submit, disabled: saving, className: 'px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-50' }, saving ? 'กำลังส่ง...' : 'ส่งแบบประเมิน')
+      )
+    )
+  );
+  return h('div', { className: 'fixed inset-0 z-[200] bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4', onMouseDown: function (e) { if (e.target === e.currentTarget && !saving) p.onClose(); } },
+    h('div', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'แบบประเมินการใช้งาน', className: 'bg-white w-full sm:max-w-2xl max-h-[92vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl shadow-2xl' },
+      h('div', { className: 'sticky top-0 bg-white/95 backdrop-blur border-b px-5 py-4 flex items-start justify-between gap-3 z-10' },
+        h('div', null,
+          h('div', { className: 'text-xs font-bold text-indigo-600 tracking-wide' }, 'รอบที่ ' + p.fb.round_no + ' · ' + (FEEDBACK_ROLES[p.role] || '')),
+          h('h3', { className: 'text-lg font-extrabold text-slate-800' }, p.fb.title || 'แบบประเมินการใช้งาน Sawee Rxfill')),
+        h('button', { type: 'button', onClick: p.onClose, 'aria-label': 'ปิด', className: 'w-8 h-8 rounded-full border text-slate-400 hover:text-red-500' }, h('i', { className: 'fa-solid fa-xmark' }))
+      ),
+      h('div', { className: 'px-5 py-4' }, body)
+    )
+  );
+};
+
+// ─── v6.3 ปฏิทินเบิก / ประมาณการใช้ยา ───────────────────
+const THAI_WEEKDAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+const THAI_WEEKDAYS_SHORT = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+const thaiWeekday = (ymd, short) => { const d = parseYmd(ymd); return d ? (short ? THAI_WEEKDAYS_SHORT : THAI_WEEKDAYS)[d.getDay()] : ''; };
+const thaiDateShort = (ymd) => { const d = parseYmd(ymd); return d ? (d.getDate() + ' ' + THAI_MONTHS_SHORT[d.getMonth()] + ' ' + String(d.getFullYear() + 543).slice(2)) : ''; };
+// วันส่งสมุดเบิก (ล่วงหน้า N วันก่อนวันเบิก)
+const ROUND_SUBMIT_LEAD_DAYS = 2;
+const roundSubmitBy = (r) => r && r.round_date ? addDaysYmd(r.round_date, -ROUND_SUBMIT_LEAD_DAYS) : '';
+
+// ใบพิมพ์ "ประมาณการใช้ยา" (ไม่ใช่ใบเบิก) — rows: [{ drugId, name, unit, packSize, price, type, location, usage, dailyAvg, projected, packs }]
+const buildUsageEstimateHtml = (opts) => {
+  const esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  const num = function (v, d) { return toNonNegativeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: d == null ? 0 : d }); };
+  const money = function (v) { return toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  const types = opts.drugTypes || DEFAULT_DRUG_TYPES;
+  const groups = new Map();
+  (opts.rows || []).forEach(function (r) { const k = String(r.type || '1'); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const order = Array.from(groups.keys()).sort(function (a, b) { return Number(a) - Number(b); });
+  let i = 0, grand = 0;
+  const body = order.map(function (k) {
+    const list = groups.get(k).slice().sort(function (a, b) { return String(a.location || 'ฮ').localeCompare(String(b.location || 'ฮ'), 'th') || String(a.name).localeCompare(String(b.name), 'th'); });
+    const sub = list.reduce(function (s, r) { return s + toNonNegativeNumber(r.packs) * toNonNegativeNumber(r.price); }, 0); grand += sub;
+    return '<tr class="grp"><td colspan="9"><span>' + esc(types[k] || ('หมวด ' + k)) + ' (' + list.length + ' รายการ)</span><span class="sub">' + money(sub) + ' บาท</span></td></tr>' +
+      list.map(function (r) {
+        i += 1; const pack = safePackSize(r.packSize);
+        return '<tr><td class="c">' + i + '</td><td>' + esc(r.name) + '<div class="code">' + esc(r.drugId) + (r.location ? ' · ' + esc(r.location) : '') + '</div></td>' +
+          '<td>' + esc(r.unit) + (pack > 1 ? ' บรรจุ ' + num(pack) : '') + '</td>' +
+          '<td class="r">' + num(r.usage) + '</td><td class="r">' + num(r.usage / pack, 2) + '</td><td class="r">' + num(r.dailyAvg, 1) + '</td>' +
+          '<td class="r">' + num(r.projected) + '</td><td class="r b">' + num(r.packs) + '</td><td class="r">' + money(toNonNegativeNumber(r.packs) * toNonNegativeNumber(r.price)) + '</td></tr>';
+      }).join('');
+  }).join('');
+  const now = new Date();
+  const stamp = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ประมาณการใช้ยา ' + esc(opts.deptName) + '</title>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">' +
+    '<style>@page{size:A4;margin:12mm 10mm}body{font-family:Sarabun,"TH Sarabun New",sans-serif;font-size:12.5px;color:#000;margin:0}h1{font-size:17px;text-align:center;margin:0 0 2px}.meta{text-align:center;margin-bottom:8px}' +
+    'table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:3px 5px;vertical-align:top}th{background:#eee;font-size:11.5px}td{font-size:11.5px}.r{text-align:right;white-space:nowrap}.c{text-align:center}.b{font-weight:700}' +
+    '.code{font-family:Consolas,monospace;font-size:9.5px;color:#444}.grp td{background:#f4f4f4;font-weight:700}.grp .sub{float:right}.tot td{font-weight:700;font-size:13px}.note{margin-top:6px;font-size:11px;color:#333}.stamp{position:fixed;bottom:0;right:0;font-size:9px;color:#666}' +
+    'thead{display:table-header-group}tr{page-break-inside:avoid}</style></head><body>' +
+    '<h1>ประมาณการใช้ยา — ' + esc(opts.deptName) + '</h1>' +
+    '<div class="meta">ยอดใช้จริงจาก HOSxP ' + esc(thaiDateLong(opts.from)) + ' ถึง ' + esc(thaiDateLong(opts.to)) + ' (' + num(opts.days) + ' วัน) · ประมาณการสำหรับ <b>' + num(opts.projectDays) + ' วัน</b>' + (opts.bufferPct ? ' + เผื่อ ' + num(opts.bufferPct) + '%' : '') + '</div>' +
+    '<table><thead><tr><th style="width:4%">ที่</th><th>รายการ</th><th style="width:12%">หน่วย / บรรจุ</th><th style="width:9%">ใช้จริง<br>(หน่วยย่อย)</th><th style="width:8%">ใช้จริง<br>(หน่วยใหญ่)</th><th style="width:7%">เฉลี่ย/วัน</th><th style="width:9%">ประมาณการ<br>(หน่วยย่อย)</th><th style="width:8%">ต้องเบิก<br>(หน่วยใหญ่)</th><th style="width:10%">มูลค่า (บาท)</th></tr></thead>' +
+    '<tbody>' + (body || '<tr><td colspan="9" class="c">ไม่มีรายการ</td></tr>') + '</tbody>' +
+    '<tfoot><tr class="tot"><td colspan="8" class="r">รวม ' + i + ' รายการ · มูลค่าประมาณ</td><td class="r">' + money(grand) + '</td></tr></tfoot></table>' +
+    '<div class="note">หมายเหตุ: เอกสารประมาณการเพื่อวางแผน ไม่ใช่ใบเบิก · หน่วยใหญ่ = จำนวนหน่วยย่อย ÷ ขนาดบรรจุ (ปัดขึ้นเป็นจำนวนเต็มในช่องต้องเบิก)' + (opts.unmatched ? ' · ยา HOSxP ที่ยังจับคู่รหัส INVS ไม่ได้ ' + opts.unmatched + ' รายการ ไม่รวมในตาราง' : '') + '</div>' +
+    '<div class="stamp">พิมพ์เมื่อ: ' + stamp + '</div></body></html>';
 };

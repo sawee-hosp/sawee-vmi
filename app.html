@@ -212,11 +212,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.1.0"></script>
+  <script src="shared.js?v=6.3.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.1.0';
+      var need = '6.3.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1155,9 +1155,10 @@ const ReturnDrugView = ({ ctx }) => {
         const dt=parseInvsExpiry(raw);
         return dt ? dt.toLocaleDateString('th-TH',{day:'2-digit',month:'2-digit',year:'numeric'}) : (safeText(raw) || '-');
       };
+      // คำนวณจากวันหมดอายุทุกครั้ง (ตัว sync เขียนเฉพาะ Lot ที่เปลี่ยน ค่า days_to_expiry ที่เก็บไว้จึงอาจเก่า)
       const getDaysToExpiry = (row) => {
-        if (Number.isFinite(Number(row?.days_to_expiry))) return Number(row.days_to_expiry);
-        const dt=parseInvsExpiry(row?.expiry); if(!dt) return null;
+        const dt=parseInvsExpiry(row?.expiry);
+        if(!dt) return Number.isFinite(Number(row?.days_to_expiry)) ? Number(row.days_to_expiry) : null;
         const now=new Date(); now.setHours(0,0,0,0); dt.setHours(0,0,0,0);
         return Math.ceil((dt-now)/86400000);
       };
@@ -1324,9 +1325,8 @@ const ReturnDrugView = ({ ctx }) => {
       const [virtualLots, setVirtualLots] = useState([]);
       const [stockMeta, setStockMeta] = useState(null);
       const [stockEvents, setStockEvents] = useState([]);
-      const [eventLimit, setEventLimit] = useState(100);
+      const [eventLimit, setEventLimit] = useState(30);
       const [loadingEvents, setLoadingEvents] = useState(false);
-      const [stockSupport, setStockSupport] = useState({parLevels:[],balances:[]});
       const [loadingStock, setLoadingStock] = useState(false);
       const [detailItem, setDetailItem] = useState(null);
       const [adjustLot, setAdjustLot] = useState(null);
@@ -1383,7 +1383,7 @@ const ReturnDrugView = ({ ctx }) => {
       });
 
       const loadVirtualStock = async () => {
-        if(!hospId) { setVirtualLots([]); setStockMeta(null); setStockEvents([]); setStockSupport({parLevels:[],balances:[]}); return; }
+        if(!hospId) { setVirtualLots([]); setStockMeta(null); setStockEvents([]); return; }
         setLoadingStock(true);
         try {
           const eventPromise=queryStockEvents(eventLimit);
@@ -1392,17 +1392,11 @@ const ReturnDrugView = ({ ctx }) => {
             db.collection('vmi_stock_meta').doc(hospId).get(),
             eventPromise
           ];
-          if(isAdmin) requests.push(
-            db.collection('config_par').where('hospital_id','==',hospId).get(),
-            db.collection('current_excess').where('hospital_id','==',hospId).get()
-          );
-          const [lotSnap, metaSnap, eventSnap, parSnap, balSnap] = await Promise.all(requests);
+          // par / คงเหลือ ใช้ข้อมูลที่แคชไว้ใน ctx (แอดมินโหลดเฉพาะ รพ.สต. ที่เลือก) ไม่อ่านซ้ำที่นี่
+          if(isAdmin) requests.push(ctx.refreshData(ctx.currentUser,{hospitalId:hospId}));
+          const [lotSnap, metaSnap, eventSnap] = await Promise.all(requests);
           setVirtualLots(lotSnap.docs.map(d=>({id:d.id,...d.data()})));
           setStockMeta(metaSnap.exists?{id:metaSnap.id,...metaSnap.data()}:null);
-          if(isAdmin) setStockSupport({
-            parLevels:parSnap.docs.map(d=>({id:d.id,...d.data()})),
-            balances:balSnap.docs.map(d=>({id:d.id,...d.data()}))
-          });
           setStockEvents(rowsFromEventSnap(eventSnap));
         } catch(e) {
           console.error('[VIRTUAL STOCK] load failed',e);
@@ -1413,7 +1407,7 @@ const ReturnDrugView = ({ ctx }) => {
 
       const loadMoreStockEvents=async()=>{
         if(!hospId||loadingEvents) return;
-        const nextLimit=eventLimit+100;
+        const nextLimit=eventLimit+50;
         setLoadingEvents(true);
         try {
           const snap=await queryStockEvents(nextLimit);
@@ -1424,8 +1418,8 @@ const ReturnDrugView = ({ ctx }) => {
       };
 
       const drugList = useMemo(() => {
-        const parSource=isAdmin?stockSupport.parLevels:(ctx.appDb.parLevels||[]);
-        const balanceSource=isAdmin?stockSupport.balances:(ctx.appDb.balances||[]);
+        const parSource=ctx.appDb.parLevels||[];
+        const balanceSource=ctx.appDb.balances||[];
         const parMap=new Map(parSource.filter(p=>String(p.hospital_id)===String(hospId)).map(p=>[String(p.drug_id),p]));
         const lotDrugIds=[...new Set((virtualLots||[]).map(x=>String(x.drug_id||'')).filter(Boolean))];
         const ids=[...new Set([...parMap.keys(),...lotDrugIds])];
@@ -1457,7 +1451,7 @@ const ReturnDrugView = ({ ctx }) => {
             unresolvedGap, latestRecon, latestStockEvent
           };
         }).sort(sortDrugs);
-      },[ctx.appDb,virtualLots,stockEvents,hospId,isAdmin,stockSupport]);
+      },[ctx.appDb,virtualLots,stockEvents,hospId,isAdmin]);
 
       const [shelfOrder,setShelfOrder]=useState(()=>{
         try { const p=JSON.parse(localStorage.getItem(shelfStorageKey)||'{}'); return p&&typeof p==='object'?p:{}; } catch(e){return{};}
@@ -1777,7 +1771,7 @@ const ReturnDrugView = ({ ctx }) => {
                 const drug=ctx.findDrug(e.drug_id); const delta=Number(e.qty_delta||0);
                 return <tr key={e.id} className="border-t"><td className="p-3 text-slate-500">{formatAppDateTime(e.created_at)}</td><td className="p-3"><div className="font-bold">{drug?.drug_name||e.drug_id}</div><div className="font-mono text-[9px] text-slate-400">{e.drug_id}</div></td><td className="p-3 font-bold">{e.event_type==='CREDIT_RECONCILE_FEFO'?'หักยอดตามใบเบิก':e.event_type==='INVS_RECEIPT'?'รับยาเพิ่มจาก รพ.สวี':e.event_type==='MANUAL_ADJUST'?'แก้ยอดจากการตรวจนับ':e.event_type==='STOCK_RETURN'?'คืนยาออกจากคลัง':e.event_type==='BASELINE_INIT'?'ยอดตั้งต้น':e.event_type||'-'}</td><td className={`p-3 text-right font-black ${delta<0?'text-red-600':delta>0?'text-emerald-600':'text-slate-400'}`}>{delta>0?'+':''}{delta.toLocaleString('th-TH')}</td><td className="p-3 text-right">{toNonNegativeNumber(e.before_qty).toLocaleString('th-TH')}</td><td className="p-3 text-right font-bold">{toNonNegativeNumber(e.after_qty).toLocaleString('th-TH')}</td><td className="p-3"><span className="font-mono font-bold">{e.lot_no||'-'}</span><div className="text-[9px] text-slate-400">{formatExpiry(e.expiry)}</div></td><td className="p-3 text-slate-500">{e.source_requisition_id||e.invs_sub_po_no||e.reason||'-'}</td></tr>;
               })}{stockEvents.length===0&&<tr><td colSpan="8" className="p-10 text-center text-slate-400">ยังไม่มีประวัติการเปลี่ยนยอด</td></tr>}</tbody></table>
-              {stockEvents.length>=eventLimit&&<div className="border-t bg-slate-50 p-3 text-center"><button onClick={loadMoreStockEvents} disabled={loadingEvents} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50"><i className={`fa-solid ${loadingEvents?'fa-spinner fa-spin':'fa-chevron-down'} mr-2`}></i>{loadingEvents?'กำลังโหลด...':'โหลดประวัติเพิ่มอีก 100 รายการ'}</button><div className="mt-1 text-[9px] text-slate-400">จำกัดการอ่านครั้งละ {eventLimit.toLocaleString('th-TH')} รายการ เพื่อลดค่า Firestore</div></div>}
+              {stockEvents.length>=eventLimit&&<div className="border-t bg-slate-50 p-3 text-center"><button onClick={loadMoreStockEvents} disabled={loadingEvents} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50"><i className={`fa-solid ${loadingEvents?'fa-spinner fa-spin':'fa-chevron-down'} mr-2`}></i>{loadingEvents?'กำลังโหลด...':'โหลดประวัติเพิ่มอีก 50 รายการ'}</button><div className="mt-1 text-[9px] text-slate-400">จำกัดการอ่านครั้งละ {eventLimit.toLocaleString('th-TH')} รายการ เพื่อลดค่า Firestore</div></div>}
             </div>
           )}
 
@@ -2528,6 +2522,7 @@ const CreateReqView = ({ ctx, round = null }) => {
              ctx.showToast(uploadFailed ? 'ส่งข้อมูลสำเร็จ แต่ไฟล์ รบ.301 อัปโหลดไม่สำเร็จ' : (isAdmin ? 'อัปโหลดแทน รพ.สต. สำเร็จ (รอตรวจสอบ)' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา'), uploadFailed ? 'error' : 'success');
            }
 
+           if (savedReqForLocal && saveStatus === 'Pending') rxTaskDone(isAdmin ? 'adm_review' : 'rpst_calc');
            if (savedReqForLocal && ctx.setAppDb) {
              ctx.setAppDb(prev => {
                const rest = (prev.requisitions || []).filter(r => String(r.id) !== String(savedReqForLocal.id));
@@ -3815,7 +3810,7 @@ const ViewReqView = ({ ctx }) => {
           const data = await callInvsBridge('preflight', req.id);
           setInvsPreflight(data);
           setShowInvsModal(true);
-          if (data.already_sent) await ctx.refreshData();
+          if (data.already_sent) { await rxTouch('requisitions', req.id); await ctx.refreshData(); }
         } catch(e) {
           if (e?.payload && (Array.isArray(e.payload.items) || Array.isArray(e.payload.errors))) {
             setInvsPreflight(e.payload);
@@ -3831,6 +3826,7 @@ const ViewReqView = ({ ctx }) => {
         setIsInvsBusy(true);
         try {
           const data = await callInvsBridge('send', req.id);
+          await rxTouch('requisitions', req.id); // Bridge แก้เอกสารจากฝั่งเซิร์ฟเวอร์ → แตะเวลาให้แคชทุกเครื่องเห็น
           setInvsPreflight(data);
           ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
           await ctx.refreshData();
@@ -3957,6 +3953,8 @@ const ViewReqView = ({ ctx }) => {
 
           const currentKey = getYearMonthKey(req.month, req.year);
           const operations = [];
+          // ถ้าข้อมูลคงเหลือ/ประวัติของ รพ.สต. นี้โหลดอยู่ในเครื่อง จึงข้ามรายการที่ไม่เปลี่ยนได้อย่างปลอดภัย
+          const hospDataLoaded = (ctx.appDb.hospScopes || []).some(sc => sc === 'ALL' || String(sc) === String(req.hospitalId));
           approvedItems.forEach(it => {
               if (!it.drugId) return;
               if (it.actualStockTouched) {
@@ -3985,7 +3983,15 @@ const ViewReqView = ({ ctx }) => {
                   options: { merge: true }
                 });
               }
-              operations.push({
+              // v6.2 เขียนเฉพาะรายการที่ค่าเปลี่ยนจริง (เดิมเขียนทุกตัวยา ~2 writes/ยา/ใบ)
+              const prevBal = ctx.findBalance(req.hospitalId, it.drugId);
+              const newBal = toSafeNumber(it.newExcess);
+              const balUnchanged = hospDataLoaded && (prevBal ? Math.abs(toSafeNumber(prevBal.excess_balance) - newBal) < 1e-9 : Math.abs(newBal) < 1e-9);
+              const prevHist = ctx.findHist(req.hospitalId, it.drugId);
+              const usageNow = toNonNegativeNumber(it.usage);
+              const prevUsage = prevHist?.history ? prevHist.history[currentKey] : undefined;
+              const histUnchanged = hospDataLoaded && (prevUsage === undefined || prevUsage === null ? usageNow === 0 : Math.abs(toNonNegativeNumber(prevUsage) - usageNow) < 1e-9);
+              if (!balUnchanged) operations.push({
                 type: 'set',
                 ref: db.collection('current_excess').doc(`${req.hospitalId}_${it.drugId}`),
                 data: {
@@ -3996,7 +4002,7 @@ const ViewReqView = ({ ctx }) => {
                 },
                 options: { merge: true }
               });
-              operations.push({
+              if (!histUnchanged) operations.push({
                 type: 'set',
                 ref: db.collection('historical_usages').doc(`${req.hospitalId}_${it.drugId}`),
                 data: {
@@ -4034,6 +4040,7 @@ const ViewReqView = ({ ctx }) => {
           });
 
           ctx.showToast('อนุมัติและอัปเดตสต๊อกเรียบร้อยแล้ว');
+          rxTaskDone('adm_review');
           await ctx.refreshData();
           ctx.setCurrentView('dashboard');
         } catch(e) {
@@ -4133,6 +4140,7 @@ const ViewReqView = ({ ctx }) => {
            // window.print เปิด print dialog ของ browser; ไม่จำเป็นต้องสร้าง PDF tab ใหม่
            window.setTimeout(() => {
              window.print();
+             rxTaskDone(ctx.currentUser?.role === 'admin' ? 'adm_review' : 'rpst_print');
              document.title = originalTitle;
              setIsPrinting(false);
            }, 250);
@@ -4906,6 +4914,8 @@ const ViewReqView = ({ ctx }) => {
     const DrugHistoryView = ({ ctx }) => {
         const isAdmin = ctx.currentUser?.role === 'admin';
         const [selHosp, setSelHosp] = useState(ctx.currentUser?.hospital_id || ctx.appDb.hospitals[0]?.hospital_id || '');
+        // แอดมิน: โหลดประวัติการใช้เฉพาะ รพ.สต. ที่เลือก (ใช้แคช ไม่อ่านซ้ำทั้งเครือข่าย)
+        useEffect(() => { if (isAdmin && selHosp) ctx.refreshData(ctx.currentUser, { hospitalId: selHosp }); }, [isAdmin, selHosp]);
         
         const today = new Date();
         const currentMonth = today.getMonth() + 1;
@@ -5730,6 +5740,7 @@ const MapDashboardView = ({ ctx }) => {
 
     const HistManager = ({ ctx }) => {
          const [selHosp, setSelHosp] = useState(ctx.appDb.hospitals[0]?.hospital_id || '');
+         useEffect(() => { if (selHosp) ctx.refreshData(ctx.currentUser, { hospitalId: selHosp }); }, [selHosp]);
          const [localHist, setLocalHist] = useState([]);
          const [isSavingHist, setIsSavingHist] = useState(false);
 
@@ -6835,6 +6846,8 @@ const AdminConfigView = ({ ctx }) => {
             <TabBtn id="hospitals" icon="fa-hospital" label="รพ.สต." />
             <TabBtn id="depts" icon="fa-building-user" label="หน่วยงาน/ห้องยา" />
             <TabBtn id="rounds" icon="fa-calendar-days" label="รอบเบิก" />
+            <TabBtn id="feedback" icon="fa-star-half-stroke" label="แบบประเมิน" />
+            <TabBtn id="quota" icon="fa-gauge-high" label="แคช/โควตา" />
             <TabBtn id="approve_stock" icon="fa-check-to-slot" label="อนุมัติปรับสต๊อก" />
             <TabBtn id="users" icon="fa-users" label="ผู้ใช้งาน" />
             <TabBtn id="raw_db" icon="fa-table" label="ฐานข้อมูลดิบ (Raw DB)" />
@@ -6848,6 +6861,8 @@ const AdminConfigView = ({ ctx }) => {
             {activeTab === 'hospitals' && <HospitalManager ctx={ctx} setEditTarget={setEditTarget} executeDelete={executeDelete} />}
             {activeTab === 'depts' && <DeptManager ctx={ctx} />}
             {activeTab === 'rounds' && <RoundManager ctx={ctx} />}
+            {activeTab === 'feedback' && <FeedbackManager ctx={ctx} />}
+            {activeTab === 'quota' && <QuotaPanel ctx={ctx} />}
             {activeTab === 'approve_stock' && ApproveStockManager()}
             {activeTab === 'users' && UserManager()}
             {activeTab === 'raw_db' && <RawDBManager />}
@@ -7422,6 +7437,7 @@ const AdminConfigView = ({ ctx }) => {
         const fresh = (await db.collection('internal_requisitions').doc(req.id).get()).data();
         await completeInternalRequisition(ctx, { ...req, ...fresh, id: req.id }, fresh.items || items);
         ctx.showToast('อนุมัติแล้ว' + (isPharmacy ? ' และบวกยอดเข้าสต็อกห้องยา' : ''));
+        rxTaskDone('adm_internal');
         await reload(); onBack();
       }));
 
@@ -7432,7 +7448,7 @@ const AdminConfigView = ({ ctx }) => {
         onConfirm: () => run('approve', async () => {
           if (dirty && !invsSent) await saveEdits();
           await completeInternalRequisition(ctx, req, invsSent ? (req.items || items) : items);
-          ctx.showToast('อนุมัติแล้ว'); await reload(); onBack();
+          ctx.showToast('อนุมัติแล้ว'); rxTaskDone('adm_internal'); await reload(); onBack();
         })
       }));
 
@@ -7573,6 +7589,13 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+    // v6.2 ใบเบิกภายในทั้งระบบ (แอดมิน) ใช้แคช + ดึงเฉพาะที่เปลี่ยน แทนการอ่านซ้ำทุกครั้งที่เปิดหน้า
+    const loadAllInternalReqs = async (ctx) => {
+      await rxLoadMeta();
+      const tombs = await rxSyncTombs(ctx.currentUser.uid);
+      return rxSync({ uid: ctx.currentUser.uid, col: 'internal_requisitions', scope: 'ALL', query: db.collection('internal_requisitions'), tombs });
+    };
+
     const InternalQueueView = ({ ctx }) => {
       const [queue, setQueue] = useState([]);
       const [recent, setRecent] = useState([]);
@@ -7584,12 +7607,9 @@ const AdminConfigView = ({ ctx }) => {
       const load = async () => {
         setLoading(true);
         try {
-          const [q, r] = await Promise.all([
-            db.collection('internal_requisitions').where('status', 'in', ['Pending', 'Approving', 'ApprovalFailed']).get(),
-            db.collection('internal_requisitions').orderBy('updated_at', 'desc').limit(150).get()
-          ]);
-          setQueue(q.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => tsToMillis(a.submitted_at || a.created_at) - tsToMillis(b.submitted_at || b.created_at)));
-          setRecent(r.docs.map(d => ({ id: d.id, ...d.data() })));
+          const rows = await loadAllInternalReqs(ctx);
+          setQueue(rows.filter(r => ['Pending', 'Approving', 'ApprovalFailed'].includes(r.status)).sort((a, b) => tsToMillis(a.submitted_at || a.created_at) - tsToMillis(b.submitted_at || b.created_at)));
+          setRecent(rows.slice().sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at)).slice(0, 150));
         } catch (e) { ctx.showToast('โหลดคิวไม่สำเร็จ: ' + e.message, 'error'); }
         finally { setLoading(false); }
       };
@@ -7871,12 +7891,47 @@ const AdminConfigView = ({ ctx }) => {
       return out;
     };
 
+    // v6.3 นำเข้าตารางเบิกแบบกระดาษ: แต่ละบรรทัด = "ครั้งที่  เดือน  พ.ศ.  วันที่" เช่น "1,2 ตุลาคม 2569 14,28"
+    const ROUND_TABLE_PRESET_2570 = `1,2	ตุลาคม	2569	14,28
+3,4	พฤศจิกายน	2569	11,25
+5,6	ธันวาคม	2569	9,23
+7,8	มกราคม	2570	6,20
+9,10	กุมภาพันธ์	2570	3,17
+11,12,13	มีนาคม	2570	3,17,31
+14,15	เมษายน	2570	12,28
+16,17	พฤษภาคม	2570	12,26
+18,19	มิถุนายน	2570	9,23
+20,21	กรกฎาคม	2570	7,21
+22,23	สิงหาคม	2570	4,18
+24,25	กันยายน	2570	1,15`;
+    const parseRoundTable = (text) => {
+      const out = [], errors = [];
+      String(text || '').split(/\r?\n/).forEach((line, i) => {
+        const raw = line.trim(); if (!raw) return;
+        const mIdx = THAI_MONTHS.findIndex(m => raw.includes(m));
+        const parts = raw.split(/[\s|]+/).filter(Boolean);
+        const year = parts.map(x => x.replace(/[^0-9]/g, '')).find(x => /^25\d\d$/.test(x));
+        const nums = parts.filter(x => /^[0-9]+(,[0-9]+)*$/.test(x) && !/^25\d\d$/.test(x));
+        if (mIdx < 0 || !year || nums.length < 2) { errors.push(`บรรทัด ${i + 1}: อ่านไม่ออก "${raw}"`); return; }
+        const nos = nums[0].split(',').map(Number), days = nums[nums.length - 1].split(',').map(Number);
+        if (nos.length !== days.length) { errors.push(`บรรทัด ${i + 1}: จำนวนครั้ง (${nos.length}) ไม่เท่ากับจำนวนวัน (${days.length})`); return; }
+        const ce = Number(year) - 543;
+        nos.forEach((no, k) => {
+          const d = new Date(ce, mIdx, days[k]);
+          if (d.getMonth() !== mIdx) { errors.push(`บรรทัด ${i + 1}: วันที่ ${days[k]} ไม่มีในเดือน`); return; }
+          out.push({ round_no: no, round_date: toYmd(d) });
+        });
+      });
+      return { rows: out.sort((a, b) => a.round_no - b.round_no), errors };
+    };
+
     const RoundManager = ({ ctx }) => {
       const todayYmd = toYmd(new Date());
       const [fy, setFy] = useState(() => fiscalYearBEOfYmd(todayYmd));
       const [rows, setRows] = useState(null);
       const [edit, setEdit] = useState(null);
       const [gen, setGen] = useState(null);
+      const [tbl, setTbl] = useState(null); // นำเข้าตารางเบิก
       const [busy, setBusy] = useState(false);
       const load = async () => {
         try { const s = await db.collection('req_rounds').get(); setRows(s.docs.map(d => ({ id: d.id, ...d.data() }))); }
@@ -7942,6 +7997,24 @@ const AdminConfigView = ({ ctx }) => {
         } catch (e) { ctx.showToast('สร้างไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(false); }
       };
 
+      const tblParsed = useMemo(() => tbl ? parseRoundTable(tbl.text) : { rows: [], errors: [] }, [tbl?.text]);
+      const tblPreview = useMemo(() => !tbl ? [] : tblParsed.rows.map(r => {
+        const cand = { fiscal_year: toNonNegativeInt(tbl.fiscal_year), round_no: r.round_no, round_date: r.round_date, scope: tbl.scope, note: safeText(tbl.note), active: true };
+        return { ...cand, conflict: conflictOf(cand, null) };
+      }), [tbl, tblParsed, rows]);
+      const saveTbl = async () => {
+        const ok = tblPreview.filter(p => !p.conflict);
+        if (tblParsed.errors.length) return ctx.showToast('แก้บรรทัดที่อ่านไม่ออกก่อน', 'error');
+        if (!ok.length) return ctx.showToast('ไม่มีรอบใหม่ให้นำเข้า (ซ้ำทั้งหมด)', 'error');
+        setBusy(true);
+        try {
+          await executeBatchChunks(ok.map(({ conflict, ...cand }) => ({ type: 'set', ref: db.collection('req_rounds').doc(roundDocId(cand)), data: { ...cand, created_at: firebase.firestore.FieldValue.serverTimestamp() }, options: { merge: true } })));
+          await writeAuditLog(ctx.currentUser, 'REQ_ROUNDS_IMPORT', 'req_rounds', 'BATCH', { fiscal_year: tbl.fiscal_year, scope: tbl.scope, count: ok.length });
+          ctx.showToast(`นำเข้า ${ok.length} รอบแล้ว${ok.length < tblPreview.length ? ` (ข้ามที่ซ้ำ ${tblPreview.length - ok.length})` : ''}`);
+          setFy(toNonNegativeInt(tbl.fiscal_year)); setTbl(null); await afterSave();
+        } catch (e) { ctx.showToast('นำเข้าไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(false); }
+      };
+
       const scopeBadge = (sc) => {
         const k = safeText(sc, 'all');
         const cls = k === 'rpst' ? 'bg-emerald-100 text-emerald-800' : k === 'internal' ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-700';
@@ -7958,6 +8031,7 @@ const AdminConfigView = ({ ctx }) => {
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-sm font-bold text-slate-600" htmlFor="round-fy">ปีงบ</label>
               <select id="round-fy" value={fy} onChange={e => setFy(Number(e.target.value))} className="border rounded-xl p-2 font-bold">{years.map(y => <option key={y} value={y}>{y}</option>)}</select>
+              <button onClick={() => setTbl({ fiscal_year: 2570, scope: 'internal', note: 'ส่งสมุดเบิกล่วงหน้า 2 วัน', text: ROUND_TABLE_PRESET_2570 })} className="bg-white border border-cyan-300 text-cyan-800 px-4 py-2 rounded-xl font-bold"><i className="fa-solid fa-table-list mr-1"></i> นำเข้าตารางเบิก</button>
               <button onClick={() => setGen({ fiscal_year: fy, scope: 'all', mode: 'monthly', start: fiscalStartYmd(fy), count: 12, every: 14, first_no: 1 })} className="bg-cyan-600 text-white px-4 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-wand-magic-sparkles mr-1"></i> สร้างทั้งปี</button>
               <button onClick={() => setEdit({ fiscal_year: fy, round_no: nextNo('all'), round_date: todayYmd, scope: 'all', note: '', active: true })} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-plus mr-1"></i> เพิ่มรอบ</button>
             </div>
@@ -8042,6 +8116,42 @@ const AdminConfigView = ({ ctx }) => {
                 <div className="flex justify-end gap-2">
                   <button onClick={() => setGen(null)} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
                   <button id="gen-save" onClick={saveGen} disabled={busy} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-bold">{busy ? 'กำลังสร้าง...' : `สร้าง ${genPreview.filter(p => !p.conflict).length} รอบ`}</button>
+                </div>
+              </div>
+            )}
+          </Modal>
+
+          <Modal isOpen={!!tbl} onClose={() => !busy && setTbl(null)} title="นำเข้าตารางเบิก (จากตารางกระดาษ)" maxWidth="max-w-4xl">
+            {tbl && (
+              <div className="space-y-4">
+                <p className="text-sm text-slate-500">วาง/พิมพ์ทีละบรรทัด: <b>ครั้งที่ · เดือน · พ.ศ. · วันที่</b> เช่น <span className="font-mono bg-slate-100 px-1 rounded">11,12,13 มีนาคม 2570 3,17,31</span> — ใส่ตารางปีงบ 2570 ของกลุ่มงานเภสัชกรรมไว้ให้แล้ว ตรวจแล้วกดนำเข้า</p>
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <label className="block"><span className="text-sm font-bold text-slate-600">ปีงบ (พ.ศ.)</span><input id="tbl-fy" type="number" value={tbl.fiscal_year} onChange={e => setTbl(t => ({ ...t, fiscal_year: toNonNegativeInt(e.target.value) }))} className="w-full p-2.5 border rounded-xl mt-1" /></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">ใช้กับ</span>
+                    <select id="tbl-scope" value={tbl.scope} onChange={e => setTbl(t => ({ ...t, scope: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1"><option value="internal">หน่วยงาน/ห้องยา ใน รพ.</option><option value="rpst">รพ.สต.</option><option value="all">ทุกหน่วย</option></select></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">หมายเหตุทุกรอบ</span><input value={tbl.note} onChange={e => setTbl(t => ({ ...t, note: e.target.value }))} className="w-full p-2.5 border rounded-xl mt-1" /></label>
+                </div>
+                <div className="grid lg:grid-cols-2 gap-4">
+                  <textarea id="tbl-text" rows={13} value={tbl.text} onChange={e => setTbl(t => ({ ...t, text: e.target.value }))} className="w-full p-3 border rounded-xl font-mono text-sm" aria-label="ตารางเบิก" />
+                  <div className="border rounded-xl max-h-[22rem] overflow-auto">
+                    {tblParsed.errors.length > 0 && <div className="bg-red-50 text-red-700 text-xs p-2 space-y-0.5">{tblParsed.errors.map(e => <div key={e}>{e}</div>)}</div>}
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-xs text-slate-500 sticky top-0"><tr><th className="p-2 text-left">รอบ</th><th className="p-2 text-left">วันที่เบิก</th><th className="p-2 text-left">ผล</th></tr></thead>
+                      <tbody>{tblPreview.map(p => (
+                        <tr key={p.round_no} className={`border-t ${p.conflict ? 'text-slate-400' : ''}`}>
+                          <td className="p-2 font-bold tabular-nums">{roundFormNo(p)}</td>
+                          <td className="p-2">{thaiDateLong(p.round_date)} <span className="text-xs text-slate-400">({thaiWeekday(p.round_date)})</span></td>
+                          <td className="p-2 text-xs">{p.conflict ? `ข้าม — ซ้ำกับรอบ ${ROUND_SCOPE_LABELS[safeText(p.conflict.scope, 'all')]} เดิม` : <span className="text-emerald-700 font-bold">นำเข้า</span>}</td>
+                        </tr>))}</tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-between items-center gap-2">
+                  <span className="text-xs text-slate-500">ถ้าเคยสร้างรอบ "ทุกหน่วย" ของปีนี้ไว้แล้ว รอบที่เลขซ้ำจะถูกข้าม — ลบรอบเดิมก่อนถ้าต้องการใช้ตารางนี้</span>
+                  <div className="flex gap-2">
+                    <button onClick={() => setTbl(null)} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                    <button id="tbl-save" onClick={saveTbl} disabled={busy || !!tblParsed.errors.length} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-bold disabled:opacity-50">{busy ? 'กำลังนำเข้า...' : `นำเข้า ${tblPreview.filter(p => !p.conflict).length} รอบ`}</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -8131,8 +8241,8 @@ const AdminConfigView = ({ ctx }) => {
       const [drugSearch, setDrugSearch] = useState('');
       useEffect(() => {
         let alive = true;
-        db.collection('internal_requisitions').get()
-          .then(s => { if (alive) setInternalReqs(s.docs.map(d => ({ id: d.id, ...d.data() }))); })
+        loadAllInternalReqs(ctx)
+          .then(rows => { if (alive) setInternalReqs(rows); })
           .catch(e => { if (alive) { setInternalReqs([]); setLoadErr(e?.message || String(e)); } });
         return () => { alive = false; };
       }, []);
@@ -8369,6 +8479,224 @@ const AdminConfigView = ({ ctx }) => {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      );
+    };
+
+    // ===== v6.2 แบบประเมินการใช้งาน (แอดมิน): สร้างรอบ / เปิด-ปิด / ดูผล =====
+    const fbAvg = (arr) => { const v = arr.filter(x => x > 0); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : 0; };
+    const FeedbackManager = ({ ctx }) => {
+      const [rounds, setRounds] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [creating, setCreating] = useState(null);
+      const [viewId, setViewId] = useState('');
+      const load = async () => {
+        try { const s = await db.collection('feedback_rounds').get(); setRounds(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => Number(b.round_no) - Number(a.round_no))); }
+        catch (e) { setRounds([]); ctx.showToast('โหลดรอบประเมินไม่สำเร็จ: ' + (e?.message || e) + ' — deploy กฎ v6.2 แล้วหรือยัง', 'error'); }
+      };
+      useEffect(() => { load(); rxLoadMeta(true); }, []);
+      const current = rxMeta.feedback;
+      const publishMeta = async (r, open) => {
+        await db.collection('config').doc('app_meta').set({ feedback: open ? { round_id: r.id, round_no: Number(r.round_no), title: r.title || '', roles: r.roles || [], open: true, opened_at: firebase.firestore.FieldValue.serverTimestamp() } : { ...(current || {}), open: false } }, { merge: true });
+        await rxLoadMeta(true);
+      };
+      const setOpen = async (r, open) => {
+        setBusy(true);
+        try {
+          const batch = db.batch();
+          (rounds || []).forEach(x => { if (x.open && x.id !== r.id && open) batch.set(db.collection('feedback_rounds').doc(x.id), { open: false, closed_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }); });
+          batch.set(db.collection('feedback_rounds').doc(r.id), open ? { open: true, opened_at: firebase.firestore.FieldValue.serverTimestamp() } : { open: false, closed_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          await batch.commit();
+          await publishMeta(r, open);
+          ctx.showToast(open ? `เปิดรับประเมินรอบที่ ${r.round_no} แล้ว — ผู้ใช้จะเห็นปุ่มมุมขวาล่าง` : `ปิดรับรอบที่ ${r.round_no} แล้ว`);
+          await load();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(false); }
+      };
+      const create = async (e) => {
+        e.preventDefault();
+        const no = toNonNegativeInt(creating.round_no, 1);
+        if ((rounds || []).some(r => Number(r.round_no) === no)) return ctx.showToast(`มีรอบที่ ${no} แล้ว`, 'error');
+        if (!creating.roles.length) return ctx.showToast('เลือกกลุ่มผู้ตอบอย่างน้อย 1 กลุ่ม', 'error');
+        setBusy(true);
+        try {
+          const id = 'FB' + String(no).padStart(2, '0');
+          const r = { round_no: no, title: safeText(creating.title) || `ประเมินการใช้งาน Sawee Rxfill รอบที่ ${no}`, roles: creating.roles, open: false, created_at: firebase.firestore.FieldValue.serverTimestamp(), created_by: safeText(ctx.currentUser.name) };
+          await db.collection('feedback_rounds').doc(id).set(r);
+          setCreating(null); await load();
+          if (creating.openNow) await setOpen({ id, ...r }, true); else ctx.showToast(`สร้างรอบที่ ${no} แล้ว (ยังไม่เปิดรับ)`);
+        } catch (err) { ctx.showToast('สร้างไม่สำเร็จ: ' + err.message, 'error'); } finally { setBusy(false); }
+      };
+      if (viewId) return <FeedbackResults ctx={ctx} round={(rounds || []).find(r => r.id === viewId)} onBack={() => setViewId('')} />;
+      const nextNo = 1 + Math.max(0, ...(rounds || []).map(r => toNonNegativeInt(r.round_no)));
+      return (
+        <div className="p-6 space-y-4">
+          <div className="flex flex-wrap justify-between items-start gap-3">
+            <div>
+              <h3 className="font-bold text-lg">แบบประเมินการใช้งาน</h3>
+              <p className="text-sm text-slate-500 max-w-2xl">เปิดรับได้ทีละ 1 รอบ · ผู้ใช้เห็นปุ่มเล็กมุมขวาล่าง และระบบชวนประเมินหลังทำงานเสร็จ (เช่น ส่งใบเบิก / พิมพ์ / อนุมัติ) วันละไม่เกิน 1 ครั้ง · 1 คนตอบได้ 1 ครั้งต่อรอบ แก้ไขได้</p>
+            </div>
+            <button onClick={() => setCreating({ round_no: nextNo, title: `ประเมินการใช้งาน Sawee Rxfill รอบที่ ${nextNo}`, roles: Object.keys(FEEDBACK_ROLES).filter(k => k !== 'admin'), openNow: true })} className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-plus mr-1"></i> สร้างรอบประเมิน</button>
+          </div>
+          {current?.open && <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 text-sm text-indigo-900"><i className="fa-solid fa-bullhorn mr-2"></i>กำลังเปิดรับ: <b>รอบที่ {current.round_no}</b> · {(current.roles || []).map(r => FEEDBACK_ROLES[r]).join(', ')}</div>}
+          <div className="overflow-x-auto border rounded-xl">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">รอบ</th><th className="p-3 text-left">ชื่อ</th><th className="p-3 text-left">ผู้ตอบ</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th></tr></thead>
+              <tbody>
+                {rounds === null && <tr><td colSpan="5" className="p-8"><div className="loader mx-auto"></div></td></tr>}
+                {rounds && !rounds.length && <tr><td colSpan="5" className="p-8 text-center text-slate-400">ยังไม่มีรอบประเมิน — กด "สร้างรอบประเมิน"</td></tr>}
+                {(rounds || []).map(r => (
+                  <tr key={r.id} className="border-t">
+                    <td className="p-3 font-extrabold">รอบที่ {r.round_no}</td>
+                    <td className="p-3">{r.title}</td>
+                    <td className="p-3 text-xs">{(r.roles || []).map(k => FEEDBACK_ROLES[k]).join(', ')}</td>
+                    <td className="p-3">{r.open ? <span className="text-xs font-bold px-2 py-1 rounded bg-emerald-100 text-emerald-700">เปิดรับอยู่</span> : <span className="text-xs font-bold px-2 py-1 rounded bg-slate-100 text-slate-500">ปิด</span>}</td>
+                    <td className="p-3 text-right whitespace-nowrap space-x-3">
+                      <button onClick={() => setViewId(r.id)} className="text-indigo-600 font-bold">ดูผล</button>
+                      <button disabled={busy} onClick={() => setOpen(r, !r.open)} className={`font-bold ${r.open ? 'text-red-500' : 'text-emerald-600'}`}>{r.open ? 'ปิดรับ' : 'เปิดรับ'}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Modal isOpen={!!creating} onClose={() => !busy && setCreating(null)} title="สร้างรอบประเมิน" maxWidth="max-w-lg">
+            {creating && (
+              <form onSubmit={create} className="space-y-4">
+                <div className="grid grid-cols-3 gap-3">
+                  <label className="block"><span className="text-sm font-bold text-slate-600">รอบที่</span><input id="fb-round-no" type="number" min="1" value={creating.round_no} onChange={e => setCreating(c => ({ ...c, round_no: e.target.value, title: `ประเมินการใช้งาน Sawee Rxfill รอบที่ ${e.target.value}` }))} className="w-full p-3 border rounded-xl mt-1" /></label>
+                  <label className="block col-span-2"><span className="text-sm font-bold text-slate-600">ชื่อรอบ</span><input value={creating.title} onChange={e => setCreating(c => ({ ...c, title: e.target.value }))} className="w-full p-3 border rounded-xl mt-1" /></label>
+                </div>
+                <fieldset><legend className="text-sm font-bold text-slate-600 mb-1">ส่งให้ใครประเมิน</legend>
+                  <div className="flex flex-wrap gap-2">{Object.entries(FEEDBACK_ROLES).map(([k, l]) => (
+                    <label key={k} className={`px-3 py-2 rounded-xl border cursor-pointer text-sm font-bold ${creating.roles.includes(k) ? 'bg-indigo-50 border-indigo-400 text-indigo-800' : 'bg-white text-slate-500'}`}>
+                      <input type="checkbox" className="mr-2" checked={creating.roles.includes(k)} onChange={e => setCreating(c => ({ ...c, roles: e.target.checked ? [...c.roles, k] : c.roles.filter(x => x !== k) }))} />{l}
+                    </label>))}</div>
+                </fieldset>
+                <label className="inline-flex items-center gap-2 font-bold text-slate-600"><input type="checkbox" checked={creating.openNow} onChange={e => setCreating(c => ({ ...c, openNow: e.target.checked }))} className="w-4 h-4" /> เปิดรับทันที (ปิดรอบอื่นที่เปิดอยู่)</label>
+                <div className="flex justify-end gap-2 pt-2 border-t">
+                  <button type="button" onClick={() => setCreating(null)} className="px-5 py-2.5 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                  <button type="submit" id="fb-create" disabled={busy} className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white font-bold">{busy ? 'กำลังบันทึก...' : 'สร้าง'}</button>
+                </div>
+              </form>
+            )}
+          </Modal>
+        </div>
+      );
+    };
+
+    const FeedbackResults = ({ ctx, round, onBack }) => {
+      const [rows, setRows] = useState(null);
+      const [roleFilter, setRoleFilter] = useState('all');
+      useEffect(() => {
+        if (!round) return;
+        db.collection('feedback_responses').where('round_id', '==', round.id).get()
+          .then(s => setRows(s.docs.map(d => ({ id: d.id, ...d.data() }))))
+          .catch(e => { setRows([]); ctx.showToast('โหลดผลไม่สำเร็จ: ' + e.message, 'error'); });
+      }, [round?.id]);
+      if (!round) return null;
+      const list = (rows || []).filter(r => roleFilter === 'all' || r.role === roleFilter);
+      const fnRows = Object.entries(FEEDBACK_FUNCTIONS).filter(([role]) => roleFilter === 'all' || role === roleFilter)
+        .flatMap(([role, fns]) => fns.map(([k, label]) => {
+          const vals = list.filter(r => r.role === role).map(r => r.ratings?.[k]).filter(v => v !== undefined);
+          const used = vals.filter(v => v > 0);
+          return { key: role + ':' + k, role, label, avg: fbAvg(used), n: used.length, na: vals.length - used.length };
+        })).filter(x => x.n || x.na);
+      const timeCounts = FEEDBACK_TIME.map(([k, l]) => [l, list.filter(r => r.time_saving === k).length]);
+      const exportCsv = () => {
+        const fnKeys = [...new Set(Object.values(FEEDBACK_FUNCTIONS).flat().map(f => f[0]))];
+        const fnLabel = Object.fromEntries(Object.values(FEEDBACK_FUNCTIONS).flat());
+        const head = ['ชื่อ', 'กลุ่ม', 'หน่วย', 'ความพึงพอใจโดยรวม', 'ใช้งานง่าย', 'ความเร็ว', 'เทียบวิธีเดิม', ...fnKeys.map(k => fnLabel[k]), 'สิ่งที่ชอบ', 'อยากให้ปรับปรุง', 'ปัญหาที่พบ', 'เวลาแก้ล่าสุด'];
+        const esc = v => { const t = String(v ?? ''); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+        const body = list.map(r => [r.name, FEEDBACK_ROLES[r.role] || r.role, r.unit_name, r.overall, r.ease || '', r.speed || '', (FEEDBACK_TIME.find(t => t[0] === r.time_saving) || [, ''])[1], ...fnKeys.map(k => r.ratings?.[k] === 0 ? 'ไม่ได้ใช้' : (r.ratings?.[k] ?? '')), r.liked, r.improve, r.problems, r.updated_at ? new Date(tsToMillis(r.updated_at)).toLocaleString('th-TH') : '']);
+        const blob = new Blob(['﻿' + [head, ...body].map(x => x.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `ผลประเมิน_รอบ${round.round_no}.csv`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      };
+      const bar = (v) => <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden w-40 max-w-full"><div className={`h-full rounded-full ${v >= 4 ? 'bg-emerald-500' : v >= 3 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${(v / 5) * 100}%` }}></div></div>;
+      return (
+        <div className="p-6 space-y-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <button onClick={onBack} className="text-slate-500 font-bold"><i className="fa-solid fa-arrow-left mr-1"></i> กลับ</button>
+            <h3 className="font-bold text-lg">ผลประเมินรอบที่ {round.round_no}</h3>
+            <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} className="border rounded-xl p-2 text-sm font-bold"><option value="all">ทุกกลุ่ม</option>{Object.entries(FEEDBACK_ROLES).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+            <button onClick={exportCsv} disabled={!list.length} className="ml-auto bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold disabled:opacity-40"><i className="fa-solid fa-file-csv mr-2"></i>ส่งออก CSV</button>
+          </div>
+          {rows === null ? <div className="py-10 flex justify-center"><div className="loader"></div></div> : (
+            <>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">ผู้ตอบ</div><div className="text-2xl font-extrabold">{list.length}</div><div className="text-[11px] text-slate-400">{Object.entries(FEEDBACK_ROLES).map(([k, l]) => `${l} ${list.filter(r => r.role === k).length}`).join(' · ')}</div></div>
+                <div className="rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">พึงพอใจโดยรวม</div><div className="text-2xl font-extrabold">{fbAvg(list.map(r => r.overall)).toFixed(2)}<span className="text-sm text-slate-400"> / 5</span></div></div>
+                <div className="rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">ใช้งานง่าย / ความเร็ว</div><div className="text-2xl font-extrabold">{fbAvg(list.map(r => r.ease || 0)).toFixed(1)} / {fbAvg(list.map(r => r.speed || 0)).toFixed(1)}</div></div>
+                <div className="rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">เทียบวิธีเดิม</div><div className="text-xs mt-1 space-y-0.5">{timeCounts.map(([l, n]) => <div key={l} className="flex justify-between"><span>{l}</span><b>{n}</b></div>)}</div></div>
+              </div>
+              <div className="border rounded-xl overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">ฟังก์ชัน</th><th className="p-3 text-left">กลุ่ม</th><th className="p-3 text-left">คะแนนเฉลี่ย</th><th className="p-3 text-right">ผู้ให้คะแนน</th><th className="p-3 text-right">ไม่ได้ใช้</th></tr></thead>
+                  <tbody>
+                    {!fnRows.length && <tr><td colSpan="5" className="p-6 text-center text-slate-400">ยังไม่มีคะแนนรายฟังก์ชัน</td></tr>}
+                    {fnRows.sort((a, b) => (a.avg || 9) - (b.avg || 9)).map(x => (
+                      <tr key={x.key} className="border-t">
+                        <td className="p-3 font-semibold">{x.label}</td><td className="p-3 text-xs">{FEEDBACK_ROLES[x.role]}</td>
+                        <td className="p-3"><div className="flex items-center gap-2">{bar(x.avg)}<b className="tabular-nums">{x.n ? x.avg.toFixed(2) : '-'}</b></div></td>
+                        <td className="p-3 text-right tabular-nums">{x.n}</td><td className="p-3 text-right tabular-nums text-slate-400">{x.na}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid lg:grid-cols-3 gap-3">
+                {[['improve', 'อยากให้ปรับปรุง'], ['problems', 'ปัญหาที่พบ'], ['liked', 'สิ่งที่ชอบ']].map(([k, l]) => (
+                  <div key={k} className="border rounded-xl p-4">
+                    <div className="font-bold text-slate-700 mb-2">{l} <span className="text-xs text-slate-400">({list.filter(r => safeText(r[k])).length})</span></div>
+                    <div className="space-y-2 max-h-80 overflow-y-auto text-sm">
+                      {list.filter(r => safeText(r[k])).map(r => (
+                        <div key={r.id} className="bg-slate-50 rounded-lg p-2.5"><div className="whitespace-pre-line">{r[k]}</div><div className="text-[11px] text-slate-400 mt-1">{r.name} · {r.unit_name || FEEDBACK_ROLES[r.role]}</div></div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      );
+    };
+
+    // ===== v6.2 แคช / โควตา Firestore (แอดมิน) =====
+    const QuotaPanel = ({ ctx }) => {
+      const [, setTick] = useState(0);
+      const [busy, setBusy] = useState('');
+      const missing = [...rxMissingIndexes.entries()];
+      const byLabel = {};
+      rxStats.log.forEach(([l, n]) => { byLabel[l] = (byLabel[l] || 0) + n; });
+      const run = async (k, fn) => { setBusy(k); try { await fn(); } catch (e) { ctx.showToast(e.message, 'error'); } finally { setBusy(''); setTick(t => t + 1); } };
+      return (
+        <div className="p-6 space-y-5">
+          <div>
+            <h3 className="font-bold text-lg">แคชในเครื่อง / โควตา Firestore</h3>
+            <p className="text-sm text-slate-500 max-w-3xl">ทุกเครื่องเก็บข้อมูลหลัก (รายการยา, รพ.สต., หน่วยงาน, รอบเบิก) และคงเหลือ/ประวัติใช้ของ รพ.สต. ไว้ในเบราว์เซอร์ ครั้งต่อไปดึงเฉพาะที่เปลี่ยน · ถ้าไม่มีอะไรเปลี่ยน เปิดหน้าเว็บใช้ราว 15–30 reads แทนหลายพัน</p>
+          </div>
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">อ่านไปในหน้านี้ (ประมาณ)</div><div className="text-2xl font-extrabold tabular-nums">{rxStats.reads.toLocaleString('th-TH')}</div><div className="text-[11px] text-slate-400">นับเฉพาะการโหลดผ่านระบบแคช</div></div>
+            <div className="rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">รุ่นแคช (epoch)</div><div className="text-2xl font-extrabold tabular-nums">{rxMeta.epoch}</div></div>
+            <div className={`rounded-xl border p-4 ${missing.length ? 'border-amber-300 bg-amber-50' : ''}`}><div className="text-xs font-bold text-slate-500">ดัชนีที่ยังขาด</div><div className="text-2xl font-extrabold">{missing.length}</div><div className="text-[11px] text-slate-500">{missing.length ? 'ขาดแล้วจะโหลดเต็มทุกครั้ง' : 'ครบ'}</div></div>
+          </div>
+          {missing.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm space-y-2">
+              <div className="font-bold text-amber-900">สร้างดัชนี (Index) ใน Firebase เพื่อให้ดึงเฉพาะส่วนที่เปลี่ยนได้ — กดลิงก์แล้วกด Create index (รอ 2–5 นาที)</div>
+              {missing.map(([col, url]) => <div key={col}>• <b>{col}</b> {url ? <a href={url} target="_blank" rel="noopener noreferrer" className="text-indigo-700 underline break-all">เปิดหน้าสร้าง index</a> : <span className="text-slate-500">(ดูลิงก์ใน Console ของเบราว์เซอร์)</span>}</div>)}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => run('refresh', async () => { await ctx.refreshData(ctx.currentUser, { forceMaster: true }); ctx.showToast('ซิงก์แล้ว'); })} disabled={!!busy} className="px-4 py-2 rounded-xl bg-white border font-bold text-slate-700"><i className={`fa-solid ${busy === 'refresh' ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>ซิงก์ตอนนี้</button>
+            <button onClick={() => run('clear', async () => { await rxClearLocalCache(); ctx.showToast('ล้างแคชเครื่องนี้แล้ว — เปิดหน้าใหม่จะโหลดเต็มอีกครั้ง'); })} disabled={!!busy} className="px-4 py-2 rounded-xl bg-white border font-bold text-slate-700"><i className="fa-solid fa-broom mr-1"></i>ล้างแคชเครื่องนี้</button>
+            <button onClick={() => ctx.setConfirmDialog({ title: 'ให้ทุกเครื่องโหลดข้อมูลเต็มใหม่?', message: 'ใช้เมื่อแก้ข้อมูลตรงใน Firebase Console หรือสงสัยว่าข้อมูลบางเครื่องไม่ตรง · จะใช้ reads มากขึ้นในการเปิดครั้งถัดไปของแต่ละเครื่อง', iconColor: 'text-amber-500', confirmBtnClass: 'bg-amber-500 hover:bg-amber-600', onConfirm: () => run('epoch', async () => { await rxBumpEpoch(); ctx.showToast('สั่งล้างแคชทุกเครื่องแล้ว'); }) })} disabled={!!busy} className="px-4 py-2 rounded-xl bg-amber-500 text-white font-bold"><i className="fa-solid fa-tower-broadcast mr-1"></i>ล้างแคชทุกเครื่อง</button>
+          </div>
+          <div className="border rounded-xl overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">รายการที่อ่าน (หน้านี้)</th><th className="p-3 text-right">reads</th></tr></thead>
+              <tbody>{Object.entries(byLabel).sort((a, b) => b[1] - a[1]).map(([l, n]) => <tr key={l} className="border-t"><td className="p-2.5 font-mono text-xs">{l}</td><td className="p-2.5 text-right tabular-nums">{n.toLocaleString('th-TH')}</td></tr>)}</tbody>
+            </table>
           </div>
         </div>
       );
@@ -8773,7 +9101,7 @@ const AdminConfigView = ({ ctx }) => {
       return (
         <>
           <button onClick={() => setOpen(true)} aria-haspopup="dialog"
-            className={`no-print fixed bottom-6 right-6 z-[120] flex items-center gap-2 pl-4 pr-5 py-3 rounded-full font-bold shadow-xl transition hover:-translate-y-0.5 ${pending ? 'bg-emerald-600 text-white shadow-emerald-900/30 hover:bg-emerald-700' : 'bg-white text-emerald-800 border border-emerald-300'}`}>
+            className={`no-print fixed bottom-6 right-24 z-[120] flex items-center gap-2 pl-4 pr-5 py-3 rounded-full font-bold shadow-xl transition hover:-translate-y-0.5 ${pending ? 'bg-emerald-600 text-white shadow-emerald-900/30 hover:bg-emerald-700' : 'bg-white text-emerald-800 border border-emerald-300'}`}>
             <i className="fa-solid fa-calendar-check"></i> ดูรายการยา NCDs ตามนัด
             {pending ? <span className="ml-1 min-w-[1.5rem] h-6 px-1.5 rounded-full bg-amber-400 text-slate-900 text-xs flex items-center justify-center">{pending}</span> : null}
           </button>
@@ -8825,34 +9153,64 @@ const AdminConfigView = ({ ctx }) => {
         auth.signOut();
       };
 
-      const refreshData = async (userData, options = {}) => {
+      // v6.2 โหลดข้อมูลแบบประหยัดโควตา: ข้อมูลหลักและข้อมูลราย รพ.สต. ใช้แคชในเครื่อง + ดึงเฉพาะที่เปลี่ยน
+      // แอดมิน: ข้อมูลราย รพ.สต. (par / คงเหลือ / ประวัติใช้) โหลดเฉพาะหน่วยที่เปิดดู หรือทั้งหมดเมื่อเข้าหน้าที่ต้องใช้ภาพรวม
+      const hospScopesRef = useRef(new Set());
+      const usersLoadedAtRef = useRef(0);
+      const drugTypesRef = useRef({ at: 0, value: undefined });
+      const refreshChainRef = useRef(Promise.resolve());
+      const refreshData = (userData, options = {}) => {
+        const run = () => refreshDataNow(userData, options);
+        const p = refreshChainRef.current.then(run, run);
+        refreshChainRef.current = p.catch(() => {});
+        return p;
+      };
+      const refreshDataNow = async (userData, options = {}) => {
         const activeUser = userData || currentUser;
         if (!activeUser) return;
 
         const isAdmin = normalizeUserRole(activeUser.role) === 'admin';
         const hospId = activeUser.hospital_id;
+        const uid = activeUser.uid;
 
         if (!isAdmin && !hospId) {
           showToast('บัญชีผู้ใช้นี้ยังไม่ได้ผูก รพ.สต. กรุณาแจ้งผู้ดูแลระบบ', 'error');
           return;
         }
+        if (isAdmin) {
+          if (options.adminScope === 'global') hospScopesRef.current.add('ALL');
+          else if (options.hospitalId) hospScopesRef.current.add(String(options.hospitalId));
+        }
+        const hospScopes = isAdmin ? (hospScopesRef.current.has('ALL') ? ['ALL'] : [...hospScopesRef.current]) : [String(hospId)];
+        const scopedQuery = (col, field, scope) => scope === 'ALL' ? db.collection(col) : db.collection(col).where(field, '==', scope);
 
-        const scoped = (col, field) => isAdmin ? db.collection(col) : db.collection(col).where(field, '==', hospId);
+        await rxLoadMeta(true);
+        const tombs = await rxSyncTombs(uid);
+        const sync = (col, extra = {}) => rxSync({ uid, col, tombs, query: db.collection(col), ...extra });
+        const syncScoped = async (col, field) => {
+          const parts = await Promise.all(hospScopes.map(scope => rxSync({ uid, col, tombs, scope, query: scopedQuery(col, field, scope) })));
+          return parts.flat();
+        };
+        const wantUsers = isAdmin && (options.forceMaster || !usersLoadedAtRef.current || Date.now() - usersLoadedAtRef.current > 10 * 60 * 1000);
+        const wantTypes = options.forceMaster || drugTypesRef.current.value === undefined || Date.now() - drugTypesRef.current.at > 30 * 60 * 1000;
+
         const tasks = [
-          ['master_drugs',      () => db.collection('master_drugs').get()],
-          ['master_hospitals',  () => db.collection('master_hospitals').get()],
-          ['master_unit',       () => db.collection('master_unit').get()],
-          ['config/drug_types', () => db.collection('config').doc('drug_types').get()],
-          ['users',             () => isAdmin ? db.collection('users').get() : Promise.resolve(null)],
-          ['config_par',        () => scoped('config_par', 'hospital_id').get()],
-          ['current_excess',    () => scoped('current_excess', 'hospital_id').get()],
-          ['requisitions',      () => scoped('requisitions', 'hospitalId').get()],
-          ['stock_adjustments', () => scoped('stock_adjustments', 'hospital_id').get()],
-          ['historical_usages', () => scoped('historical_usages', 'hospital_id').get()],
-          ['vaccine_requisitions', () => scoped('vaccine_requisitions', 'hospitalId').get()],
-          ['master_depts',      () => db.collection('master_depts').get()],
-          ['internal_pending',  () => isAdmin ? db.collection('internal_requisitions').where('status', 'in', ['Pending', 'ApprovalFailed']).get() : Promise.resolve(null)],
-          ['req_rounds',        () => db.collection('req_rounds').get().catch(e => { console.warn('[Sawee Rxfill] req_rounds:', e?.message || e); return null; })]
+          ['master_drugs',      () => sync('master_drugs')],
+          ['master_hospitals',  () => sync('master_hospitals')],
+          ['master_unit',       () => sync('master_unit')],
+          ['config/drug_types', () => wantTypes ? db.collection('config').doc('drug_types').get().then(sn => { rxCountReads('config/drug_types', 1); return sn; }) : Promise.resolve(null)],
+          ['users',             () => wantUsers ? db.collection('users').get().then(sn => { rxCountReads('users', sn.size || 1); return sn; }) : Promise.resolve(null)],
+          ['config_par',        () => hospScopes.length ? syncScoped('config_par', 'hospital_id') : Promise.resolve(null)],
+          ['current_excess',    () => hospScopes.length ? syncScoped('current_excess', 'hospital_id') : Promise.resolve(null)],
+          // ใบเบิกของ รพ.สต. ตัวเองมีไม่กี่ใบ อ่านตรง · แอดมินใช้แคชทั้งระบบ
+          ['requisitions',      () => isAdmin ? sync('requisitions', { scope: 'ALL' }) : db.collection('requisitions').where('hospitalId', '==', hospId).get().then(sn => { rxCountReads('requisitions[own]', sn.size || 1); return sn.docs.map(d => ({ id: d.id, ...d.data() })); })],
+          // ใช้เฉพาะหน้าอนุมัติปรับสต๊อกของแอดมิน → อ่านเฉพาะที่รออนุมัติ
+          ['stock_adjustments', () => isAdmin ? db.collection('stock_adjustments').where('status', '==', 'Pending').get().then(sn => { rxCountReads('stock_adjustments[pending]', sn.size || 1); return sn.docs.map(d => ({ id: d.id, ...d.data() })); }) : Promise.resolve([])],
+          ['historical_usages', () => hospScopes.length ? syncScoped('historical_usages', 'hospital_id') : Promise.resolve(null)],
+          ['vaccine_requisitions', () => isAdmin ? sync('vaccine_requisitions', { scope: 'ALL' }) : db.collection('vaccine_requisitions').where('hospitalId', '==', hospId).get().then(sn => { rxCountReads('vaccine[own]', sn.size || 1); return sn.docs.map(d => ({ id: d.id, ...d.data() })); })],
+          ['master_depts',      () => sync('master_depts')],
+          ['internal_pending',  () => isAdmin ? db.collection('internal_requisitions').where('status', 'in', ['Pending', 'ApprovalFailed']).get().then(sn => { rxCountReads('internal_pending', sn.size || 1); return sn; }) : Promise.resolve(null)],
+          ['req_rounds',        () => sync('req_rounds').catch(e => { console.warn('[Sawee Rxfill] req_rounds:', e?.message || e); return null; })]
         ];
 
         const settled = await Promise.allSettled(tasks.map(t => t[1]()));
@@ -8864,27 +9222,27 @@ const AdminConfigView = ({ ctx }) => {
           }
         });
 
-        const snapAt = (i) => settled[i].status === 'fulfilled' ? settled[i].value : null;
-        const rowsAt = (i) => { const snap = snapAt(i); return snap ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : null; };
-
-        const drugs        = rowsAt(0);
-        const hospitals    = rowsAt(1);
-        const units        = rowsAt(2);
-        const configSnap   = snapAt(3);
-        const usersSnap    = snapAt(4);
-        const parLevels    = rowsAt(5);
-        const balances     = rowsAt(6);
-        const requisitions = rowsAt(7);
-        const adjustments  = rowsAt(8);
-        const histories    = rowsAt(9);
-        const vaccineReqs  = rowsAt(10);
-        const depts        = rowsAt(11);
-        const internalPendingSnap = snapAt(12);
-        const reqRounds    = rowsAt(13);
+        const valAt = (i) => settled[i].status === 'fulfilled' ? settled[i].value : null;
+        const drugs        = valAt(0);
+        const hospitals    = valAt(1);
+        const units        = valAt(2);
+        const configSnap   = valAt(3);
+        const usersSnap    = valAt(4);
+        const parLevels    = valAt(5);
+        const balances     = valAt(6);
+        const requisitions = valAt(7);
+        const adjustments  = valAt(8);
+        const histories    = valAt(9);
+        const vaccineReqs  = valAt(10);
+        const depts        = valAt(11);
+        const internalPendingSnap = valAt(12);
+        const reqRounds    = valAt(13);
+        if (configSnap) drugTypesRef.current = { at: Date.now(), value: configSnap.exists ? configSnap.data() : null };
+        if (usersSnap) usersLoadedAtRef.current = Date.now();
 
         setAppDb(prev => ({
           ...prev,
-          drugs:             drugs        ?? prev.drugs        ?? [],
+          drugs:             (drugs ?? prev.drugs ?? []).map(d => ({ ...d, drug_id: d.drug_id || d.id })),
           hospitals:         hospitals    ?? prev.hospitals    ?? [],
           units:             units        ?? prev.units        ?? [],
           parLevels:         parLevels    ?? prev.parLevels    ?? [],
@@ -8894,12 +9252,13 @@ const AdminConfigView = ({ ctx }) => {
                                ? (usersSnap ? usersSnap.docs.map(d => ({ id: d.id, ...d.data() })) : (prev.usersList ?? []))
                                : [{ id: activeUser.uid, ...activeUser }],
           stockAdjustments:  adjustments  ?? prev.stockAdjustments ?? [],
-          drugTypes:         configSnap ? (configSnap.exists ? configSnap.data() : null) : (prev.drugTypes ?? null),
+          drugTypes:         drugTypesRef.current.value ?? null,
           historicalUsages:  histories    ?? prev.historicalUsages ?? [],
           vaccineReqs:       vaccineReqs  ?? prev.vaccineReqs       ?? [],
           depts:             (depts ?? prev.depts ?? []).map(d => ({ ...d, dept_id: d.dept_id || d.id })),
           internalPendingCount: internalPendingSnap ? internalPendingSnap.size : (prev.internalPendingCount ?? 0),
-          rounds:            reqRounds ?? prev.rounds ?? []
+          rounds:            reqRounds ?? prev.rounds ?? [],
+          hospScopes:        hospScopes
         }));
 
         if (failed.length) {
@@ -8916,8 +9275,10 @@ const AdminConfigView = ({ ctx }) => {
 
       useEffect(()=>{
         if(normalizeUserRole(currentUser?.role)!=='admin') return;
-        if(['config','summary_report','item_usage_report','map_dashboard','drug_history','req_summary'].includes(currentView)) {
-          refreshData(currentUser,{adminScope:'global',forceMaster:currentView==='config'});
+        // หน้าที่ต้องเห็นคงเหลือทุก รพ.สต. → โหลดภาพรวม · หน้ารายงานอื่นใช้แค่ใบเบิก
+        if(currentView==='map_dashboard') { refreshData(currentUser,{adminScope:'global'}); return; }
+        if(['config','summary_report','item_usage_report','req_summary'].includes(currentView)) {
+          refreshData(currentUser,{forceMaster:currentView==='config'});
           return;
         }
         if(currentView==='view_req'&&currentReqId){
@@ -9049,6 +9410,12 @@ const AdminConfigView = ({ ctx }) => {
           {(currentView === 'create_req' || currentView === 'view_req') && (
             <NcdsDemandFab ctx={ctx} hospitalId={currentView === 'view_req' ? findReq(currentReqId)?.hospitalId : (normalizeUserRole(currentUser?.role) === 'hospital' ? currentUser?.hospital_id : targetUploadHosp)} />
           )}
+          {normalizeUserRole(currentUser?.role) === 'admin' && rxMissingIndexes.size > 0 && currentView !== 'config' && (
+            <button onClick={() => { setAdminActiveTab('quota'); requestView('config'); }} className="no-print fixed top-3 right-3 z-[110] max-w-sm text-left bg-amber-50 border border-amber-300 text-amber-900 text-xs font-bold rounded-xl px-3 py-2 shadow">
+              <i className="fa-solid fa-triangle-exclamation mr-1"></i>ยังไม่ได้สร้างดัชนี Firestore {rxMissingIndexes.size} รายการ — ระบบยังอ่านเต็มทุกครั้ง (กดเพื่อดูวิธีแก้)
+            </button>
+          )}
+          <RxFeedbackWidget user={currentUser} unitId={currentUser?.hospital_id || ''} unitName={findHospital(currentUser?.hospital_id)?.hospital_name || (normalizeUserRole(currentUser?.role) === 'admin' ? 'แอดมิน' : '')} page="app" />
           <UniversalConfirmModal confirmDialog={confirmDialog} setConfirmDialog={setConfirmDialog} />
           {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
         </div>

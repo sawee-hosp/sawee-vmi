@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.1.0"></script>
+  <script src="shared.js?v=6.3.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.1.0';
+      var need = '6.3.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -368,6 +368,7 @@
           }));
           await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_PRINT', 'internal_requisitions', req.id, { form_no: formNo });
           onClose();
+          rxTaskDone('int_print');
         } finally { setBusy(false); }
       };
       return (
@@ -395,6 +396,7 @@
       const list = ctx.rounds.filter(r => Number(r.fiscal_year) >= fyNow - 1 && Number(r.fiscal_year) <= fyNow + 1);
       const usedBy = (r) => ctx.reqs.find(q => q.round_id === r.id && q.status !== 'Cancelled');
       const [sel, setSel] = useState(() => { const open = list.filter(r => !usedBy(r)); return pickDefaultRound(open, today)?.id || ''; });
+      const [fyViewState, setFyView] = useState(0);
       if (!list.length) {
         return (
           <div className="bg-white rounded-2xl border shadow-sm p-8 max-w-2xl space-y-4 animate-fade-in">
@@ -405,32 +407,65 @@
         );
       }
       const chosen = list.find(r => r.id === sel);
+      const fyList = [...new Set(list.map(r => Number(r.fiscal_year)))].sort();
+      const nextRound = pickDefaultRound(list.filter(r => !usedBy(r) && String(r.round_date) >= today), today);
+      const fyView = fyViewState || Number(chosen?.fiscal_year) || fyNow;
+      const todayMonth = today.slice(0, 7);
+      const months = (() => {
+        const m = new Map();
+        list.filter(r => Number(r.fiscal_year) === fyView || fyList.length === 1).slice().sort((a, b) => String(a.round_date).localeCompare(String(b.round_date)))
+          .forEach(r => { const k = String(r.round_date).slice(0, 7); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+        return [...m.entries()];
+      })();
       return (
-        <div className="space-y-5 animate-fade-in max-w-4xl">
+        <div className="space-y-5 animate-fade-in max-w-6xl">
           <div>
             <div className="text-xs font-bold text-teal-700 tracking-wide">ขั้นที่ 1 จาก 2</div>
             <h2 className="text-2xl font-extrabold text-slate-800">เลือกรอบเบิก</h2>
             <p className="text-sm text-slate-500">เลขที่และวันที่ในใบเบิกจะเป็นไปตามรอบที่เลือก ไม่ว่าจะกรอกวันไหน · 1 รอบ เบิกได้ 1 ใบต่อหน่วยงาน</p>
           </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3" role="radiogroup" aria-label="รอบเบิก">
-            {list.map(r => {
-              const used = usedBy(r);
-              const past = String(r.round_date) < today;
-              const on = sel === r.id;
-              return (
-                <div key={r.id} role="radio" aria-checked={on} tabIndex={used ? -1 : 0}
-                  onClick={() => !used && setSel(r.id)} onKeyDown={e => { if (!used && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSel(r.id); } }}
-                  className={`rounded-xl border p-4 transition ${used ? 'bg-slate-50 border-slate-200 cursor-default' : on ? 'border-teal-500 bg-teal-50 ring-2 ring-teal-200 cursor-pointer' : 'bg-white border-slate-200 hover:border-teal-300 cursor-pointer'}`}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-lg font-extrabold text-slate-800">รอบที่ {r.round_no}<span className="text-sm text-slate-400">/{r.fiscal_year}</span></span>
-                    {used ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600">มีใบแล้ว</span> : past ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">เลยวันแล้ว</span> : null}
-                  </div>
-                  <div className="text-sm text-slate-600 mt-1">{thaiDateLong(r.round_date)}</div>
-                  {r.note && <div className="text-xs text-slate-400 mt-1">{r.note}</div>}
-                  {used && <button onClick={() => onOpenReq(used)} className="mt-2 text-xs font-bold text-teal-700 hover:underline">{['Pending', 'Rejected'].includes(used.status) ? 'แก้ไขใบเดิม' : 'ดูใบเดิม'} ({INTERNAL_STATUS_LABELS[used.status] || used.status})</button>}
+          {/* v6.3 ปฏิทินเบิก: จัดรอบตามเดือนของปีงบ เหมือนตารางเบิกของกลุ่มงานเภสัชกรรม */}
+          <div className="flex flex-wrap items-center gap-2">
+            {fyList.length > 1 && fyList.map(y => (
+              <button key={y} onClick={() => setFyView(y)} className={`px-3 py-1.5 rounded-lg text-sm font-bold ${fyView === y ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600'}`}>ปีงบ {y}</button>
+            ))}
+            {nextRound && <span className="text-sm text-slate-600 ml-auto"><i className="fa-regular fa-calendar-check mr-1 text-teal-600"></i>รอบถัดไป <b>{thaiWeekday(nextRound.round_date)} {thaiDateLong(nextRound.round_date)}</b> · ส่งสมุดเบิกภายใน <b>{thaiWeekday(roundSubmitBy(nextRound), true)} {thaiDateShort(roundSubmitBy(nextRound))}</b></span>}
+          </div>
+          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3" role="radiogroup" aria-label="รอบเบิก">
+            {months.map(([key, rs]) => (
+              <section key={key} className={`rounded-2xl border bg-white overflow-hidden ${key === todayMonth ? 'border-teal-400 shadow-md' : 'border-slate-200'}`}>
+                <header className={`px-4 py-2 flex items-baseline justify-between ${key === todayMonth ? 'bg-teal-600 text-white' : 'bg-slate-50 text-slate-700'}`}>
+                  <span className="font-extrabold">{THAI_MONTHS[Number(key.slice(5, 7)) - 1]} {Number(key.slice(0, 4)) + 543}</span>
+                  <span className={`text-xs ${key === todayMonth ? 'text-teal-100' : 'text-slate-400'}`}>{rs.length} รอบ</span>
+                </header>
+                <div className="divide-y">
+                  {rs.map(r => {
+                    const used = usedBy(r);
+                    const past = String(r.round_date) < today;
+                    const on = sel === r.id;
+                    const d = parseYmd(r.round_date);
+                    return (
+                      <div key={r.id} role="radio" aria-checked={on} tabIndex={used ? -1 : 0}
+                        onClick={() => !used && setSel(r.id)} onKeyDown={e => { if (!used && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setSel(r.id); } }}
+                        className={`flex items-center gap-3 px-4 py-3 transition ${used ? 'bg-slate-50 cursor-default' : on ? 'bg-teal-50 ring-2 ring-inset ring-teal-400 cursor-pointer' : past ? 'opacity-60 hover:bg-slate-50 cursor-pointer' : 'hover:bg-teal-50/50 cursor-pointer'}`}>
+                        <div className={`w-12 shrink-0 text-center rounded-xl py-1 ${on ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                          <div className="text-[10px] font-bold leading-none mt-0.5">{thaiWeekday(r.round_date, true)}</div>
+                          <div className="text-xl font-extrabold leading-tight tabular-nums">{d ? d.getDate() : '-'}</div>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-slate-800">รอบที่ {r.round_no}<span className="text-xs text-slate-400">/{r.fiscal_year}</span></span>
+                            {used ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600">มีใบแล้ว</span> : past ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">เลยวันแล้ว</span> : r.id === nextRound?.id ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-teal-100 text-teal-800">รอบถัดไป</span> : null}
+                          </div>
+                          <div className="text-xs text-slate-500">{thaiDateLong(r.round_date)} · ส่งสมุดภายใน {thaiWeekday(roundSubmitBy(r), true)} {thaiDateShort(roundSubmitBy(r))}</div>
+                          {used && <button onClick={(e) => { e.stopPropagation(); onOpenReq(used); }} className="mt-1 text-xs font-bold text-teal-700 hover:underline">{['Pending', 'Rejected'].includes(used.status) ? 'แก้ไขใบเดิม' : 'ดูใบเดิม'} ({INTERNAL_STATUS_LABELS[used.status] || used.status})</button>}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </section>
+            ))}
           </div>
           <div className="flex items-center gap-3">
             <button onClick={() => chosen && onPick(chosen)} disabled={!chosen} className="px-6 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40"><i className="fa-solid fa-arrow-right mr-2"></i>เริ่มกรอกใบเบิก{chosen ? ` · ${roundFormNo(chosen)}` : ''}</button>
@@ -607,6 +642,7 @@
               const clean = valid.map(({ lastQty, ...it }) => ({ ...it, source: it.source === 'template' ? 'template' : (it.source || 'manual'), requestQty: toNonNegativeNumber(it.requestQty), dispenseQty: toNonNegativeNumber(it.requestQty), note: safeText(it.note) }));
               await saveInternalReq({ ctx, editReq, round, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent } });
               ctx.showToast(editReq ? 'ส่งใบเบิกที่แก้ไขแล้ว' : 'ส่งใบเบิกแล้ว รอห้องยาตรวจสอบ');
+              rxTaskDone('int_search');
               await ctx.reload();
               onDone();
             } catch (e) { ctx.showToast('ส่งไม่สำเร็จ: ' + (e?.message || e), 'error'); }
@@ -1071,6 +1107,7 @@ ORDER BY d.name`;
               });
               if (multOps.length) { try { await executeBatchChunks(multOps); } catch (e) { ctx.showToast('ส่งใบแล้ว แต่บันทึกตัวคูณไม่สำเร็จ: ' + e.message, 'warn'); } }
               ctx.showToast('ส่งใบเบิกห้องยาแล้ว รอแอดมินตรวจสอบ');
+              rxTaskDone('ph_suggest');
               await ctx.reload(); await ctx.reloadMasters();
               onDone();
             } catch (e) { ctx.showToast('ส่งไม่สำเร็จ: ' + (e?.message || e), 'error'); }
@@ -1454,6 +1491,131 @@ ORDER BY d.name`;
     };
 
     // ===== สต็อกห้องยา (นับเริ่มต้น / ปรับยอด) =====
+    // ===== v6.3 ประมาณการใช้ยา (ห้องยา): ดึงยอดใช้ HOSxP โดยไม่สร้างใบเบิก แล้วแปลงเป็นหน่วยใหญ่ + พิมพ์ได้ =====
+    const UsageEstimateView = ({ ctx }) => {
+      const today = toYmd(new Date());
+      const yesterday = addDaysYmd(today, -1);
+      const upcoming = useMemo(() => (ctx.rounds || []).filter(r => String(r.round_date) >= today).sort((a, b) => String(a.round_date).localeCompare(String(b.round_date))), [ctx.rounds]);
+      const defaultProject = useMemo(() => {
+        if (upcoming.length >= 2) { const d = daysBetweenInclusive(upcoming[0].round_date, upcoming[1].round_date) - 1; if (d > 0) return d; }
+        return toNonNegativeInt(ctx.dept?.round_days, 0) || 14;
+      }, [upcoming]);
+      const [from, setFrom] = useState(addDaysYmd(yesterday, -29));
+      const [to, setTo] = useState(yesterday);
+      const [projectDays, setProjectDays] = useState(defaultProject);
+      const [bufferPct, setBufferPct] = useState(0);
+      const [raw, setRaw] = useState(null);
+      const [meta, setMeta] = useState(null);
+      const [busy, setBusy] = useState('');
+      const [search, setSearch] = useState('');
+      const [showUnmatched, setShowUnmatched] = useState(false);
+      const fileRef = useRef(null);
+      const days = from && to && to >= from ? daysBetweenInclusive(from, to) : 0;
+
+      const fetchHosxp = async () => {
+        if (!days) return ctx.showToast('ช่วงวันที่ไม่ถูกต้อง', 'error');
+        setBusy('bridge');
+        try {
+          const data = await callInvsBridge('hosxp_usage', '', { date_from: from, date_to: to });
+          setRaw(data.rows || []); setMeta({ source: 'HOSxP', from, to, days: data.days || days });
+          ctx.showToast(data.count ? `ดึงยอดใช้ ${fmtNum(data.count)} รายการแล้ว` : 'HOSxP คืนข้อมูล 0 รายการ — ตรวจช่วงวันที่', data.count ? 'success' : 'warn');
+        } catch (e) { ctx.showToast((e?.message || String(e)) + ' — ถ้าเครื่องนี้ไม่มี Bridge ใช้ "นำเข้าไฟล์" แทน', 'error'); }
+        finally { setBusy(''); }
+      };
+      const importFile = (file) => {
+        if (!file) return;
+        if (!days) return ctx.showToast('เลือกช่วงวันที่ให้ตรงกับไฟล์ก่อน', 'error');
+        setBusy('file');
+        parseTabularFile(file, (rows) => {
+          try { const parsed = parseUsageFileRows(rows); setRaw(parsed.rows); setMeta({ source: 'ไฟล์ ' + file.name, from, to, days }); ctx.showToast(`อ่านไฟล์ ${fmtNum(parsed.rows.length)} รายการ`); }
+          catch (e) { ctx.showToast(e.message, 'error'); }
+          finally { setBusy(''); if (fileRef.current) fileRef.current.value = ''; }
+        }, (e) => { setBusy(''); ctx.showToast('อ่านไฟล์ไม่สำเร็จ: ' + (e?.message || e), 'error'); }, { header: true });
+      };
+
+      const matched = useMemo(() => raw ? matchUsage(raw, ctx.drugs) : null, [raw, ctx.drugs]);
+      const rows = useMemo(() => {
+        if (!matched || !meta) return [];
+        const out = [];
+        matched.byDrug.forEach((u, id) => {
+          const drug = ctx.drugById.get(id); if (!drug) return;
+          const usage = Math.round((u.opd + u.ipd) * getHosxpMultiplier(drug) * 1000) / 1000;
+          if (usage <= 0) return;
+          const pack = safePackSize(drug.pack_size);
+          const dailyAvg = usage / Math.max(1, meta.days);
+          const projected = Math.ceil(dailyAvg * Math.max(0, toNonNegativeNumber(projectDays)) * (1 + toNonNegativeNumber(bufferPct) / 100) - 1e-9);
+          out.push({ drugId: id, name: safeText(drug.drug_name), unit: ctx.unitName(drug), packSize: pack, price: toNonNegativeNumber(drug.price), type: String(drug.type || '1'),
+            location: safeText(drug.invs_location), usage, dailyAvg, projected, packs: Math.ceil(projected / pack - 1e-9), discontinued: isDrugDiscontinuedAll(drug), icodes: u.icodes });
+        });
+        return out.sort((a, b) => (a.location || 'ฮ').localeCompare(b.location || 'ฮ', 'th') || a.name.localeCompare(b.name, 'th'));
+      }, [matched, meta, projectDays, bufferPct, ctx.drugById]);
+      const shown = useMemo(() => { const k = normalizeForMatch(search); return k ? rows.filter(r => normalizeForMatch(r.name + ' ' + r.drugId).includes(k)) : rows; }, [rows, search]);
+      const total = rows.reduce((s, r) => s + r.packs * r.price, 0);
+
+      const print = () => printHtmlDocument(buildUsageEstimateHtml({
+        rows: shown, deptName: ctx.dept?.dept_name || '', from: meta.from, to: meta.to, days: meta.days, projectDays, bufferPct,
+        drugTypes: ctx.drugTypes, unmatched: matched?.unmatched?.length || 0
+      }));
+
+      return (
+        <div className="space-y-5 animate-fade-in">
+          <div>
+            <h2 className="text-2xl font-extrabold text-slate-800">ประมาณการใช้ยา</h2>
+            <p className="text-sm text-slate-500">ดึงยอดใช้จริงจาก HOSxP มาคำนวณปริมาณที่ต้องใช้ล่วงหน้า แปลงเป็นหน่วยใหญ่ (÷ ขนาดบรรจุ) และพิมพ์ได้ — <b>ไม่สร้าง/ไม่ส่งใบเบิก</b> และไม่แก้สต็อก</p>
+          </div>
+          <div className="bg-white rounded-2xl border p-4 flex flex-wrap items-end gap-3">
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">ยอดใช้ตั้งแต่</span><input id="est-from" type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} className="p-2.5 border rounded-xl" /></label>
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">ถึง</span><input id="est-to" type="date" value={to} max={today} onChange={e => setTo(e.target.value)} className="p-2.5 border rounded-xl" /></label>
+            <span className="text-sm text-slate-500 pb-3">{days ? `${days} วัน` : '—'}</span>
+            <button id="est-fetch" onClick={fetchHosxp} disabled={!!busy} className="px-4 py-2.5 rounded-xl bg-teal-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy === 'bridge' ? 'fa-spinner fa-spin' : 'fa-database'} mr-2`}></i>ดึงยอดใช้จาก HOSxP</button>
+            <button onClick={() => fileRef.current?.click()} disabled={!!busy} className="px-4 py-2.5 rounded-xl bg-white border font-bold text-slate-700"><i className="fa-solid fa-file-import mr-2"></i>นำเข้าไฟล์</button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => importFile(e.target.files?.[0])} />
+            <div className="w-px h-10 bg-slate-200 mx-1 hidden sm:block"></div>
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">ประมาณการสำหรับ (วัน)</span><input id="est-days" type="number" min="1" max="365" value={projectDays} onChange={e => setProjectDays(toNonNegativeInt(e.target.value))} className="w-24 p-2.5 border rounded-xl" /></label>
+            <label className="text-sm"><span className="block text-xs font-bold text-slate-500 mb-1">เผื่อ (%)</span><input id="est-buffer" type="number" min="0" max="200" value={bufferPct} onChange={e => setBufferPct(toNonNegativeNumber(e.target.value))} className="w-20 p-2.5 border rounded-xl" /></label>
+            {upcoming.length >= 2 && <span className="text-xs text-slate-400 pb-3">ค่าเริ่มต้น = ช่วงระหว่างรอบเบิก {thaiDateShort(upcoming[0].round_date)} → {thaiDateShort(upcoming[1].round_date)}</span>}
+          </div>
+          {!meta ? (
+            <div className="bg-white rounded-2xl border p-10 text-center text-slate-400">เลือกช่วงวันที่แล้วกด "ดึงยอดใช้จาก HOSxP"</div>
+          ) : (
+            <div className="bg-white rounded-2xl border overflow-hidden">
+              <div className="p-4 flex flex-wrap items-center gap-3 border-b">
+                <div className="text-sm text-slate-600">ยอดใช้ {thaiDateShort(meta.from)} – {thaiDateShort(meta.to)} ({meta.days} วัน, {meta.source}) · <b>{rows.length}</b> รายการ · มูลค่าประมาณ <b>{fmtMoney(total)}</b> บาท</div>
+                {matched?.unmatched?.length > 0 && <button onClick={() => setShowUnmatched(v => !v)} className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">จับคู่ไม่ได้ {matched.unmatched.length} รายการ</button>}
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="กรอง: ชื่อยา / รหัส" aria-label="กรองรายการประมาณการ" className="ml-auto p-2 border rounded-xl text-sm w-56" />
+                <button id="est-print" onClick={print} disabled={!shown.length} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-print mr-2"></i>พิมพ์</button>
+              </div>
+              {showUnmatched && <div className="px-4 py-3 bg-amber-50 text-xs text-amber-900 border-b max-h-40 overflow-auto">{matched.unmatched.map(u => <div key={u.icode}>{u.icode} · {u.name} · {fmtNum(u.qty)} {u.units}</div>)}</div>}
+              <div className="overflow-x-auto">
+                <table id="est-table" className="w-full text-sm">
+                  <thead className="bg-slate-50 text-xs text-slate-500"><tr>
+                    <th className="p-2 text-left">รายการ</th><th className="p-2 text-left">หน่วย / บรรจุ</th>
+                    <th className="p-2 text-right">ใช้จริง (หน่วยย่อย)</th><th className="p-2 text-right">ใช้จริง (หน่วยใหญ่)</th><th className="p-2 text-right">เฉลี่ย/วัน</th>
+                    <th className="p-2 text-right">ประมาณการ {projectDays} วัน</th><th className="p-2 text-right bg-teal-50 text-teal-800">ต้องเบิก (หน่วยใหญ่)</th><th className="p-2 text-right">มูลค่า</th>
+                  </tr></thead>
+                  <tbody>
+                    {!shown.length && <tr><td colSpan="8" className="p-8 text-center text-slate-400">ไม่มีรายการ</td></tr>}
+                    {shown.map(r => (
+                      <tr key={r.drugId} className={`border-t ${r.discontinued ? 'text-slate-400' : ''}`}>
+                        <td className="p-2"><div className="font-semibold">{r.name}</div><div className="text-[11px] text-slate-400 font-mono">{r.drugId}{r.location ? ` · ${r.location}` : ''}{r.discontinued ? ' · ยกเลิกใช้' : ''}</div></td>
+                        <td className="p-2 text-xs">{r.unit}{r.packSize > 1 ? ` · บรรจุ ${fmtNum(r.packSize)}` : ''}</td>
+                        <td className="p-2 text-right tabular-nums">{fmtNum(r.usage)}</td>
+                        <td className="p-2 text-right tabular-nums">{(r.usage / r.packSize).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
+                        <td className="p-2 text-right tabular-nums">{r.dailyAvg.toLocaleString('th-TH', { maximumFractionDigits: 1 })}</td>
+                        <td className="p-2 text-right tabular-nums">{fmtNum(r.projected)}</td>
+                        <td className="p-2 text-right tabular-nums font-extrabold bg-teal-50/60 text-teal-900">{fmtNum(r.packs)}</td>
+                        <td className="p-2 text-right tabular-nums">{fmtMoney(r.packs * r.price)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
     const StockView = ({ ctx }) => {
       const [search, setSearch] = useState('');
       const [edits, setEdits] = useState(new Map());
@@ -1554,13 +1716,14 @@ ORDER BY d.name`;
       const showToast = useCallback((message, type = 'success') => setToast({ message, type }), []);
       const isAdmin = normalizeUserRole(currentUser?.role) === 'admin';
 
-      const reloadMasters = async () => {
-        const [d, u, dp, rr] = await Promise.all([
-          db.collection('master_drugs').get(), db.collection('master_unit').get(), db.collection('master_depts').get(),
-          db.collection('req_rounds').get().catch(() => null)
-        ]);
-        const next = { drugs: d.docs.map(x => ({ id: x.id, drug_id: x.id, ...x.data() })), units: u.docs.map(x => ({ id: x.id, ...x.data() })), depts: dp.docs.map(x => ({ id: x.id, dept_id: x.id, ...x.data() })),
-          rounds: rr ? rr.docs.map(x => ({ id: x.id, ...x.data() })) : [] };
+      // v6.2 ข้อมูลหลักใช้แคชในเครื่อง + ดึงเฉพาะที่เปลี่ยน (ไม่อ่านยาทั้งหมดทุกครั้งที่เปิดหน้า)
+      const reloadMasters = async (uidArg) => {
+        const uid = uidArg || currentUser?.uid || auth.currentUser?.uid || 'anon';
+        await rxLoadMeta(true);
+        const tombs = await rxSyncTombs(uid);
+        const sync = (col) => rxSync({ uid, col, tombs, query: db.collection(col) });
+        const [d, u, dp, rr] = await Promise.all([sync('master_drugs'), sync('master_unit'), sync('master_depts'), sync('req_rounds').catch(() => [])]);
+        const next = { drugs: d.map(x => ({ ...x, drug_id: x.drug_id || x.id })), units: u, depts: dp.map(x => ({ ...x, dept_id: x.dept_id || x.id })), rounds: rr || [] };
         setMasters(next);
         return next;
       };
@@ -1570,12 +1733,16 @@ ORDER BY d.name`;
         if (!id) return;
         setLoadingDept(true);
         try {
+          const uid = currentUser?.uid || auth.currentUser?.uid || 'anon';
+          const tombs = await rxSyncTombs(uid);
           const [r, s] = await Promise.all([
             db.collection('internal_requisitions').where('deptId', '==', String(id)).get(),
-            db.collection('internal_stock').where('dept_id', '==', String(id)).get().catch(() => null)
+            // สต็อกห้องยามีหลายร้อยรายการ → แคช + ดึงเฉพาะที่เปลี่ยน (ต้องมี index dept_id + updated_at)
+            rxSync({ uid, col: 'internal_stock', scope: String(id), tombs, query: db.collection('internal_stock').where('dept_id', '==', String(id)) }).catch(() => null)
           ]);
+          rxCountReads('internal_requisitions[dept]', r.size || 1);
           setReqs(r.docs.map(x => ({ id: x.id, ...x.data() })));
-          setStock(s ? s.docs.map(x => ({ id: x.id, ...x.data() })) : []);
+          setStock(s || []);
         } catch (e) { showToast('โหลดใบเบิกไม่สำเร็จ: ' + e.message, 'error'); }
         finally { setLoadingDept(false); }
       };
@@ -1592,7 +1759,7 @@ ORDER BY d.name`;
             if (role !== 'admin' && !isInternalRole(role)) { showToast('สิทธิ์ผู้ใช้ไม่ถูกต้อง', 'error'); await auth.signOut(); window.location.href = 'index.html'; return; }
             const u = { uid: user.uid, ...data, role };
             setCurrentUser(u);
-            const m = await reloadMasters();
+            const m = await reloadMasters(user.uid);
             let initial = role === 'admin' ? '' : String(data.dept_id || '');
             if (role === 'admin') {
               let saved = '';
@@ -1662,6 +1829,7 @@ ORDER BY d.name`;
                 <NavBtn id="new" icon="fa-file-circle-plus" label={editReq ? 'แก้ไขใบเบิก' : 'สร้างใบเบิก'} />
                 <NavBtn id="history" icon="fa-list-check" label="ใบเบิกของฉัน" badge={pendingCount + rejectedCount || null} />
                 {kind === 'pharmacy' && <NavBtn id="stock" icon="fa-boxes-stacked" label="สต็อกห้องยา" />}
+                {kind === 'pharmacy' && <NavBtn id="estimate" icon="fa-chart-column" label="ประมาณการใช้ยา" />}
                 {isAdmin && <a href="app.html" className="shrink-0 px-4 py-3 rounded-xl font-bold text-slate-300 hover:bg-slate-800 flex items-center gap-3"><i className="fa-solid fa-arrow-left w-5 text-center"></i><span>กลับหน้าแอดมิน</span></a>}
               </nav>
               <div className="hidden md:block p-4 border-t border-slate-800">
@@ -1696,6 +1864,7 @@ ORDER BY d.name`;
                     {view === 'new' && (editReq || newRound !== undefined) && kind === 'pharmacy' && <PharmacyReqView key={editReq?.id || 'new-' + deptId + (newRound?.id || '')} ctx={ctx} editReq={editReq} round={editReq ? null : newRound} onDone={() => { setEditReq(null); setView('history'); }} />}
                     {view === 'history' && <HistoryView ctx={ctx} onNew={() => { setEditReq(null); setView('new'); }} onEdit={(r) => { setEditReq(r); setView('new'); }} onPrint={setPrintReq} />}
                     {view === 'stock' && kind === 'pharmacy' && <StockView ctx={ctx} />}
+                    {view === 'estimate' && kind === 'pharmacy' && <UsageEstimateView ctx={ctx} />}
                   </>
                 )}
               </div>
@@ -1706,6 +1875,7 @@ ORDER BY d.name`;
             </main>
           </div>
           {printReq && <FormPrintModal ctx={ctx} req={printReq} onClose={() => setPrintReq(null)} />}
+          <RxFeedbackWidget user={currentUser} unitId={dept?.dept_id || ''} unitName={dept?.dept_name || ''} page="internal" />
           <UniversalConfirmModal confirmDialog={confirmDialog} setConfirmDialog={setConfirmDialog} />
           {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
         </>

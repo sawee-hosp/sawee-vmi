@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.4.0"></script>
+  <script src="shared.js?v=6.5.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.4.0';
+      var need = '6.5.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -130,6 +130,7 @@
 
     // ===== Internal helpers (JSX) =====
     const STATUS_STYLE = {
+      Draft: 'bg-violet-100 text-violet-800',
       Pending: 'bg-amber-100 text-amber-800', Approving: 'bg-blue-100 text-blue-700', Completed: 'bg-emerald-100 text-emerald-700',
       Rejected: 'bg-red-100 text-red-700', Cancelled: 'bg-slate-200 text-slate-500', ApprovalFailed: 'bg-red-100 text-red-700'
     };
@@ -458,7 +459,7 @@
                             {used ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-200 text-slate-600">มีใบแล้ว</span> : past ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">เลยวันแล้ว</span> : r.id === nextRound?.id ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-teal-100 text-teal-800">รอบถัดไป</span> : null}
                           </div>
                           <div className="text-xs text-slate-500">{thaiDateLong(r.round_date)} · ส่งสมุดภายใน {thaiWeekday(roundSubmitBy(r), true)} {thaiDateShort(roundSubmitBy(r))}</div>
-                          {used && <button onClick={(e) => { e.stopPropagation(); onOpenReq(used); }} className="mt-1 text-xs font-bold text-teal-700 hover:underline">{['Pending', 'Rejected'].includes(used.status) ? 'แก้ไขใบเดิม' : 'ดูใบเดิม'} ({INTERNAL_STATUS_LABELS[used.status] || used.status})</button>}
+                          {used && <button onClick={(e) => { e.stopPropagation(); onOpenReq(used); }} className="mt-1 text-xs font-bold text-teal-700 hover:underline">{['Draft', 'Pending', 'Rejected'].includes(used.status) ? 'แก้ไขใบเดิม' : 'ดูใบเดิม'} ({INTERNAL_STATUS_LABELS[used.status] || used.status})</button>}
                         </div>
                       </div>
                     );
@@ -488,13 +489,14 @@
     };
 
     // ===== ใบเบิก: บันทึก/ส่งใหม่ (ใช้ทั้งหน่วยงานและห้องยา) =====
-    const saveInternalReq = async ({ ctx, editReq, kind, items, extra, stockOps, round }) => {
+    const saveInternalReq = async ({ ctx, editReq, kind, items, extra, stockOps, round, status = 'Pending' }) => {
+      const isDraft = status === 'Draft'; // v6.5 "รอส่ง": บันทึกเก็บไว้ ยังไม่เข้าคิว ไม่แตะสต็อก
       const dept = ctx.dept;
       const user = ctx.currentUser;
       const total = items.reduce((s, it) => s + internalItemValue(it), 0);
       const common = {
         deptId: String(dept.dept_id), dept_name: safeText(dept.dept_name), kind,
-        status: 'Pending',
+        status,
         items: JSON.parse(JSON.stringify(items)),
         item_count: items.length,
         total_value: Math.round(total * 100) / 100,
@@ -512,11 +514,13 @@
           const snap = await tx.get(ref);
           if (!snap.exists) throw new Error('ไม่พบใบเบิกเดิม');
           const cur = snap.data();
-          if (!['Pending', 'Rejected'].includes(cur.status)) throw new Error(`ใบเบิกอยู่ในสถานะ ${INTERNAL_STATUS_LABELS[cur.status] || cur.status} แก้ไขไม่ได้แล้ว`);
+          if (!['Draft', 'Pending', 'Rejected'].includes(cur.status)) throw new Error(`ใบเบิกอยู่ในสถานะ ${INTERNAL_STATUS_LABELS[cur.status] || cur.status} แก้ไขไม่ได้แล้ว`);
+          if (isDraft && cur.status !== 'Draft') throw new Error('ใบนี้ส่งแล้ว บันทึกเป็นรอส่งไม่ได้');
           if (cur.invs_sub_po_no) throw new Error('ใบเบิกนี้ส่งเข้า INVS แล้ว แก้ไขไม่ได้');
           const patch = { ...common, revision: toNonNegativeInt(cur.revision) + 1 };
           // ใบที่ถูกส่งกลับแล้วส่งใหม่ → ต่อท้ายคิว
           if (cur.status === 'Rejected') { patch.submitted_at = firebase.firestore.FieldValue.serverTimestamp(); patch.resubmitted_from_rejected = true; }
+          if (cur.status === 'Draft' && !isDraft) patch.submitted_at = firebase.firestore.FieldValue.serverTimestamp(); // ส่งจริงครั้งแรก → เข้าคิวตามเวลานี้
           tx.update(ref, patch);
         });
       } else {
@@ -533,13 +537,13 @@
           revision: 1,
           created_by_uid: user.uid, created_by_name: safeText(user.name), created_by_position: safeText(user.position),
           created_at: firebase.firestore.FieldValue.serverTimestamp(),
-          submitted_at: firebase.firestore.FieldValue.serverTimestamp()
+          ...(isDraft ? {} : { submitted_at: firebase.firestore.FieldValue.serverTimestamp() })
         });
       }
-      if (stockOps && stockOps.length) {
+      if (!isDraft && stockOps && stockOps.length) {
         await executeBatchChunks(stockOps.map(op => ({ ...op, data: { ...op.data, last_req_id: reqId } })));
       }
-      await writeAuditLog(user, editReq ? 'INTERNAL_REQ_RESUBMIT' : 'INTERNAL_REQ_SUBMIT', 'internal_requisitions', reqId, { dept_id: dept.dept_id, kind, item_count: items.length, total_value: common.total_value });
+      await writeAuditLog(user, isDraft ? 'INTERNAL_REQ_DRAFT_SAVE' : editReq ? 'INTERNAL_REQ_RESUBMIT' : 'INTERNAL_REQ_SUBMIT', 'internal_requisitions', reqId, { dept_id: dept.dept_id, kind, item_count: items.length, total_value: common.total_value });
       return reqId;
     };
 
@@ -850,7 +854,7 @@ ORDER BY d.name`;
       const yesterday = addDaysYmd(today, -1);
 
       // ช่วงวันที่เริ่มต้น = ต่อจากใบก่อนหน้า (กันยอดใช้ซ้ำซ้อน)
-      const prevReq = useMemo(() => ctx.reqs.filter(r => r.kind === 'pharmacy' && !['Cancelled', 'Rejected'].includes(r.status) && r.id !== editReq?.id && r.period_to)
+      const prevReq = useMemo(() => ctx.reqs.filter(r => r.kind === 'pharmacy' && !['Cancelled', 'Rejected', 'Draft'].includes(r.status) && r.id !== editReq?.id && r.period_to)
         .sort((a, b) => String(b.period_to).localeCompare(String(a.period_to)))[0] || null, [ctx.reqs, editReq?.id]);
       const lastPeriodTo = prevReq?.period_to || '';
       // วันเริ่มถูกล็อกให้ต่อจากใบก่อน (กันยอดใช้ซ้ำ/ขาดช่วง) — แอดมินปลดล็อกได้
@@ -902,6 +906,9 @@ ORDER BY d.name`;
       const [showUnmatched, setShowUnmatched] = useState(false);
       const [showEstimate, setShowEstimate] = useState(false); // v6.4 พิมพ์ประมาณการ (ไม่ส่ง VMI)
       const [roundTarget, setRoundTarget] = useState(true);     // ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ
+      const [fillQty, setFillQty] = useState(true);             // ใส่ยอดจำนวนจ่าย/มูลค่าในใบพิมพ์
+      const [keepDraft, setKeepDraft] = useState(true);         // พิมพ์แล้วบันทึกเก็บไว้ "รอส่ง"
+      const [estForm, setEstForm] = useState(() => ({ no: editReq?.form_no || (round ? roundFormNo(round) : ''), date: editReq?.form_date || round?.round_date || toYmd(new Date()) }));
       const [showSql, setShowSql] = useState(false);
       const [diag, setDiag] = useState(null);
       const runDiag = async () => {
@@ -932,7 +939,7 @@ ORDER BY d.name`;
       const periodDays = daysBetweenInclusive(from, to);
       const calcDays = usageMeta?.days || periodDays || 1;
       const usageStale = !!usageMeta && !usageMeta.stored && (usageMeta.from !== from || usageMeta.to !== to);
-      const overlapReq = useMemo(() => ctx.reqs.find(r => r.kind === 'pharmacy' && r.id !== editReq?.id && !['Cancelled', 'Rejected'].includes(r.status)
+      const overlapReq = useMemo(() => ctx.reqs.find(r => r.kind === 'pharmacy' && r.id !== editReq?.id && !['Cancelled', 'Rejected', 'Draft'].includes(r.status)
         && r.period_from && r.period_to && !(to < r.period_from || from > r.period_to)), [ctx.reqs, from, to, editReq?.id]);
 
       const patchRow = (id, patch) => setRowState(prev => { const m = new Map(prev); m.set(id, { ...(m.get(id) || {}), ...patch }); return m; });
@@ -1060,7 +1067,7 @@ ORDER BY d.name`;
         if (!orderRows.length) return ctx.showToast('ยังไม่มีรายการที่จะเบิก', 'error');
         const warn = [];
         if (overlapReq) return ctx.showToast(`ช่วงยอดใช้ทับกับใบ ${overlapReq.form_no || overlapReq.doc_no || overlapReq.id} (${formatThaiDate(overlapReq.period_from)}–${formatThaiDate(overlapReq.period_to)}) — ยอดใช้จะถูกนับซ้ำ ปรับวันที่ก่อนส่ง`, 'error');
-        if (!editReq && round && ctx.reqs.some(q => q.round_id === round.id && q.status !== 'Cancelled')) return ctx.showToast(`มีใบเบิกของรอบที่ ${round.round_no} แล้ว`, 'error');
+        if (!effEdit() && round && ctx.reqs.some(q => q.round_id === round.id && q.status !== 'Cancelled')) return ctx.showToast(`มีใบเบิกของรอบที่ ${round.round_no} แล้ว`, 'error');
         if (unmatched.length) warn.push(`มี ${unmatched.length} icode ที่ยังไม่จับคู่รหัส INVS (ไม่ถูกนำมาคำนวณ)`);
         ctx.setConfirmDialog({
           title: editReq ? 'ส่งใบเบิกที่แก้ไข?' : 'ยืนยันส่งใบเบิกห้องยา?',
@@ -1069,6 +1076,24 @@ ORDER BY d.name`;
           onConfirm: async () => {
             setBusy('submit');
             try {
+              const { items, stockOps, multOps, extra } = buildPharmPayload();
+              await saveInternalReq({ ctx, editReq: effEdit(), round, kind: 'pharmacy', items, stockOps, extra });
+              if (multOps.length) { try { await executeBatchChunks(multOps); } catch (e) { ctx.showToast('ส่งใบแล้ว แต่บันทึกตัวคูณไม่สำเร็จ: ' + e.message, 'warn'); } }
+              ctx.showToast('ส่งใบเบิกห้องยาแล้ว รอแอดมินตรวจสอบ');
+              rxTaskDone('ph_suggest');
+              await ctx.reload(); await ctx.reloadMasters();
+              onDone();
+            } catch (e) { ctx.showToast('ส่งไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+            finally { setBusy(''); }
+          }
+        });
+      };
+
+      // v6.5 ข้อมูลใบเบิกห้องยา (ใช้ทั้งส่งจริง / บันทึกรอส่ง / พิมพ์)
+      const draftRef = useRef(null);
+      const effEdit = () => editReq || draftRef.current;
+      const buildPharmPayload = () => {
+              const orderRows = derived.filter(r => r.dispense > 0);
               const toItem = (r) => ({
                 ...r.base, drugId: r.id,
                 opdRaw: r.opdRaw, ipdRaw: r.ipdRaw, hosxpMultiplier: r.multiplier, hosxpCodes: r.icodes, hosxpUnits: r.hosxpUnits,
@@ -1097,25 +1122,30 @@ ORDER BY d.name`;
                 type: 'update', ref: db.collection('master_drugs').doc(r.id),
                 data: { hosxp_multiplier: r.multiplier, hosxp_multiplier_updated_at: firebase.firestore.FieldValue.serverTimestamp(), hosxp_multiplier_updated_by: safeText(ctx.currentUser.name) }
               }));
-              await saveInternalReq({
-                ctx, editReq, round, kind: 'pharmacy', items, stockOps,
-                extra: {
+              return { items, zeroRows, stockOps, multOps, extra: {
                   note: safeText(note), period_from: from, period_to: to, period_days: calcDays, cover_days: coverDays,
                   usage_source: usageMeta.source, usage_file: usageMeta.fileName || '', usage_fetched_at: usageMeta.fetchedAt || null,
                   round_days: roundDays, min_order_value: minOrderValue, prev_req_id: prevReq?.id || '', prev_period_to: lastPeriodTo || '', skipped_suggest_count: stats.skip,
                   zero_rows: zeroRows, unmatched: unmatched.slice(0, 300), unmatched_count: unmatched.length,
                   suggested_item_count: stats.suggest, changed_item_count: stats.changed
-                }
-              });
-              if (multOps.length) { try { await executeBatchChunks(multOps); } catch (e) { ctx.showToast('ส่งใบแล้ว แต่บันทึกตัวคูณไม่สำเร็จ: ' + e.message, 'warn'); } }
-              ctx.showToast('ส่งใบเบิกห้องยาแล้ว รอแอดมินตรวจสอบ');
-              rxTaskDone('ph_suggest');
-              await ctx.reload(); await ctx.reloadMasters();
-              onDone();
-            } catch (e) { ctx.showToast('ส่งไม่สำเร็จ: ' + (e?.message || e), 'error'); }
-            finally { setBusy(''); }
-          }
-        });
+                } };
+      };
+      // บันทึกเก็บไว้ "รอส่ง" — ยังไม่เข้าคิวแอดมิน ไม่หักสต็อก กลับมาแก้/พิมพ์/ส่งได้ภายหลัง
+      const saveDraft = async ({ quiet } = {}) => {
+        if (!usageMeta) { ctx.showToast('ยังไม่ได้ดึงยอดใช้', 'error'); return null; }
+        const cur = effEdit();
+        if (cur && cur.status && cur.status !== 'Draft') { if (!quiet) ctx.showToast('ใบนี้ส่งแล้ว — แก้ไขแล้วกด "ส่งใบที่แก้ไข" แทน', 'error'); return null; }
+        if (!cur && round && ctx.reqs.some(q => q.round_id === round.id && q.status !== 'Cancelled')) { ctx.showToast(`มีใบเบิกของรอบที่ ${round.round_no} แล้ว — เปิดใบเดิมจากรายการใบเบิก`, 'error'); return null; }
+        setBusy('draft');
+        try {
+          const { items, extra } = buildPharmPayload();
+          const id = await saveInternalReq({ ctx, editReq: cur, round, kind: 'pharmacy', items, extra: { ...extra, draft_saved_at: firebase.firestore.FieldValue.serverTimestamp() }, status: 'Draft' });
+          draftRef.current = { ...(cur || {}), id, status: 'Draft' };
+          if (!quiet) ctx.showToast('บันทึกเก็บไว้แล้ว (รอส่ง) — ดูได้ที่ "ใบเบิกของฉัน"');
+          ctx.reload();
+          return id;
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); return null; }
+        finally { setBusy(''); }
       };
 
       const applyAll = (mode) => setRowState(prev => {
@@ -1313,7 +1343,7 @@ ORDER BY d.name`;
               <div className="text-sm text-slate-500">เบิก {fmtNum(stats.order)} รายการ · <span className="font-bold text-slate-800 tnum">{fmtMoney(stats.value)}</span> บาท</div>
               <div className="flex gap-2 justify-end">
                 <button onClick={onDone} className="px-5 py-3 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">ยกเลิก</button>
-                <button id="ph-estimate" onClick={() => setShowEstimate(true)} disabled={!derived.length} title="พิมพ์/ส่งออกยอดเพื่อตรวจสอบ — ไม่ส่งใบเบิก" className="px-5 py-3 rounded-xl bg-white border-2 border-teal-600 text-teal-700 font-bold hover:bg-teal-50 disabled:opacity-40"><i className="fa-solid fa-print mr-2"></i>พิมพ์ประมาณการใช้ยา</button>
+                <button id="ph-estimate" onClick={() => setShowEstimate(true)} disabled={!derived.length} title="พิมพ์ใบเบิกไปเสนออนุมัติ และเก็บไว้รอส่ง — ยังไม่ส่ง VMI" className="px-5 py-3 rounded-xl bg-white border-2 border-teal-600 text-teal-700 font-bold hover:bg-teal-50 disabled:opacity-40"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบเบิก / บันทึกรอส่ง</button>
                 <button onClick={submit} disabled={!!busy || !stats.order} className="px-7 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40">
                   {busy === 'submit' ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังส่ง...</> : <><i className="fa-solid fa-paper-plane mr-2"></i>{editReq ? 'ส่งใบที่แก้ไข' : 'ส่งใบเบิก'}</>}
                 </button>
@@ -1322,57 +1352,66 @@ ORDER BY d.name`;
           </div>
 
           {showEstimate && (() => {
-            // ยอดที่ใช้พิมพ์: ยามียอดใช้ / มีจำนวนเบิก / เพิ่มเอง (ไม่รวมวัคซีน) — ไม่เขียนข้อมูลใด ๆ
+            // v6.5 พิมพ์ใบเบิกห้องยาแบบเดียวกับใบจริง (หัวกระดาษ วันที่ ลายเซ็น) โดยยังไม่ส่งเข้าคิว/VMI
             const typesSrc = ctx.drugTypes || DEFAULT_DRUG_TYPES;
-            const estRows = derived.filter(r => String(r.base.type) !== '6' && (r.usage > 0 || r.dispense > 0 || r.source === 'manual'))
-              .map(r => {
-                const pack = safePackSize(r.base.packSize);
-                const target = roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target;
-                return { drugId: r.id, name: r.base.name, unit: r.base.unit, packSize: pack, price: toNonNegativeNumber(r.base.price), type: String(r.base.type || '1'),
-                  location: safeText(r.drug?.invs_location), target, usage: r.usage, credit: r.onHand };
-              })
-              .sort((a, b) => Number(a.type) - Number(b.type) || (a.location || 'ฮ').localeCompare(b.location || 'ฮ', 'th') || a.name.localeCompare(b.name, 'th'));
-            const meta = { deptName: ctx.dept?.dept_name || '', from: usageMeta?.from || from, to: usageMeta?.to || to, days: calcDays, coverDays, roundTarget, roundLabel: round ? `รอบเบิก ${roundFormNo(round)} · ${thaiDateLong(round.round_date)}` : '' };
-            const head = ['ที่', 'ชื่อยา/เวชภัณฑ์', 'หน่วย', 'บรรจุ', 'Target Stock', 'ยอดใช้', 'เครดิต', 'จำนวนจ่าย', 'ราคา/หน่วย', 'มูลค่า (บาท)', 'คงเหลือ', 'รหัส'];
+            const rows = derived.filter(r => String(r.base.type) !== '6' && (r.usage > 0 || r.dispense > 0 || r.source === 'manual'));
+            const roundT = (r) => { const pack = safePackSize(r.base.packSize); return roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target; };
+            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense }));
+            const cur = effEdit();
+            const formNo = estForm.no;
+            const formDate = estForm.date;
+            const fakeReq = { kind: 'pharmacy', dept_name: ctx.dept?.dept_name || '', note, items, created_by_name: safeText(ctx.currentUser?.name), created_by_position: safeText(ctx.currentUser?.position) };
+            const locOf = (id) => safeText(ctx.drugById.get(String(id))?.invs_location);
+            const head = ['ที่', 'ชื่อยา/เวชภัณฑ์', 'หน่วย', 'บรรจุ', 'ยอดใช้', 'คงเหลือ', 'Target Stock', 'จำนวนจ่าย', 'ราคา/หน่วย', 'มูลค่า (บาท)', 'คงเหลือหลังเบิก', 'รหัส'];
             const aoa = () => {
-              const out = [[`ใบประมาณการใช้ยา — ${meta.deptName} (สำหรับตรวจสอบ ยังไม่ใช่ใบเบิก)`], [`ยอดใช้ ${thaiDateLong(meta.from)} ถึง ${thaiDateLong(meta.to)} (${meta.days} วัน) · Target ${coverDays} วัน${roundTarget ? ' ปัดเป็นจำนวนเต็มหน่วยบรรจุ' : ''}${meta.roundLabel ? ' · ' + meta.roundLabel : ''} · จำนวนเป็นหน่วยย่อย`], [], head];
-              let i = 0, lastType = null;
-              estRows.forEach(r => {
-                if (r.type !== lastType) { out.push([typesSrc[r.type] || `หมวด ${r.type}`]); lastType = r.type; }
-                i += 1; out.push([i, r.name, r.unit, r.packSize, r.target, r.usage, r.credit, '', r.price, '', '', r.drugId]);
+              const out = [[`ใบเบิกวัสดุ/เวชภัณฑ์ — ${fakeReq.dept_name}`], [`เลขที่ ${formNo || '-'} · วันที่ ${thaiDateLong(formDate)} · ยอดใช้ ${thaiDateLong(from)} ถึง ${thaiDateLong(to)} (${calcDays} วัน) · จำนวนเป็นหน่วยย่อย`], [], head];
+              const sorted = items.slice().sort((a, b) => Number(a.type) - Number(b.type) || (locOf(a.drugId) || 'ฮ').localeCompare(locOf(b.drugId) || 'ฮ', 'th', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'th'));
+              let i = 0, lastType = null, total = 0;
+              sorted.forEach(r => {
+                if (String(r.type) !== lastType) { out.push([typesSrc[r.type] || `หมวด ${r.type}`]); lastType = String(r.type); }
+                const value = Math.round(internalItemValue(r) * 100) / 100; total += value;
+                i += 1; out.push([i, r.name, r.unit, safePackSize(r.packSize), r.usage, r.onHand, r.targetQty, fillQty ? r.dispenseQty : '', toNonNegativeNumber(r.price), fillQty ? value : '', fillQty ? r.onHand + r.dispenseQty : '', r.drugId]);
               });
+              if (fillQty) out.push([], ['', `รวม ${i} รายการ`, '', '', '', '', '', '', '', Math.round(total * 100) / 100]);
               return out;
             };
-            const fileBase = `ประมาณการใช้ยา_${safeText(meta.deptName).replace(/[\\/:*?"<>|\s]+/g, '_')}_${meta.from}_${meta.to}`;
-            const doPrint = () => printHtmlDocument(buildPharmacyEstimateFormHtml({ ...meta, rows: estRows, drugTypes: ctx.drugTypes }));
-            const doXlsx = () => {
+            const fileBase = `ใบเบิก_${safeText(fakeReq.dept_name).replace(/[\\/:*?"<>|\s]+/g, '_')}_${safeText(formNo).replace(/\//g, '-') || toYmd(new Date())}`;
+            const maybeSave = async () => { if (keepDraft) await saveDraft({ quiet: true }); };
+            const doPrint = async () => { await maybeSave(); await printHtmlDocument(buildInternalReqFormHtml({ req: fakeReq, formNo, formDate, deptName: fakeReq.dept_name, drugTypes: ctx.drugTypes, locOf, blankQty: !fillQty, includeUsed: true })); };
+            const doXlsx = async () => {
               if (typeof XLSX === 'undefined' || !XLSX.utils) return ctx.showToast('โหลดตัวสร้าง Excel ไม่สำเร็จ — ใช้ CSV แทน', 'error');
+              await maybeSave();
               const ws = XLSX.utils.aoa_to_sheet(aoa());
-              ws['!cols'] = [5, 36, 8, 7, 12, 10, 10, 14, 10, 12, 10, 10].map(w => ({ wch: w }));
-              const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'ประมาณการ'); XLSX.writeFile(wb, fileBase + '.xlsx');
+              ws['!cols'] = [5, 36, 8, 7, 10, 10, 12, 11, 10, 12, 12, 10].map(w => ({ wch: w }));
+              const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'ใบเบิก'); XLSX.writeFile(wb, fileBase + '.xlsx');
             };
-            const doCsv = () => {
+            const doCsv = async () => {
+              await maybeSave();
               const esc = v => { const t = String(v ?? ''); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
-              const blob = new Blob(['\ufeff' + aoa().map(r => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+              const blob = new Blob(['﻿' + aoa().map(r => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
               const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileBase + '.csv'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
             };
+            const sent = cur && cur.status && cur.status !== 'Draft';
             return (
-              <Modal isOpen onClose={() => setShowEstimate(false)} title="พิมพ์ประมาณการใช้ยา" maxWidth="max-w-xl">
+              <Modal isOpen onClose={() => setShowEstimate(false)} title="พิมพ์ใบเบิก (ยังไม่ส่ง VMI)" maxWidth="max-w-xl">
                 <div className="space-y-4">
-                  <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-3 text-sm"><i className="fa-solid fa-circle-info mr-2"></i>ใช้พิมพ์มาตรวจสอบเท่านั้น <b>ยังไม่ส่งใบเบิก (ไม่ส่ง VMI)</b> และไม่บันทึกอะไรในระบบ — ถ้าจะเบิกจริงให้กดปุ่ม "ส่งใบเบิก" เอง</div>
-                  <div className="text-sm text-slate-600 space-y-1">
-                    <div>ยอดใช้ {thaiDateLong(meta.from)} – {thaiDateLong(meta.to)} ({meta.days} วัน) · Target {coverDays} วัน</div>
-                    <div><b>{estRows.length}</b> รายการ · ใส่ Target Stock / ยอดใช้ / เครดิต ให้ · <b>เว้นช่องจำนวนจ่าย มูลค่า คงเหลือ</b> ไว้กรอกเอง</div>
-                    {!usageMeta && <div className="text-red-600 font-bold">ยังไม่ได้ดึงยอดใช้จาก HOSxP — ยอดใช้จะเป็น 0</div>}
+                  <div className="bg-slate-50 border rounded-xl p-3 text-sm text-slate-600">พิมพ์เป็นใบเบิกจริง (หัวกระดาษ เลขที่ วันที่ ลายเซ็น) เพื่อเสนอขออนุมัติ — <b>ยังไม่ส่งเข้าคิว / VMI</b> เมื่ออนุมัติกระดาษแล้วค่อยกลับมากด "ส่งใบเบิก"</div>
+                  {!usageMeta && <div className="text-sm text-red-600 font-bold">ยังไม่ได้ดึงยอดใช้จาก HOSxP</div>}
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block"><span className="text-xs font-bold text-slate-500">เลขที่</span><input id="ph-est-no" value={estForm.no} onChange={e => setEstForm(f => ({ ...f, no: e.target.value }))} className="w-full mt-1 p-2.5 border rounded-xl font-mono" /></label>
+                    <label className="block"><span className="text-xs font-bold text-slate-500">วันที่ในใบ</span><input id="ph-est-date" type="date" value={estForm.date} onChange={e => setEstForm(f => ({ ...f, date: e.target.value }))} className="w-full mt-1 p-2.5 border rounded-xl" /><span className="text-[11px] text-slate-400">{thaiDateLong(estForm.date)}</span></label>
                   </div>
-                  <label className="flex items-start gap-2 text-sm font-bold text-slate-700 bg-slate-50 rounded-xl p-3 cursor-pointer">
-                    <input id="ph-est-round" type="checkbox" checked={roundTarget} onChange={e => setRoundTarget(e.target.checked)} className="w-4 h-4 mt-0.5" />
-                    <span>ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ (ไม่มีเศษหน่วยย่อย)<span className="block text-xs font-normal text-slate-500">เช่น Target 1,250 เม็ด บรรจุ 1,000 → 2,000 เม็ด (= 2 กล่อง)</span></span>
-                  </label>
+                  <div className="space-y-2">
+                    <label className="flex items-start gap-2 text-sm font-bold text-slate-700 cursor-pointer"><input id="ph-est-fill" type="checkbox" checked={fillQty} onChange={e => setFillQty(e.target.checked)} className="w-4 h-4 mt-0.5" /><span>ใส่ยอดในช่องจำนวนจ่ายและมูลค่า<span className="block text-xs font-normal text-slate-500">เอาออกเพื่อพิมพ์ช่องว่างไว้เติมเอง</span></span></label>
+                    <label className="flex items-start gap-2 text-sm font-bold text-slate-700 cursor-pointer"><input id="ph-est-round" type="checkbox" checked={roundTarget} onChange={e => setRoundTarget(e.target.checked)} className="w-4 h-4 mt-0.5" /><span>ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ<span className="block text-xs font-normal text-slate-500">เช่น 1,250 เม็ด บรรจุ 1,000 → 2,000</span></span></label>
+                    <label className="flex items-start gap-2 text-sm font-bold text-slate-700 cursor-pointer"><input id="ph-est-keep" type="checkbox" checked={keepDraft && !sent} disabled={sent} onChange={e => setKeepDraft(e.target.checked)} className="w-4 h-4 mt-0.5" /><span>บันทึกเก็บไว้ใน "รอส่ง" ด้วย<span className="block text-xs font-normal text-slate-500">กลับมาแก้ไข/พิมพ์ซ้ำ/ส่งได้จาก "ใบเบิกของฉัน"{cur?.status === 'Draft' ? ' · ใบนี้บันทึกไว้แล้ว จะอัปเดตใบเดิม' : ''}</span></span></label>
+                  </div>
+                  <div className="text-xs text-slate-500">{items.length} รายการ · มูลค่า {fmtMoney(items.reduce((s, it) => s + internalItemValue(it), 0))} บาท</div>
                   <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
-                    <button id="ph-est-print" onClick={doPrint} disabled={!estRows.length} className="px-4 py-2.5 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-file-pdf mr-2"></i>พิมพ์ / PDF</button>
-                    <button id="ph-est-xlsx" onClick={doXlsx} disabled={!estRows.length} className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-file-excel mr-2"></i>Excel</button>
-                    <button id="ph-est-csv" onClick={doCsv} disabled={!estRows.length} className="px-4 py-2.5 rounded-xl bg-white border font-bold text-slate-700 disabled:opacity-40"><i className="fa-solid fa-file-csv mr-2"></i>CSV</button>
+                    {!sent && <button id="ph-est-save" onClick={async () => { const id = await saveDraft(); if (id) setShowEstimate(false); }} disabled={!!busy} className="px-4 py-2.5 rounded-xl bg-white border-2 border-teal-600 text-teal-700 font-bold disabled:opacity-40"><i className="fa-solid fa-floppy-disk mr-2"></i>บันทึกอย่างเดียว</button>}
+                    <button id="ph-est-print" onClick={doPrint} disabled={!items.length || !!busy} className="px-4 py-2.5 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-file-pdf mr-2"></i>พิมพ์ / PDF</button>
+                    <button id="ph-est-xlsx" onClick={doXlsx} disabled={!items.length || !!busy} className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-file-excel mr-2"></i>Excel</button>
+                    <button id="ph-est-csv" onClick={doCsv} disabled={!items.length || !!busy} className="px-4 py-2.5 rounded-xl bg-white border font-bold text-slate-700 disabled:opacity-40"><i className="fa-solid fa-file-csv mr-2"></i>CSV</button>
                   </div>
                 </div>
               </Modal>
@@ -1435,7 +1474,7 @@ ORDER BY d.name`;
     // ===== ใบเบิกของฉัน =====
     const ReqDetailModal = ({ ctx, req, onClose, onEdit, onPrint }) => {
       if (!req) return null;
-      const canEdit = ['Pending', 'Rejected'].includes(req.status) && !req.invs_sub_po_no;
+      const canEdit = ['Draft', 'Pending', 'Rejected'].includes(req.status) && !req.invs_sub_po_no;
       const items = req.items || [];
       const cancelReq = () => ctx.setConfirmDialog({
         title: 'ยกเลิกใบเบิกนี้?', message: `ใบ ${req.doc_no || req.id} จะถูกนำออกจากคิวของห้องยา`,
@@ -1446,7 +1485,7 @@ ORDER BY d.name`;
             await db.runTransaction(async (tx) => {
               const snap = await tx.get(ref);
               const cur = snap.data() || {};
-              if (!['Pending', 'Rejected'].includes(cur.status) || cur.invs_sub_po_no) throw new Error('สถานะใบเปลี่ยนแล้ว ยกเลิกไม่ได้');
+              if (!['Draft', 'Pending', 'Rejected'].includes(cur.status) || cur.invs_sub_po_no) throw new Error('สถานะใบเปลี่ยนแล้ว ยกเลิกไม่ได้');
               tx.update(ref, { status: 'Cancelled', cancelled_at: firebase.firestore.FieldValue.serverTimestamp(), cancelled_by_uid: ctx.currentUser.uid, cancelled_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
             });
             await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_CANCEL', 'internal_requisitions', req.id, { dept_id: req.deptId });
@@ -1962,7 +2001,7 @@ ORDER BY d.name`;
         rounds: roundsFor(masters.rounds, 'internal')
       };
 
-      const pendingCount = reqs.filter(r => r.status === 'Pending').length;
+      const pendingCount = reqs.filter(r => r.status === 'Pending' || r.status === 'Draft').length;
       const rejectedCount = reqs.filter(r => r.status === 'Rejected').length;
       const NavBtn = ({ id, icon, label, badge }) => (
         <button onClick={() => { setView(id); if (id !== 'new') setEditReq(null); }} aria-current={view === id ? 'page' : undefined}
@@ -2023,7 +2062,7 @@ ORDER BY d.name`;
                   <div className="bg-white rounded-2xl border p-10 text-center text-slate-500">
                     {isAdmin ? 'ยังไม่มีหน่วยงาน/ห้องยา — เพิ่มได้ที่หน้าแอดมิน › จัดการฐานข้อมูล › หน่วยงาน/ห้องยา' : 'บัญชีนี้ยังไม่ได้ผูกหน่วยงาน กรุณาแจ้งแอดมิน'}
                   </div>
-                ) : loadingDept && !reqs.length ? (
+                ) : loadingDept && !reqs.length && view !== 'new' ? (
                   <div className="p-10 flex justify-center"><div className="loader"></div></div>
                 ) : (
                   <>

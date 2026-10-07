@@ -1,5 +1,5 @@
 // ============================================================
-// Sawee Rxfill — shared.js (v6.4.0)
+// Sawee Rxfill — shared.js (v6.5.0)
 // ไฟล์รวม: Firebase init, ค่าคงที่, utility functions
 // ใช้ร่วมกันทุกหน้า — ห้ามมี JSX (ไม่ผ่าน Babel)
 // ============================================================
@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.4.0';
+const APP_VERSION = '6.5.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -842,7 +842,7 @@ const makeActionToken = () => {
 // ─── Internal requisitions (หน่วยงาน / ห้องยา) v5.7 ──────
 const INTERNAL_KIND_LABELS = { dept: 'หน่วยงาน', pharmacy: 'ห้องยา' };
 const INTERNAL_STATUS_LABELS = {
-  Pending: 'รอตรวจสอบ', Approving: 'กำลังอนุมัติ', Completed: 'อนุมัติแล้ว',
+  Draft: 'รอส่ง (บันทึกไว้)', Pending: 'รอตรวจสอบ', Approving: 'กำลังอนุมัติ', Completed: 'อนุมัติแล้ว',
   Rejected: 'ส่งกลับแก้ไข', Cancelled: 'ยกเลิก', ApprovalFailed: 'อนุมัติไม่สำเร็จ'
 };
 const INTERNAL_DEFAULT_COVER_DAYS = 30;
@@ -999,7 +999,7 @@ const buildInternalReqFormHtml = (opts) => {
   const money = function (v) { return toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   const qty = function (q, pack) { const s = formatQty(q, pack); return s === '0' ? '0' : s; };
   const parts = thaiDateParts(opts.formDate);
-  const items = (req.items || []).filter(function (it) { return toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty) > 0 || toNonNegativeNumber(it.dispenseQty) > 0; });
+  const items = (req.items || []).filter(function (it) { return toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty) > 0 || toNonNegativeNumber(it.dispenseQty) > 0 || (isPharmacy && opts.includeUsed && toNonNegativeNumber(it.usage) > 0); });
   // จัดกลุ่มตามหมวด แล้วเรียงตามตำแหน่งยา (ไม่มีตำแหน่งไว้ท้าย) เพื่อให้ผู้จัดยาเดินหยิบตามลำดับ
   const groups = {};
   items.forEach(function (it) { const k = safeText(it.type, '1') || '1'; (groups[k] = groups[k] || []).push(it); });
@@ -1009,7 +1009,10 @@ const buildInternalReqFormHtml = (opts) => {
     return la.localeCompare(lb, 'th', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'th');
   };
   const typeKeys = Object.keys(groups).sort(function (a, b) { return Number(a) - Number(b); });
-  const colCount = isPharmacy ? 10 : 9;
+  // v6.5 ห้องยา: คอลัมน์แบบใบเบิก รพ.สต. — ยอดใช้ · คงเหลือ(น้ำเงิน) · Target Stock(เทา) · จำนวนจ่าย(หนา)
+  // opts.blankQty = เว้นช่องจำนวนจ่าย/มูลค่า/คงเหลือหลังเบิก ไว้เขียนเอง
+  const blank = !!opts.blankQty;
+  const colCount = isPharmacy ? 12 : 9;
   const valueOf = function (it) {
     const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
     const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
@@ -1025,6 +1028,24 @@ const buildInternalReqFormHtml = (opts) => {
       const pack = safePackSize(it.packSize);
       const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
       const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
+      if (isPharmacy) {
+        const onHand = Math.max(0, toNonNegativeNumber(it.onHand));
+        const tgt = it.targetQty != null ? qty(toNonNegativeNumber(it.targetQty), pack) : '-';
+        return '<tr>' +
+          '<td class="c">' + n + '</td>' +
+          '<td class="name">' + esc(it.name) + '</td>' +
+          '<td class="c muted">' + esc(it.unit) + '</td>' +
+          '<td class="c">' + pack + '</td>' +
+          '<td class="c">' + qty(it.usage, pack) + '</td>' +
+          '<td class="c blue">' + qty(onHand, pack) + '</td>' +
+          '<td class="c tgt">' + tgt + '</td>' +
+          '<td class="c b">' + (blank ? '' : qty(disp, pack)) + '</td>' +
+          '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
+          '<td class="r b">' + (blank ? '' : money(valueOf(it))) + '</td>' +
+          '<td class="c">' + (blank ? '' : qty(onHand + disp, pack)) + '</td>' +
+          '<td class="c code">' + esc(it.drugId) + '</td>' +
+          '</tr>';
+      }
       return '<tr>' +
         '<td class="c">' + n + '</td>' +
         '<td class="name">' + esc(it.name) + '</td>' +
@@ -1038,7 +1059,7 @@ const buildInternalReqFormHtml = (opts) => {
         '<td class="c code">' + esc(it.drugId) + '</td>' +
         '</tr>';
     }).join('');
-    return '<tr class="grp"><td colspan="' + colCount + '"><span>' + esc(types[k] || ('หมวด ' + k)) + '</span><span class="sub">' + money(subtotal) + ' บาท</span></td></tr>' + rows;
+    return '<tr class="grp"><td colspan="' + colCount + '"><span>' + esc(types[k] || ('หมวด ' + k)) + '</span><span class="sub">' + (blank ? '' : money(subtotal) + ' บาท') + '</span></td></tr>' + rows;
   }).join('');
   const now = new Date();
   const printedAt = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds());
@@ -1061,6 +1082,7 @@ const buildInternalReqFormHtml = (opts) => {
     '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.muted{color:#333}' +
     ".code{font-family:Consolas,'Courier New',monospace;font-size:9.5px;color:#555}.xs{font-size:8.5px;color:#666;line-height:1.1}" +
     '.grp td{background:#f2f2f2;font-weight:700}.grp .sub{float:right}' +
+    '.blue{color:#1d4ed8;font-weight:600}.items td.tgt,.items th.tgt{background:#ececec}' +
     '.note td{font-size:10.5px}.note b{font-weight:700}' +
     '.totals{margin-top:10px;font-size:12px}.totals td{border:1px solid #444;padding:5px 8px}.totals th{border:1px solid #444;background:#eee;font-weight:700;text-align:center;width:50%;padding:5px 8px}' +
     '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
@@ -1072,14 +1094,17 @@ const buildInternalReqFormHtml = (opts) => {
     '<div class="to">เรียน ผู้อำนวยการโรงพยาบาลสวี</div>' +
     '<div class="intro">ด้วย<b>' + esc(deptSentencePrefix(opts.deptName || req.dept_name)) + '</b> มีความประสงค์จะขอเบิกวัสดุ/เวชภัณฑ์ เพื่อใช้ในราชการดังรายการต่อไปนี้</div>' +
     '<table class="items"><thead><tr>' +
-    '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
-    (isPharmacy ? '<th style="width:8%">จำนวน<br>ที่ใช้</th>' : '') +
-    '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:5%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
-    '<th style="width:10%">' + (isPharmacy ? 'เครดิต<br>คงเหลือ' : 'คง<br>เหลือ') + '</th><th style="width:7%">รหัส</th>' +
+    (isPharmacy
+      ? '<th style="width:4%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">หน่วย</th><th style="width:5%">บรรจุ</th>' +
+        '<th style="width:7.5%">ยอดใช้</th><th style="width:7.5%">คง<br>เหลือ</th><th class="tgt" style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
+        '<th style="width:7.5%">ราคา/<br>หน่วย</th><th style="width:8.5%">มูลค่า<br>(บาท)</th><th style="width:7.5%">คงเหลือ<br>หลังเบิก</th><th style="width:6%">รหัส</th>'
+      : '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
+        '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:8%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
+        '<th style="width:8%">คง<br>เหลือ</th><th style="width:7%">รหัส</th>') +
     '</tr></thead><tbody>' + body +
     '<tr class="note"><td colspan="' + colCount + '"><b>หมายเหตุ:</b> ข้อมูลยา จำนวนเต็มคือจำนวนหน่วยเบิกหลัก และเลขในวงเล็บคือจำนวนที่แตกออกจากหน่วยเบิกหลักตามขนาดบรรจุ' + (req.note ? ' · ' + esc(req.note) : '') + '</td></tr>' +
     '</tbody></table>' +
-    '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + n + ' รายการ</td></tr><tr><th>รวมเป็นเงินทั้งสิ้น:</th><td class="big">' + money(total) + ' บาท</td></tr></table>' +
+    '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + n + ' รายการ</td></tr><tr><th>รวมเป็นเงินทั้งสิ้น:</th><td class="big">' + (blank ? '' : money(total) + ' บาท') + '</td></tr></table>' +
     '<div class="sigs">' + sign('ผู้เบิก', req.created_by_name, req.created_by_position) + sign('ผู้อนุมัติ', '', '') + sign('ผู้จ่าย', req.approved_by_name, '') + sign('ผู้รับ', '', '') + '</div>' +
     '<div class="stamp">พิมพ์เมื่อ: ' + printedAt + '</div>' +
     '</body></html>';

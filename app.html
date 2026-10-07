@@ -199,6 +199,9 @@
     /* v5.9: คอลัมน์จำนวนจ่ายเป็นสีเขียวอ่อนเพื่อโฟกัสง่าย (เฉพาะบนจอ ไม่พิมพ์สี) */
     @media screen {
       .official-table th.col-dispense { background: #bbf7d0 !important; color: #065f46; }
+      /* v6.5 Target Stock เทาอ่อนทั้งคอลัมน์ · คงเหลือ (เครดิต) ตัวน้ำเงิน — พิมพ์สีด้วย */
+      .official-table th.col-target, .official-table td.col-target { background: #ececec !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .official-table td.col-credit { color: #1d4ed8 !important; font-weight: 600; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .official-table td.col-dispense { background: #ecfdf5; box-shadow: inset 2px 0 0 #6ee7b7, inset -2px 0 0 #6ee7b7; }
       .official-table tr.bg-yellow-100 td.col-dispense { background: #fef9c3; }
       .official-table tr.bg-slate-200 td.col-dispense { background: #e2e8f0; }
@@ -212,11 +215,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.4.0"></script>
+  <script src="shared.js?v=6.5.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.4.0';
+      var need = '6.5.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -2876,16 +2879,16 @@ const CreateReqView = ({ ctx, round = null }) => {
                   { label:'ชื่อยา/เวชภัณฑ์', width:'25%' },
                   { label:'หน่วย', width:'6%' },
                   { label:'บรรจุ', width:'5%' },
-                  { label:'Target Stock', width:'7%' },
                   { label:'ยอดใช้', width:'7%' },
-                  { label:'เครดิต', width:'7%' },
+                  { label:'คงเหลือ', width:'7%' },
+                  { label:'Target Stock', width:'7%', className:'col-target' },
                   { label:'คงเหลือจริง', width:'9%', className:'no-print', when: showCalc },
                   { label:'ระบบแนะนำเติม', width:'9%', className:'no-print', when: showCalc },
-                  { label:'จำนวนจ่าย', width:'9%', className:'col-dispense' },
-                  { label:'ราคา/หน่วย', width:'5%' },
-                  { label:'มูลค่า (บาท)', width:'9%' },
-                  { label:'คงเหลือ', width:'9%' },
-                  { label:'รหัส', width:'7%' }
+                  { label:'จำนวนจ่าย', width:'7%', className:'col-dispense' },
+                  { label:'ราคา/หน่วย', width:'7%' },
+                  { label:'มูลค่า (บาท)', width:'8%' },
+                  { label:'คงเหลือหลังเบิก', width:'7%' },
+                  { label:'รหัส', width:'6%' }
                 ]} />
                 {workingTypeKeys.map(typeKey => (
                   <tbody key={typeKey}>
@@ -2929,14 +2932,14 @@ const CreateReqView = ({ ctx, round = null }) => {
                           </td>
                           <td className="text-center">{displayUnit}</td>
                           <td className="text-center"><div className="font-bold">{item.packSize}</div>{packChange && <div className="no-print text-[8px] font-bold text-blue-700 whitespace-nowrap">เดิม {packChange.packSize} → {packChange.current}</div>}</td>
-                          <td className="text-center">
+                          <td className="text-center">{formatQty(item.usage,item.packSize)}{toNonNegativeNumber(item.ncdsOutreachQty) > 0 && <div className="text-[9px] font-bold text-emerald-700 leading-tight whitespace-nowrap" title={`ผู้ป่วยนัดออกหน่วย ${toNonNegativeNumber(item.ncdsOutreachPatients)} คน`}>+ออกหน่วย {formatQty(item.ncdsOutreachQty,item.packSize)}</div>}</td>
+                          <td className="text-center col-credit">{formatQty(Math.max(0,toSafeNumber(item.systemStock)),item.packSize)}</td>
+                          <td className="text-center col-target">
                             <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                               <span>{formatQty(item.targetVMI,item.packSize)}</span>
                               <button type="button" onClick={()=>setTargetHelpData({item:{...item},drug,unitName:displayUnit})} className="no-print w-4 h-4 rounded-full border border-slate-400 text-slate-500 hover:bg-slate-100 text-[10px] font-black leading-none" title="อธิบาย Target Stock">?</button>
                             </div>
                           </td>
-                          <td className="text-center">{formatQty(item.usage,item.packSize)}{toNonNegativeNumber(item.ncdsOutreachQty) > 0 && <div className="text-[9px] font-bold text-emerald-700 leading-tight whitespace-nowrap" title={`ผู้ป่วยนัดออกหน่วย ${toNonNegativeNumber(item.ncdsOutreachPatients)} คน`}>+ออกหน่วย {formatQty(item.ncdsOutreachQty,item.packSize)}</div>}</td>
-                          <td className="text-center text-blue-700">{formatQty(Math.max(0,toSafeNumber(item.systemStock)),item.packSize)}</td>
 
                           {showCalc && <td className="no-print text-center">
                             {(isVaccine || isDisabled || isDiscontinued) ? '-' : editingActualDrugId === item.drugId ? (
@@ -4430,13 +4433,13 @@ const ViewReqView = ({ ctx }) => {
                    { label:'ชื่อยา/เวชภัณฑ์', width:'29%' },
                    { label:'หน่วย', width:'6%' },
                    { label:'บรรจุ', width:'5%' },
-                   { label:'Target Stock', width:'6%' },
                    { label:'ยอดใช้', width:'6%' },
-                   { label:'เครดิต', width:'6%' },
-                   { label:'จำนวนจ่าย', width:'8%', className:'col-dispense' },
-                   { label:'ราคา/หน่วย', width:'5%' },
+                   { label:'คงเหลือ', width:'6%' },
+                   { label:'Target Stock', width:'6%', className:'col-target' },
+                   { label:'จำนวนจ่าย', width:'6.5%', className:'col-dispense' },
+                   { label:'ราคา/หน่วย', width:'6.5%' },
                    { label:'มูลค่า (บาท)', width:'8%' },
-                   { label:'คงเหลือ', width:'8%' },
+                   { label:'คงเหลือหลังเบิก', width:'7%' },
                    { label:'รหัส', width:'6%' },
                    // ช่องปุ่มลบ (แสดงเฉพาะตอนแก้ไข ไม่แสดงตอนพิมพ์)
                    { label:<i className="fa-solid fa-trash"></i>, width:'4%', className:'no-print text-red-500', when: canEdit }
@@ -4491,14 +4494,14 @@ const ViewReqView = ({ ctx }) => {
                                   </td>
                                   <td className="text-center text-slate-700">{displayUnit}</td>
                                   <td className="text-center">{it.packSize}</td>
-                                  <td className="text-center text-gray-600">
+                                  <td className="text-center">{formatQty(it.usage, it.packSize)}</td>
+                                  <td className="text-center col-credit">{formatQty(it.prevExcess - it.usage, it.packSize)}</td>
+                                  <td className="text-center col-target">
                                     <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                                       <span>{formatQty(it.targetVMI, it.packSize)}</span>
                                       <button type="button" onClick={()=>setTargetHelpData({item:{...it},drug,unitName:displayUnit})} className="no-print w-4 h-4 rounded-full border border-slate-400 text-slate-500 hover:bg-slate-100 text-[10px] font-black leading-none" title="อธิบาย Target Stock">?</button>
                                     </div>
                                   </td>
-                                  <td className="text-center">{formatQty(it.usage, it.packSize)}</td>
-                                  <td className="text-center text-blue-700">{formatQty(it.prevExcess - it.usage, it.packSize)}</td>
                                   <td className="text-center font-bold col-dispense no-print">
                                      {(isVaccine || isDisabled || isDiscontinued) ? <span>0</span> : canEdit ? (
                                        editingPreviewQtyDrugId === it.drugId ? (
@@ -7674,7 +7677,7 @@ const AdminConfigView = ({ ctx }) => {
       const load = async () => {
         setLoading(true);
         try {
-          const rows = await loadAllInternalReqs(ctx);
+          const rows = (await loadAllInternalReqs(ctx)).filter(r => r.status !== 'Draft'); // ใบ "รอส่ง" ของหน่วยงานยังไม่เข้าคิว
           setQueue(rows.filter(r => ['Pending', 'Approving', 'ApprovalFailed'].includes(r.status)).sort((a, b) => tsToMillis(a.submitted_at || a.created_at) - tsToMillis(b.submitted_at || b.created_at)));
           setRecent(rows.slice().sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at)).slice(0, 150));
         } catch (e) { ctx.showToast('โหลดคิวไม่สำเร็จ: ' + e.message, 'error'); }
@@ -8326,7 +8329,7 @@ const AdminConfigView = ({ ctx }) => {
             round: toNonNegativeInt(r.round_no ?? r.fiscal_term) || null, date: r.round_date || '', items: r.items || [] });
         });
         (internalReqs || []).forEach(r => {
-          if (r.status === 'Cancelled') return;
+          if (r.status === 'Cancelled' || r.status === 'Draft') return;
           const d = deptById.get(String(r.deptId));
           const type = (r.kind || d?.kind) === 'pharmacy' ? 'pharmacy' : 'dept';
           out.push({ id: r.id, src: 'internal', type, unitKey: 'D:' + r.deptId, unitName: r.dept_name || d?.dept_name || r.deptId, status: r.status,

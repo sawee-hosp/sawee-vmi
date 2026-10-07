@@ -200,7 +200,7 @@
     @media screen {
       .official-table th.col-dispense { background: #bbf7d0 !important; color: #065f46; }
       /* v6.5 Target Stock เทาอ่อนทั้งคอลัมน์ · คงเหลือ (เครดิต) ตัวน้ำเงิน — พิมพ์สีด้วย */
-      .official-table th.col-target, .official-table td.col-target { background: #ececec !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .official-table th.col-target, .official-table td.col-target, .official-table th.col-credit, .official-table td.col-credit { background: #f1f1f1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .official-table td.col-credit { color: #1d4ed8 !important; font-weight: 600; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .official-table td.col-dispense { background: #ecfdf5; box-shadow: inset 2px 0 0 #6ee7b7, inset -2px 0 0 #6ee7b7; }
       .official-table tr.bg-yellow-100 td.col-dispense { background: #fef9c3; }
@@ -215,11 +215,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.5.0"></script>
+  <script src="shared.js?v=6.5.1"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.5.0';
+      var need = '6.5.1';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -2880,14 +2880,14 @@ const CreateReqView = ({ ctx, round = null }) => {
                   { label:'หน่วย', width:'6%' },
                   { label:'บรรจุ', width:'5%' },
                   { label:'ยอดใช้', width:'7%' },
-                  { label:'คงเหลือ', width:'7%' },
+                  { label:'ยอดเหลือ', width:'7%', className:'col-credit' },
                   { label:'Target Stock', width:'7%', className:'col-target' },
                   { label:'คงเหลือจริง', width:'9%', className:'no-print', when: showCalc },
                   { label:'ระบบแนะนำเติม', width:'9%', className:'no-print', when: showCalc },
                   { label:'จำนวนจ่าย', width:'7%', className:'col-dispense' },
                   { label:'ราคา/หน่วย', width:'7%' },
                   { label:'มูลค่า (บาท)', width:'8%' },
-                  { label:'คงเหลือหลังเบิก', width:'7%' },
+                  { label:'คงเหลือ', width:'7%' },
                   { label:'รหัส', width:'6%' }
                 ]} />
                 {workingTypeKeys.map(typeKey => (
@@ -2967,7 +2967,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                           </td>
                           <td className="text-right pr-1 text-slate-500">{isVaccine ? 'ไม่ร่วมระบบเบิก' : <div><div className="font-bold text-slate-700">{formatUnitPrice(item.price)}</div>{masterPriceSource === 'INVS_LATEST_PRICE' && <div className="no-print text-[8px] font-bold text-emerald-600">INVS</div>}{priceChange && <div className="no-print text-[8px] font-bold text-amber-700 whitespace-nowrap">เดิม {formatUnitPrice(priceChange.price)} → {formatUnitPrice(priceChange.current)}</div>}</div>}</td>
                           <td className="text-right pr-1 font-semibold">{isVaccine ? 'ไม่ร่วมระบบเบิก' : (isDisabled || isDiscontinued) ? '0.00' : itemValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
-                          <td className="text-center">{formatQty(Math.max(0,toSafeNumber(item.newExcess)),item.packSize)}</td>
+                          <td className="text-center">{/* คงเหลือ: เว้นให้เขียนในกระดาษ */}</td>
                           <td className="text-center font-mono text-gray-600">{item.drugId}</td>
                         </tr>
                       );
@@ -4434,12 +4434,12 @@ const ViewReqView = ({ ctx }) => {
                    { label:'หน่วย', width:'6%' },
                    { label:'บรรจุ', width:'5%' },
                    { label:'ยอดใช้', width:'6%' },
-                   { label:'คงเหลือ', width:'6%' },
+                   { label:'ยอดเหลือ', width:'6%', className:'col-credit' },
                    { label:'Target Stock', width:'6%', className:'col-target' },
                    { label:'จำนวนจ่าย', width:'6.5%', className:'col-dispense' },
                    { label:'ราคา/หน่วย', width:'6.5%' },
                    { label:'มูลค่า (บาท)', width:'8%' },
-                   { label:'คงเหลือหลังเบิก', width:'7%' },
+                   { label:'คงเหลือ', width:'7%' },
                    { label:'รหัส', width:'6%' },
                    // ช่องปุ่มลบ (แสดงเฉพาะตอนแก้ไข ไม่แสดงตอนพิมพ์)
                    { label:<i className="fa-solid fa-trash"></i>, width:'4%', className:'no-print text-red-500', when: canEdit }

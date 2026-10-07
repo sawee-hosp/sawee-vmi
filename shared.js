@@ -1,5 +1,5 @@
 // ============================================================
-// Sawee Rxfill — shared.js (v6.5.0)
+// Sawee Rxfill — shared.js (v6.5.1)
 // ไฟล์รวม: Firebase init, ค่าคงที่, utility functions
 // ใช้ร่วมกันทุกหน้า — ห้ามมี JSX (ไม่ผ่าน Babel)
 // ============================================================
@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.5.0';
+const APP_VERSION = '6.5.1';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1037,12 +1037,12 @@ const buildInternalReqFormHtml = (opts) => {
           '<td class="c muted">' + esc(it.unit) + '</td>' +
           '<td class="c">' + pack + '</td>' +
           '<td class="c">' + qty(it.usage, pack) + '</td>' +
-          '<td class="c blue">' + qty(onHand, pack) + '</td>' +
+          '<td class="c blue tgt">' + qty(onHand, pack) + '</td>' +
           '<td class="c tgt">' + tgt + '</td>' +
           '<td class="c b">' + (blank ? '' : qty(disp, pack)) + '</td>' +
           '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
           '<td class="r b">' + (blank ? '' : money(valueOf(it))) + '</td>' +
-          '<td class="c">' + (blank ? '' : qty(onHand + disp, pack)) + '</td>' +
+          '<td class="c"></td>' + // คงเหลือ: เว้นให้เขียนในกระดาษ
           '<td class="c code">' + esc(it.drugId) + '</td>' +
           '</tr>';
       }
@@ -1082,7 +1082,7 @@ const buildInternalReqFormHtml = (opts) => {
     '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.muted{color:#333}' +
     ".code{font-family:Consolas,'Courier New',monospace;font-size:9.5px;color:#555}.xs{font-size:8.5px;color:#666;line-height:1.1}" +
     '.grp td{background:#f2f2f2;font-weight:700}.grp .sub{float:right}' +
-    '.blue{color:#1d4ed8;font-weight:600}.items td.tgt,.items th.tgt{background:#ececec}' +
+    '.blue{color:#1d4ed8;font-weight:600}.items td.tgt,.items th.tgt{background:#f1f1f1;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
     '.note td{font-size:10.5px}.note b{font-weight:700}' +
     '.totals{margin-top:10px;font-size:12px}.totals td{border:1px solid #444;padding:5px 8px}.totals th{border:1px solid #444;background:#eee;font-weight:700;text-align:center;width:50%;padding:5px 8px}' +
     '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
@@ -1096,8 +1096,8 @@ const buildInternalReqFormHtml = (opts) => {
     '<table class="items"><thead><tr>' +
     (isPharmacy
       ? '<th style="width:4%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">หน่วย</th><th style="width:5%">บรรจุ</th>' +
-        '<th style="width:7.5%">ยอดใช้</th><th style="width:7.5%">คง<br>เหลือ</th><th class="tgt" style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
-        '<th style="width:7.5%">ราคา/<br>หน่วย</th><th style="width:8.5%">มูลค่า<br>(บาท)</th><th style="width:7.5%">คงเหลือ<br>หลังเบิก</th><th style="width:6%">รหัส</th>'
+        '<th style="width:7.5%">ยอดใช้</th><th class="tgt" style="width:7.5%">ยอด<br>เหลือ</th><th class="tgt" style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
+        '<th style="width:7.5%">ราคา/<br>หน่วย</th><th style="width:8.5%">มูลค่า<br>(บาท)</th><th style="width:7.5%">คง<br>เหลือ</th><th style="width:6%">รหัส</th>'
       : '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
         '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:8%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
         '<th style="width:8%">คง<br>เหลือ</th><th style="width:7%">รหัส</th>') +

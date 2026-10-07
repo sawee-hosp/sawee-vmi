@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.5.0"></script>
+  <script src="shared.js?v=6.5.1"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.5.0';
+      var need = '6.5.1';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1362,7 +1362,7 @@ ORDER BY d.name`;
             const formDate = estForm.date;
             const fakeReq = { kind: 'pharmacy', dept_name: ctx.dept?.dept_name || '', note, items, created_by_name: safeText(ctx.currentUser?.name), created_by_position: safeText(ctx.currentUser?.position) };
             const locOf = (id) => safeText(ctx.drugById.get(String(id))?.invs_location);
-            const head = ['ที่', 'ชื่อยา/เวชภัณฑ์', 'หน่วย', 'บรรจุ', 'ยอดใช้', 'คงเหลือ', 'Target Stock', 'จำนวนจ่าย', 'ราคา/หน่วย', 'มูลค่า (บาท)', 'คงเหลือหลังเบิก', 'รหัส'];
+            const head = ['ที่', 'ชื่อยา/เวชภัณฑ์', 'หน่วย', 'บรรจุ', 'ยอดใช้', 'ยอดเหลือ', 'Target Stock', 'จำนวนจ่าย', 'ราคา/หน่วย', 'มูลค่า (บาท)', 'คงเหลือ', 'รหัส'];
             const aoa = () => {
               const out = [[`ใบเบิกวัสดุ/เวชภัณฑ์ — ${fakeReq.dept_name}`], [`เลขที่ ${formNo || '-'} · วันที่ ${thaiDateLong(formDate)} · ยอดใช้ ${thaiDateLong(from)} ถึง ${thaiDateLong(to)} (${calcDays} วัน) · จำนวนเป็นหน่วยย่อย`], [], head];
               const sorted = items.slice().sort((a, b) => Number(a.type) - Number(b.type) || (locOf(a.drugId) || 'ฮ').localeCompare(locOf(b.drugId) || 'ฮ', 'th', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'th'));
@@ -1370,7 +1370,7 @@ ORDER BY d.name`;
               sorted.forEach(r => {
                 if (String(r.type) !== lastType) { out.push([typesSrc[r.type] || `หมวด ${r.type}`]); lastType = String(r.type); }
                 const value = Math.round(internalItemValue(r) * 100) / 100; total += value;
-                i += 1; out.push([i, r.name, r.unit, safePackSize(r.packSize), r.usage, r.onHand, r.targetQty, fillQty ? r.dispenseQty : '', toNonNegativeNumber(r.price), fillQty ? value : '', fillQty ? r.onHand + r.dispenseQty : '', r.drugId]);
+                i += 1; out.push([i, r.name, r.unit, safePackSize(r.packSize), r.usage, r.onHand, r.targetQty, fillQty ? r.dispenseQty : '', toNonNegativeNumber(r.price), fillQty ? value : '', '', r.drugId]);
               });
               if (fillQty) out.push([], ['', `รวม ${i} รายการ`, '', '', '', '', '', '', '', Math.round(total * 100) / 100]);
               return out;

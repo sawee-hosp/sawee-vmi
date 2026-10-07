@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.5.1';
+const APP_VERSION = '6.5.2';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -895,13 +895,15 @@ const calcPharmacySuggestion = (p) => {
   const cover = Math.max(1, toNonNegativeNumber(p.coverDays, INTERNAL_DEFAULT_COVER_DAYS));
   const roundDays = Math.max(1, toNonNegativeNumber(p.roundDays, cover));
   const dailyAvg = usage / days;
-  const target = Math.ceil(dailyAvg * cover - 0.000001);
-  const available = toNonNegativeNumber(p.onHand) + toNonNegativeNumber(p.inTransit);
-  const roundNeed = dailyAvg * roundDays;
   const item = p.item || {};
   const pack = safePackSize(item.packSize);
+  // v6.5.2 ห้องยา: Target Stock และจำนวนจ่าย ปัดขึ้นเป็นจำนวนเต็มหน่วยบรรจุเสมอ (ไม่แตกเศษ)
+  const toPacks = function (q) { return q > 0 ? Math.ceil(q / pack - 0.000001) * pack : 0; };
+  const target = toPacks(dailyAvg * cover);
+  const available = toNonNegativeNumber(p.onHand) + toNonNegativeNumber(p.inTransit);
+  const roundNeed = dailyAvg * roundDays;
   const need = Math.max(0, target - available);
-  let suggested = need > 0 ? roundDispenseQty(need, item) : 0;
+  let suggested = need > 0 ? applyMaximumQty(toPacks(need), item) : 0;
   let skipReason = '';
   if (usage > 0 && suggested > 0 && available >= roundNeed) { suggested = 0; skipReason = 'พอใช้ถึงรอบหน้า'; }
   const minValue = toNonNegativeNumber(p.minOrderValue);
@@ -999,7 +1001,7 @@ const buildInternalReqFormHtml = (opts) => {
   const money = function (v) { return toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   const qty = function (q, pack) { const s = formatQty(q, pack); return s === '0' ? '0' : s; };
   const parts = thaiDateParts(opts.formDate);
-  const items = (req.items || []).filter(function (it) { return toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty) > 0 || toNonNegativeNumber(it.dispenseQty) > 0 || (isPharmacy && opts.includeUsed && toNonNegativeNumber(it.usage) > 0); });
+  const items = (req.items || []).filter(function (it) { return toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty) > 0 || toNonNegativeNumber(it.dispenseQty) > 0 || (isPharmacy && opts.includeUsed && (toNonNegativeNumber(it.usage) > 0 || it.source === 'manual')); });
   // จัดกลุ่มตามหมวด แล้วเรียงตามตำแหน่งยา (ไม่มีตำแหน่งไว้ท้าย) เพื่อให้ผู้จัดยาเดินหยิบตามลำดับ
   const groups = {};
   items.forEach(function (it) { const k = safeText(it.type, '1') || '1'; (groups[k] = groups[k] || []).push(it); });
@@ -1030,18 +1032,21 @@ const buildInternalReqFormHtml = (opts) => {
       const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
       if (isPharmacy) {
         const onHand = Math.max(0, toNonNegativeNumber(it.onHand));
-        const tgt = it.targetQty != null ? qty(toNonNegativeNumber(it.targetQty), pack) : '-';
+        // รายการเพิ่มเอง (เช่น เวชภัณฑ์มิใช่ยา) ไม่มียอดจาก HOSxP — ช่องที่เป็น 0 เว้นว่างไว้เขียนเอง
+        const man = it.source === 'manual';
+        const z = function (v, s) { return man && !(toNonNegativeNumber(v) > 0) ? '' : s; };
+        const tgt = it.targetQty != null ? z(it.targetQty, qty(toNonNegativeNumber(it.targetQty), pack)) : '-';
         return '<tr>' +
           '<td class="c">' + n + '</td>' +
           '<td class="name">' + esc(it.name) + '</td>' +
           '<td class="c muted">' + esc(it.unit) + '</td>' +
           '<td class="c">' + pack + '</td>' +
-          '<td class="c">' + qty(it.usage, pack) + '</td>' +
-          '<td class="c blue tgt">' + qty(onHand, pack) + '</td>' +
-          '<td class="c tgt">' + tgt + '</td>' +
-          '<td class="c b">' + (blank ? '' : qty(disp, pack)) + '</td>' +
+          '<td class="c">' + z(it.usage, qty(it.usage, pack)) + '</td>' +
+          '<td class="c blue tgt">' + z(onHand, qty(onHand, pack)) + '</td>' +
+          '<td class="c">' + tgt + '</td>' +
+          '<td class="c b">' + (blank ? '' : z(disp, qty(disp, pack))) + '</td>' +
           '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
-          '<td class="r b">' + (blank ? '' : money(valueOf(it))) + '</td>' +
+          '<td class="r b">' + (blank ? '' : z(disp, money(valueOf(it)))) + '</td>' +
           '<td class="c"></td>' + // คงเหลือ: เว้นให้เขียนในกระดาษ
           '<td class="c code">' + esc(it.drugId) + '</td>' +
           '</tr>';
@@ -1060,7 +1065,9 @@ const buildInternalReqFormHtml = (opts) => {
         '</tr>';
     }).join('');
     return '<tr class="grp"><td colspan="' + colCount + '"><span>' + esc(types[k] || ('หมวด ' + k)) + '</span><span class="sub">' + (blank ? '' : money(subtotal) + ' บาท') + '</span></td></tr>' + rows;
-  }).join('');
+  }).join('') +
+    // v6.5.2 ห้องยา: เผื่อแถวว่าง 5 แถว ไว้เขียนรายการเพิ่มในกระดาษ
+    (isPharmacy ? new Array(5).fill('<tr class="blankrow">' + new Array(colCount).fill('').map(function (_, i) { return i === 5 ? '<td class="tgt"></td>' : '<td></td>'; }).join('') + '</tr>').join('') : '');
   const now = new Date();
   const printedAt = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds());
   const sign = function (label, name, pos) {
@@ -1070,7 +1077,10 @@ const buildInternalReqFormHtml = (opts) => {
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
     '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
     '<style>' +
-    '@page{size:A4 portrait;margin:12mm 10mm 14mm 10mm}' +
+    '@page{size:A4 portrait;margin:14mm 10mm 14mm 10mm;' +
+    // v6.5.2 เลขหน้ามุมขวาบน + เวลาพิมพ์ท้ายกระดาษทุกหน้า (ไม่ล้นไปหน้าใหม่)
+    '@top-right{content:"หน้า " counter(page) "/" counter(pages);font-family:Sarabun,Tahoma,sans-serif;font-size:9px;color:#555}' +
+    '@bottom-right{content:"พิมพ์เมื่อ: ' + printedAt + '";font-family:Sarabun,Tahoma,sans-serif;font-size:9px;color:#666}}' +
     "*{box-sizing:border-box}body{font-family:'Sarabun','Tahoma',sans-serif;font-size:12.5px;line-height:1.45;color:#111;margin:0}" +
     'h1{text-align:center;font-size:19px;font-weight:700;margin:0 0 6px}' +
     '.meta{text-align:right}.meta b{display:inline-block;min-width:3.5em;text-align:center;border-bottom:1px dotted #555;font-weight:700}' +
@@ -1087,7 +1097,7 @@ const buildInternalReqFormHtml = (opts) => {
     '.totals{margin-top:10px;font-size:12px}.totals td{border:1px solid #444;padding:5px 8px}.totals th{border:1px solid #444;background:#eee;font-weight:700;text-align:center;width:50%;padding:5px 8px}' +
     '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
     '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:22px;text-align:center;page-break-inside:avoid;font-size:12.5px}.nw{white-space:nowrap}' +
-    '.stamp{position:fixed;right:0;bottom:-8mm;font-size:9px;color:#666}' +
+    '.blankrow td{height:22px}' +
     '</style></head><body>' +
     '<h1>ใบเบิกวัสดุ/เวชภัณฑ์</h1>' +
     '<div class="meta"><div>เลขที่ <b>' + esc(opts.formNo) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +
@@ -1096,7 +1106,7 @@ const buildInternalReqFormHtml = (opts) => {
     '<table class="items"><thead><tr>' +
     (isPharmacy
       ? '<th style="width:4%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">หน่วย</th><th style="width:5%">บรรจุ</th>' +
-        '<th style="width:7.5%">ยอดใช้</th><th class="tgt" style="width:7.5%">ยอด<br>เหลือ</th><th class="tgt" style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
+        '<th style="width:7.5%">ยอดใช้</th><th class="tgt" style="width:7.5%">ยอด<br>เหลือ</th><th style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
         '<th style="width:7.5%">ราคา/<br>หน่วย</th><th style="width:8.5%">มูลค่า<br>(บาท)</th><th style="width:7.5%">คง<br>เหลือ</th><th style="width:6%">รหัส</th>'
       : '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
         '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:8%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
@@ -1106,7 +1116,6 @@ const buildInternalReqFormHtml = (opts) => {
     '</tbody></table>' +
     '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + n + ' รายการ</td></tr><tr><th>รวมเป็นเงินทั้งสิ้น:</th><td class="big">' + (blank ? '' : money(total) + ' บาท') + '</td></tr></table>' +
     '<div class="sigs">' + sign('ผู้เบิก', req.created_by_name, req.created_by_position) + sign('ผู้อนุมัติ', '', '') + sign('ผู้จ่าย', req.approved_by_name, '') + sign('ผู้รับ', '', '') + '</div>' +
-    '<div class="stamp">พิมพ์เมื่อ: ' + printedAt + '</div>' +
     '</body></html>';
 };
 

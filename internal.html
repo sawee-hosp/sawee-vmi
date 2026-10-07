@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.5.1"></script>
+  <script src="shared.js?v=6.5.2"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.5.1';
+      var need = '6.5.2';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1102,7 +1102,7 @@ ORDER BY d.name`;
                 requestQty: r.dispense, dispenseQty: r.dispense, followSuggest: r.follow, source: r.source, note: r.note, skipReason: r.skipReason || ''
               });
               const items = orderRows.map(toItem);
-              const zeroRows = derived.filter(r => r.dispense <= 0 && (r.usage > 0 || r.onHandTouched)).map(r => ({
+              const zeroRows = derived.filter(r => r.dispense <= 0 && (r.usage > 0 || r.onHandTouched || r.source === 'manual')).map(r => ({
                 drugId: r.id, name: r.base.name, unit: r.base.unit, packSize: r.base.packSize, price: r.base.price, type: r.base.type,
                 opdRaw: r.opdRaw, ipdRaw: r.ipdRaw, hosxpMultiplier: r.multiplier, hosxpCodes: r.icodes, usage: r.usage,
                 onHand: r.onHand, suggestedQty: r.suggested, followSuggest: r.follow, dispenseQty: 0, source: r.source, skipReason: r.skipReason || ''
@@ -1146,6 +1146,25 @@ ORDER BY d.name`;
           return id;
         } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); return null; }
         finally { setBusy(''); }
+      };
+
+      // v6.5.2 ลบใบ "รอส่ง" (เปลี่ยนสถานะเป็นยกเลิก ไม่นับเลขที่) เพื่อเลือกรอบเบิกใหม่/ดึงข้อมูลใหม่
+      const deleteDraft = () => {
+        const cur = effEdit();
+        if (!cur?.id || cur.status !== 'Draft') return;
+        ctx.setConfirmDialog({
+          title: 'ลบใบรอส่งนี้?', message: 'ใบที่บันทึกไว้จะถูกลบออก แล้วกลับไปเลือกรอบเบิกและดึงยอดใช้ใหม่ได้',
+          icon: 'fa-trash-can', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-500 hover:bg-red-600', confirmText: 'ลบใบรอส่ง',
+          onConfirm: async () => {
+            setBusy('del');
+            try {
+              await cancelDraftReq(ctx, cur.id);
+              ctx.showToast('ลบใบรอส่งแล้ว — เลือกรอบเบิกใหม่ได้'); draftRef.current = null;
+              await ctx.reload(); onDone();
+            } catch (e) { ctx.showToast(e?.message || String(e), 'error'); }
+            finally { setBusy(''); }
+          }
+        });
       };
 
       const applyAll = (mode) => setRowState(prev => {
@@ -1251,7 +1270,7 @@ ORDER BY d.name`;
             </div>
             <div className="p-4 border-b grid gap-3 md:grid-cols-[1fr_1fr_auto] items-center">
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="กรองในตาราง: ชื่อยา / รหัส / icode" aria-label="กรองในตาราง" className="px-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-teal-500" />
-              <DrugSearchBox ctx={ctx} excludeIds={rowIds} placeholder="+ เพิ่มยาที่ไม่มีในรายการ (ยาที่ไม่ได้คีย์ใน HOSxP)"
+              <DrugSearchBox ctx={ctx} excludeIds={rowIds} placeholder="+ เพิ่มยา / เวชภัณฑ์มิใช่ยา ที่ไม่มีในรายการ (ไม่มียอดจาก HOSxP — กรอกคงเหลือ/จำนวนจ่ายเอง หรือเว้นว่างไว้เขียนในกระดาษ)"
                 onPick={d => { patchRow(String(d.drug_id), { base: baseItemFromDrug(ctx, d), source: 'manual', dispenseManual: 0 }); setFilter('all'); setSearch(d.drug_name); }} />
               <div className="flex gap-2 items-center">
                 <select value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="เรียงตาม" className="p-2.5 border border-slate-300 rounded-xl text-sm">
@@ -1343,6 +1362,7 @@ ORDER BY d.name`;
               <div className="text-sm text-slate-500">เบิก {fmtNum(stats.order)} รายการ · <span className="font-bold text-slate-800 tnum">{fmtMoney(stats.value)}</span> บาท</div>
               <div className="flex gap-2 justify-end">
                 <button onClick={onDone} className="px-5 py-3 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">ยกเลิก</button>
+                {(editReq?.status === 'Draft' || draftRef.current?.status === 'Draft') && <button id="ph-draft-del" onClick={deleteDraft} disabled={!!busy} title="ลบใบรอส่งนี้ แล้วเลือกรอบเบิก/ดึงยอดใช้ใหม่" className="px-5 py-3 rounded-xl bg-white border-2 border-red-300 text-red-600 font-bold hover:bg-red-50 disabled:opacity-40"><i className="fa-solid fa-trash-can mr-2"></i>ลบใบรอส่ง / เริ่มใหม่</button>}
                 <button id="ph-estimate" onClick={() => setShowEstimate(true)} disabled={!derived.length} title="พิมพ์ใบเบิกไปเสนออนุมัติ และเก็บไว้รอส่ง — ยังไม่ส่ง VMI" className="px-5 py-3 rounded-xl bg-white border-2 border-teal-600 text-teal-700 font-bold hover:bg-teal-50 disabled:opacity-40"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบเบิก / บันทึกรอส่ง</button>
                 <button onClick={submit} disabled={!!busy || !stats.order} className="px-7 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40">
                   {busy === 'submit' ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังส่ง...</> : <><i className="fa-solid fa-paper-plane mr-2"></i>{editReq ? 'ส่งใบที่แก้ไข' : 'ส่งใบเบิก'}</>}
@@ -1356,7 +1376,7 @@ ORDER BY d.name`;
             const typesSrc = ctx.drugTypes || DEFAULT_DRUG_TYPES;
             const rows = derived.filter(r => String(r.base.type) !== '6' && (r.usage > 0 || r.dispense > 0 || r.source === 'manual'));
             const roundT = (r) => { const pack = safePackSize(r.base.packSize); return roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target; };
-            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense }));
+            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source }));
             const cur = effEdit();
             const formNo = estForm.no;
             const formDate = estForm.date;
@@ -1471,6 +1491,18 @@ ORDER BY d.name`;
       );
     };
 
+    // v6.5.2 ลบใบรอส่ง = เปลี่ยนเป็น Cancelled (draft_deleted) — ไม่ใช้ delete จริง เพื่อให้แคช/ซิงก์เห็นการเปลี่ยนแปลง
+    const cancelDraftReq = async (ctx, id) => {
+      const ref = db.collection('internal_requisitions').doc(id);
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const cur = snap.data() || {};
+        if (cur.status !== 'Draft') throw new Error('ใบนี้ไม่ใช่สถานะรอส่งแล้ว ลบไม่ได้');
+        tx.update(ref, { status: 'Cancelled', draft_deleted: true, cancelled_at: firebase.firestore.FieldValue.serverTimestamp(), cancelled_by_uid: ctx.currentUser.uid, cancelled_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+      });
+      await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_DRAFT_DELETE', 'internal_requisitions', id, {});
+    };
+
     // ===== ใบเบิกของฉัน =====
     const ReqDetailModal = ({ ctx, req, onClose, onEdit, onPrint }) => {
       if (!req) return null;
@@ -1530,7 +1562,8 @@ ORDER BY d.name`;
           </div>
           {req.note && <div className="mt-3 text-sm text-slate-600"><b>หมายเหตุ:</b> {req.note}</div>}
           <div className="flex flex-wrap justify-end gap-2 mt-5">
-            {canEdit && <button onClick={cancelReq} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50"><i className="fa-solid fa-ban mr-2"></i>ยกเลิกใบ</button>}
+            {canEdit && req.status === 'Draft' && <button id="req-draft-del" onClick={() => ctx.setConfirmDialog({ title: 'ลบใบรอส่งนี้?', message: 'ลบแล้วเลือกรอบเบิกและดึงยอดใช้ใหม่ได้', icon: 'fa-trash-can', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-500 hover:bg-red-600', confirmText: 'ลบใบรอส่ง', onConfirm: async () => { try { await cancelDraftReq(ctx, req.id); ctx.showToast('ลบใบรอส่งแล้ว'); await ctx.reload(); onClose(); } catch (e) { ctx.showToast(e.message, 'error'); } } })} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50"><i className="fa-solid fa-trash-can mr-2"></i>ลบใบรอส่ง / เริ่มใหม่</button>}
+            {canEdit && req.status !== 'Draft' && <button onClick={cancelReq} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50"><i className="fa-solid fa-ban mr-2"></i>ยกเลิกใบ</button>}
             <button onClick={() => onPrint(req)} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold"><i className="fa-solid fa-print mr-2"></i>พิมพ์</button>
             {canEdit && <button onClick={() => onEdit(req)} className="px-5 py-2 rounded-xl bg-teal-600 text-white font-bold"><i className="fa-solid fa-pen mr-2"></i>{req.status === 'Rejected' ? 'แก้ไขและส่งใหม่' : 'แก้ไขใบเบิก'}</button>}
           </div>

@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.5.2';
+const APP_VERSION = '6.6.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -151,6 +151,25 @@ const sortDrugs = (a, b) => {
   if (isDrugA && !isDrugB) return -1;
   if (!isDrugA && isDrugB) return 1;
   return idA.localeCompare(idB);
+};
+
+// v6.6 ตำแหน่งยา (sawee_location.LOC_CODE เช่น 7/1/2-1, 12/3/2-1) — ว่างหรือ "0" = ไม่มีตำแหน่ง
+const normDrugLocation = (v) => { const s = String(v == null ? '' : v).trim(); return s === '0' ? '' : s; };
+// เทียบแบบตัวเลขทีละช่วง: ชั้น 7 มาก่อน 12, 12/3 มาก่อน 12/10
+const compareLocationCode = (a, b) => {
+  const ta = String(a).match(/\d+|\D+/g) || [], tb = String(b).match(/\d+|\D+/g) || [];
+  for (let i = 0; i < Math.min(ta.length, tb.length); i++) {
+    const da = /^\d/.test(ta[i]), db = /^\d/.test(tb[i]);
+    const c = da && db ? Number(ta[i]) - Number(tb[i]) : ta[i].localeCompare(tb[i], 'th');
+    if (c) return c;
+  }
+  return ta.length - tb.length;
+};
+// เรียงรายการในใบเบิก: มีตำแหน่งก่อน (เรียงตามตำแหน่ง → ชื่อ) แล้วยาไม่มีตำแหน่งเรียงตามชื่อ
+const compareByLocation = (locA, nameA, locB, nameB) => {
+  const la = normDrugLocation(locA), lb = normDrugLocation(locB);
+  if (!la !== !lb) return la ? -1 : 1;
+  return (la ? compareLocationCode(la, lb) : 0) || String(nameA || '').localeCompare(String(nameB || ''), 'th');
 };
 
 const formatQty = (qty, packSize) => {
@@ -992,6 +1011,39 @@ const deptSentencePrefix = (name) => {
   return /^ฝ่า[ยน]/.test(n) ? n : 'ฝ่าย' + n;
 };
 
+// v6.6 ผู้ลงนามท้ายใบเบิกห้องยา/หน่วยงาน 4 จุด — แก้ชื่อ/ตำแหน่งได้ จำไว้ในใบ (sign_people) วันที่เว้นว่างให้เขียน
+const INTERNAL_SIGN_ROLES = ['ผู้เบิก', 'ผู้สั่งจ่าย', 'ผู้รับของ', 'ผู้จ่าย'];
+// ลำดับค่าเริ่มต้น: ค่าที่บันทึกในใบนี้ → ค่าจากใบก่อนของหน่วยงาน (prev) → ผู้สร้าง/ผู้อนุมัติ
+const internalSignersFor = (req, prev) => {
+  const r = req || {};
+  const pick = function (v) { return Array.isArray(v) && v.length ? v : null; };
+  const saved = pick(r.sign_people), before = pick(prev);
+  return INTERNAL_SIGN_ROLES.map(function (role, i) {
+    const d = i === 0 ? { name: r.created_by_name, position: r.created_by_position } : i === 3 ? { name: r.approved_by_name, position: '' } : {};
+    const b = before && before[i] ? before[i] : {};
+    const src = saved ? (saved[i] || {}) : { name: safeText(b.name) || safeText(d.name), position: safeText(b.position) || safeText(d.position) };
+    return { role: role, name: safeText(src.name).slice(0, 120), position: safeText(src.position).slice(0, 120) };
+  });
+};
+const sameSigners = (a, b) => JSON.stringify((a || []).map(function (x) { return [safeText(x && x.name), safeText(x && x.position)]; })) ===
+  JSON.stringify((b || []).map(function (x) { return [safeText(x && x.name), safeText(x && x.position)]; }));
+const signersForSave = (list) => (list || []).map(function (x, i) { return { role: INTERNAL_SIGN_ROLES[i], name: safeText(x && x.name).slice(0, 120), position: safeText(x && x.position).slice(0, 120) }; });
+// ช่องแก้ผู้ลงนาม (ใช้ในหน้าต่างพิมพ์ทั้ง internal.html และ app.html)
+const InternalSignersEditor = (props) => {
+  const h = React.createElement;
+  const list = props.value || [];
+  const set = function (i, key, v) { props.onChange(list.map(function (x, j) { return j === i ? Object.assign({}, x, { [key]: v }) : x; })); };
+  const cls = 'w-full p-2 border border-slate-300 rounded-lg text-sm';
+  return h('div', { className: 'space-y-2' },
+    h('div', { className: 'text-sm font-bold text-slate-600' }, 'ผู้ลงนามท้ายใบ ', h('span', { className: 'text-xs font-normal text-slate-400' }, '(จำไว้ในใบนี้ · วันที่เว้นว่างไว้เขียน)')),
+    list.map(function (x, i) {
+      return h('div', { key: i, className: 'grid grid-cols-[5.5rem_1fr_1fr] gap-2 items-center' },
+        h('span', { className: 'text-xs font-bold text-slate-500' }, INTERNAL_SIGN_ROLES[i]),
+        h('input', { id: 'sign-name-' + i, value: x.name || '', placeholder: 'ชื่อ-สกุล (เว้นว่างได้)', 'aria-label': INTERNAL_SIGN_ROLES[i] + ' ชื่อ', onChange: function (e) { set(i, 'name', e.target.value); }, className: cls }),
+        h('input', { id: 'sign-pos-' + i, value: x.position || '', placeholder: 'ตำแหน่ง', 'aria-label': INTERNAL_SIGN_ROLES[i] + ' ตำแหน่ง', onChange: function (e) { set(i, 'position', e.target.value); }, className: cls }));
+    }));
+};
+
 const buildInternalReqFormHtml = (opts) => {
   const req = opts.req || {};
   const isPharmacy = req.kind === 'pharmacy';
@@ -1005,11 +1057,7 @@ const buildInternalReqFormHtml = (opts) => {
   // จัดกลุ่มตามหมวด แล้วเรียงตามตำแหน่งยา (ไม่มีตำแหน่งไว้ท้าย) เพื่อให้ผู้จัดยาเดินหยิบตามลำดับ
   const groups = {};
   items.forEach(function (it) { const k = safeText(it.type, '1') || '1'; (groups[k] = groups[k] || []).push(it); });
-  const byLoc = function (a, b) {
-    const la = safeText(locOf(a.drugId)), lb = safeText(locOf(b.drugId));
-    if (!la !== !lb) return la ? -1 : 1;
-    return la.localeCompare(lb, 'th', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'th');
-  };
+  const byLoc = function (a, b) { return compareByLocation(locOf(a.drugId), a.name, locOf(b.drugId), b.name); };
   const typeKeys = Object.keys(groups).sort(function (a, b) { return Number(a) - Number(b); });
   // v6.5 ห้องยา: คอลัมน์แบบใบเบิก รพ.สต. — ยอดใช้ · คงเหลือ(น้ำเงิน) · Target Stock(เทา) · จำนวนจ่าย(หนา)
   // opts.blankQty = เว้นช่องจำนวนจ่าย/มูลค่า/คงเหลือหลังเบิก ไว้เขียนเอง
@@ -1042,8 +1090,8 @@ const buildInternalReqFormHtml = (opts) => {
           '<td class="c muted">' + esc(it.unit) + '</td>' +
           '<td class="c">' + pack + '</td>' +
           '<td class="c">' + z(it.usage, qty(it.usage, pack)) + '</td>' +
-          '<td class="c blue tgt">' + z(onHand, qty(onHand, pack)) + '</td>' +
-          '<td class="c">' + tgt + '</td>' +
+          '<td class="c blue">' + z(onHand, qty(onHand, pack)) + '</td>' +
+          '<td class="c tgt">' + tgt + '</td>' +
           '<td class="c b">' + (blank ? '' : z(disp, qty(disp, pack))) + '</td>' +
           '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
           '<td class="r b">' + (blank ? '' : z(disp, money(valueOf(it)))) + '</td>' +
@@ -1067,12 +1115,14 @@ const buildInternalReqFormHtml = (opts) => {
     return '<tr class="grp"><td colspan="' + colCount + '"><span>' + esc(types[k] || ('หมวด ' + k)) + '</span><span class="sub">' + (blank ? '' : money(subtotal) + ' บาท') + '</span></td></tr>' + rows;
   }).join('') +
     // v6.5.2 ห้องยา: เผื่อแถวว่าง 5 แถว ไว้เขียนรายการเพิ่มในกระดาษ
-    (isPharmacy ? new Array(5).fill('<tr class="blankrow">' + new Array(colCount).fill('').map(function (_, i) { return i === 5 ? '<td class="tgt"></td>' : '<td></td>'; }).join('') + '</tr>').join('') : '');
+    (isPharmacy ? new Array(5).fill('<tr class="blankrow">' + new Array(colCount).fill('').map(function (_, i) { return i === 6 ? '<td class="tgt"></td>' : '<td></td>'; }).join('') + '</tr>').join('') : '');
   const now = new Date();
   const printedAt = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds());
   const sign = function (label, name, pos) {
-    return '<div class="sig"><div class="nw">ลงชื่อ ................................ ' + label + '</div><div>(' + (name ? esc(name) : '................................') + ')</div>' + (pos ? '<div>' + esc(pos) + '</div>' : '<div>ตำแหน่ง ................................</div>') + '</div>';
+    return '<div class="sig"><div class="nw">ลงชื่อ ................................ ' + label + '</div><div>(' + (name ? esc(name) : '................................') + ')</div>' +
+      (pos ? '<div>ตำแหน่ง ' + esc(pos) + '</div>' : '<div>ตำแหน่ง ................................</div>') + '<div>วันที่ ........./........./.........</div></div>';
   };
+  const signers = opts.signers || internalSignersFor(req);
   return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบเบิกวัสดุ/เวชภัณฑ์ ' + esc(opts.formNo) + '</title>' +
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
     '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
@@ -1106,7 +1156,7 @@ const buildInternalReqFormHtml = (opts) => {
     '<table class="items"><thead><tr>' +
     (isPharmacy
       ? '<th style="width:4%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">หน่วย</th><th style="width:5%">บรรจุ</th>' +
-        '<th style="width:7.5%">ยอดใช้</th><th class="tgt" style="width:7.5%">ยอด<br>เหลือ</th><th style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
+        '<th style="width:7.5%">ยอดใช้</th><th style="width:7.5%">ยอด<br>เหลือ</th><th class="tgt" style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
         '<th style="width:7.5%">ราคา/<br>หน่วย</th><th style="width:8.5%">มูลค่า<br>(บาท)</th><th style="width:7.5%">คง<br>เหลือ</th><th style="width:6%">รหัส</th>'
       : '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
         '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:8%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
@@ -1115,7 +1165,7 @@ const buildInternalReqFormHtml = (opts) => {
     '<tr class="note"><td colspan="' + colCount + '"><b>หมายเหตุ:</b> ข้อมูลยา จำนวนเต็มคือจำนวนหน่วยเบิกหลัก และเลขในวงเล็บคือจำนวนที่แตกออกจากหน่วยเบิกหลักตามขนาดบรรจุ' + (req.note ? ' · ' + esc(req.note) : '') + '</td></tr>' +
     '</tbody></table>' +
     '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + n + ' รายการ</td></tr><tr><th>รวมเป็นเงินทั้งสิ้น:</th><td class="big">' + (blank ? '' : money(total) + ' บาท') + '</td></tr></table>' +
-    '<div class="sigs">' + sign('ผู้เบิก', req.created_by_name, req.created_by_position) + sign('ผู้อนุมัติ', '', '') + sign('ผู้จ่าย', req.approved_by_name, '') + sign('ผู้รับ', '', '') + '</div>' +
+    '<div class="sigs">' + signers.map(function (x, i) { return sign(INTERNAL_SIGN_ROLES[i], x.name, x.position); }).join('') + '</div>' +
     '</body></html>';
 };
 
@@ -1725,7 +1775,7 @@ const buildUsageEstimateHtml = (opts) => {
   const order = Array.from(groups.keys()).sort(function (a, b) { return Number(a) - Number(b); });
   let i = 0, grand = 0;
   const body = order.map(function (k) {
-    const list = groups.get(k).slice().sort(function (a, b) { return String(a.location || 'ฮ').localeCompare(String(b.location || 'ฮ'), 'th') || String(a.name).localeCompare(String(b.name), 'th'); });
+    const list = groups.get(k).slice().sort(function (a, b) { return compareByLocation(a.location, a.name, b.location, b.name); });
     const sub = list.reduce(function (s, r) { return s + toNonNegativeNumber(r.packs) * toNonNegativeNumber(r.price); }, 0); grand += sub;
     return '<tr class="grp"><td colspan="9"><span>' + esc(types[k] || ('หมวด ' + k)) + ' (' + list.length + ' รายการ)</span><span class="sub">' + money(sub) + ' บาท</span></td></tr>' +
       list.map(function (r) {

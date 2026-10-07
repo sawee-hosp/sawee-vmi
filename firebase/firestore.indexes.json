@@ -1,0 +1,9 @@
+{
+  "indexes": [
+    { "collectionGroup": "config_par", "queryScope": "COLLECTION", "fields": [ { "fieldPath": "hospital_id", "order": "ASCENDING" }, { "fieldPath": "updated_at", "order": "ASCENDING" } ] },
+    { "collectionGroup": "current_excess", "queryScope": "COLLECTION", "fields": [ { "fieldPath": "hospital_id", "order": "ASCENDING" }, { "fieldPath": "last_updated", "order": "ASCENDING" } ] },
+    { "collectionGroup": "historical_usages", "queryScope": "COLLECTION", "fields": [ { "fieldPath": "hospital_id", "order": "ASCENDING" }, { "fieldPath": "updated_at", "order": "ASCENDING" } ] },
+    { "collectionGroup": "internal_stock", "queryScope": "COLLECTION", "fields": [ { "fieldPath": "dept_id", "order": "ASCENDING" }, { "fieldPath": "updated_at", "order": "ASCENDING" } ] }
+  ],
+  "fieldOverrides": []
+}

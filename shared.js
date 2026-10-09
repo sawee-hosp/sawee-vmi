@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.6.0';
+const APP_VERSION = '6.6.1';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -680,7 +680,8 @@ const getReqPermissions = (req, user, opts) => {
     canEdit: !invsSent && (isAdmin ? adminEditableStatus : (isPending && ownsReq && !isPrinted)),
     canDeleteReq: !invsSent && (isAdmin ? adminEditableStatus : (ownsReq && ['Draft', 'Pending', 'Rejected'].includes(status))),
     canApproveReq: isAdmin && (isPending || isApprovalFailed),
-    canSendInvs: isAdmin && isPending && !invsSent
+    // v6.6.1 ใบที่จัดยาแล้วแต่ยังไม่ส่ง INVS ส่งย้อนหลังได้ (Bridge v2.9.1)
+    canSendInvs: isAdmin && (isPending || status === 'Completed') && !invsSent
   };
 };
 

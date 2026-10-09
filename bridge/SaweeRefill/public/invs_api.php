@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.9.1: ส่ง INVS ย้อนหลังได้สำหรับใบสถานะ Completed ที่ยังไม่มีเลข INVS
  *   v2.9.0: ตำแหน่งยาจาก sawee_location.LOC_CODE (ว่าง/0 = ไม่มีตำแหน่ง) · คำค้นหาเพิ่ม inst_name.REF_CODE
  *   v2.7.0: คำค้นหาจาก inst_name, ตำแหน่งจากตาราง location (ตามคลัง), รองรับ HOSxP ที่เก็บวันที่เป็น พ.ศ. (date_mode)
  *   v2.8.0: ประหยัดโควตา Firestore — เติม updated_at เมื่อแก้ใบเบิก · CLI sync เขียน/อ่านเฉพาะที่เปลี่ยน (ดู cli/*.php)
@@ -22,7 +23,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.9.0';
+const BRIDGE_VERSION = '2.9.1';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -423,16 +424,18 @@ function cleanupOwnPartial(mysqli $db,string $subPoNo,string $marker): void {
 
 function buildPreflight(mysqli $db,array $config,array $req,array $hospital): array {
     $status=cleanText($req['status'] ?? '');
-    if (!in_array($status,['Pending','Draft'],true)) throw new RuntimeException("ใบเบิกสถานะ {$status} ไม่พร้อมส่งเข้า INVS");
     if (strtoupper(cleanText($req['invs_status'] ?? ''))==='SENT' || cleanText($req['invs_sub_po_no'] ?? '')!=='') {
         return ['already_sent'=>true,'sub_po_no'=>cleanText($req['invs_sub_po_no'] ?? ''),'items'=>[],'warnings'=>[],'errors'=>[],'ok'=>true];
     }
+    // v2.9.1: ใบที่ "จัดยาแล้ว" (Completed) แต่ยังไม่มีเลข INVS ส่งย้อนหลังได้ (ตรวจแล้วว่ายังไม่ส่ง)
+    if (!in_array($status,['Pending','Draft','Completed'],true)) throw new RuntimeException("ใบเบิกสถานะ {$status} ไม่พร้อมส่งเข้า INVS");
     $deptId=cleanText($hospital['invs_dept_id'] ?? '');
     if ($deptId==='') throw new RuntimeException('หน่วยเบิกนี้ยังไม่ได้ตั้งค่า INVS Dept ID (Admin > รพ.สต. หรือ Admin > หน่วยงาน/ห้องยา)');
     $stockId=cleanText($hospital['invs_stock_id'] ?? cfg($config,'invs','default_stock_id','10'));
     if ($stockId==='') throw new RuntimeException('ยังไม่ได้ตั้งค่า INVS Stock ID');
     $dept=validateDept($db,$deptId); $stock=validateDept($db,$stockId);
     $warnings=[]; $errors=[]; $lines=[];
+    if ($status==='Completed') $warnings[]='ใบนี้บันทึกจัดยาแล้วใน Sawee VMI — ส่งเข้า INVS ย้อนหลัง (ไม่เปลี่ยนสถานะ/สต๊อกใน Sawee VMI)';
     // skipped_items เป็นข้อมูลจากขั้นตอน import รบ.301 ที่ผู้ใช้ตั้งใจไม่เบิก
     // INVS ต้องพิจารณาเฉพาะรายการที่อยู่ใน req.items และมีจำนวนจ่าย > 0 เท่านั้น
     $items=is_array($req['items'] ?? null) ? $req['items'] : [];

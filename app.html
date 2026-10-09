@@ -215,11 +215,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.6.0"></script>
+  <script src="shared.js?v=6.6.1"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.6.0';
+      var need = '6.6.1';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -3305,6 +3305,7 @@ const ViewReqView = ({ ctx }) => {
       const [showInvsModal, setShowInvsModal] = useState(false);
       const [invsPreflight, setInvsPreflight] = useState(null);
       const [isInvsBusy, setIsInvsBusy] = useState(false);
+      const [approveAfterInvs, setApproveAfterInvs] = useState(false); // v6.6.1 ส่ง INVS สำเร็จแล้วยืนยันจัดยาต่อทันที
 
       const toDateSafe = (value) => {
         if (!value) return null;
@@ -3873,10 +3874,12 @@ const ViewReqView = ({ ctx }) => {
         pack: safePackSize(it?.packSize), type: safeText(it?.type), discontinued: !!it?.isDiscontinued
       })).sort((a,b)=>a.drugId.localeCompare(b.drugId)));
 
-      const handleInvsPreflight = async () => {
+      const handleInvsPreflight = async (withApprove) => {
         if (!isAdmin || !req || invsSent) return;
-        if (invsItemsSignature(editableItems) !== invsItemsSignature(req.items || [])) {
-          return ctx.showToast('มีรายการที่แก้ไขแต่ยังไม่ได้บันทึก กรุณากด “บันทึกการแก้ไขข้อมูล” ก่อนตรวจ/ส่งเข้า INVS', 'error');
+        setApproveAfterInvs(withApprove === true);
+        // v6.6.1 มีรายการที่แก้แต่ยังไม่บันทึก → บันทึกให้ก่อน แล้วตรวจ INVS ต่อ (Bridge อ่านรายการจาก Firestore)
+        if (isPending && invsItemsSignature(editableItems) !== invsItemsSignature(req.items || [])) {
+          if (!(await handleSaveChanges())) return;
         }
         setIsInvsBusy(true);
         try {
@@ -3904,6 +3907,7 @@ const ViewReqView = ({ ctx }) => {
           ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
           await ctx.refreshData();
           setShowInvsModal(false);
+          if (approveAfterInvs) { setApproveAfterInvs(false); setIsInvsBusy(false); await handleApprove(); return; }
         } catch(e) {
           if (e?.payload) setInvsPreflight(e.payload);
           ctx.showToast('ส่งเข้า INVS ไม่สำเร็จ: ' + (e?.message || e), 'error');
@@ -3946,8 +3950,11 @@ const ViewReqView = ({ ctx }) => {
               });
               ctx.showToast('บันทึกการแก้ไขข้อมูลสำเร็จ');
               await ctx.refreshData();
+              setIsApproving(false);
+              return true;
           } catch(e) { ctx.showToast(e.message, 'error'); }
           setIsApproving(false);
+          return false;
       };
 
       const handleApprove = async () => {
@@ -4296,7 +4303,7 @@ const ViewReqView = ({ ctx }) => {
             <div className="flex gap-2">
               {req.excel_url && <a href={req.excel_url} target="_blank" rel="noopener noreferrer" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
               {isAdmin && <button onClick={()=>setShowValueAudit(true)} className="bg-violet-100 text-violet-700 border border-violet-200 px-4 py-2 rounded-xl font-bold shadow-sm hover:bg-violet-200 transition"><i className="fa-solid fa-magnifying-glass-chart mr-2"></i>ตรวจสอบมูลค่า</button>}
-              {canSendInvs && <button onClick={handleInvsPreflight} disabled={isInvsBusy} className="bg-cyan-600 text-white border border-cyan-700 px-4 py-2 rounded-xl font-bold shadow hover:bg-cyan-700 transition disabled:opacity-50"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{isInvsBusy?'กำลังตรวจ INVS...':'ส่งเข้า INVS'}</button>}
+              {canSendInvs && <button onClick={() => handleInvsPreflight(false)} disabled={isInvsBusy} className="bg-cyan-600 text-white border border-cyan-700 px-4 py-2 rounded-xl font-bold shadow hover:bg-cyan-700 transition disabled:opacity-50"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{isInvsBusy?'กำลังตรวจ INVS...':'ส่งเข้า INVS'}</button>}
               {isAdmin && invsSent && <div className="bg-cyan-50 text-cyan-800 border border-cyan-200 px-3 py-2 rounded-xl text-xs font-black"><i className="fa-solid fa-circle-check mr-1"></i>INVS {req.invs_sub_po_no || 'SENT'}</div>}
               {isAdmin && <div className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded-xl px-2 py-1 text-xs text-indigo-800" title="Admin แก้เลขใบเบิกได้โดยไม่กระทบจำนวนยา/Stock"><span className="font-bold">เลขใบเบิก</span><input type="number" min="1" step="1" value={fiscalTermDraft} onChange={e=>setFiscalTermDraft(Math.max(1,toNonNegativeInt(e.target.value,1)))} className="w-14 h-7 border border-indigo-200 rounded bg-white text-center font-black outline-none"/><span className="font-black">/{fiscalYear}</span><button onClick={handleSaveRequisitionNumber} disabled={isSavingReqNo} className="h-7 px-2 rounded bg-indigo-600 text-white font-bold disabled:opacity-50">{isSavingReqNo?'...':'บันทึก'}</button></div>}
               {isAdmin && canEdit && <button onClick={()=>setShowHiddenItems(v=>!v)} className={`border px-4 py-2 rounded-xl font-bold shadow-sm transition ${showHiddenItems?'bg-slate-800 text-white border-slate-800':'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'}`}><i className={`fa-solid ${showHiddenItems?'fa-eye-slash':'fa-eye'} mr-2`}></i>{showHiddenItems?'ซ่อนรายการ 0':`แสดงรายการที่ซ่อน (${hiddenItemCount})`}</button>}
@@ -4325,7 +4332,7 @@ const ViewReqView = ({ ctx }) => {
               {canApproveReq && (
                  <>
                     {isPending && <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันไม่อนุมัติ', message: 'คุณต้องการไม่อนุมัติใบเบิกนี้ใช่หรือไม่?', icon: 'fa-xmark', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700', confirmText: 'ไม่อนุมัติ', onConfirm: handleRejectReq })} disabled={isApproving} className="bg-white border-2 border-red-500 text-red-600 px-6 py-2 rounded-xl font-bold shadow hover:bg-red-50 transition">ไม่อนุมัติ</button>}
-                    <button onClick={() => ctx.setConfirmDialog({ title: isApprovalFailed ? 'ลองอนุมัติอีกครั้ง' : 'ยืนยันจัดยา', message: isApprovalFailed ? 'การอนุมัติครั้งก่อนล้มเหลว ระบบจะเขียนข้อมูลเดิมซ้ำแบบ idempotent แล้ว finalize อีกครั้ง' : 'คุณตรวจสอบยอดและต้องการจัดยานี้ใช่หรือไม่?', icon: 'fa-check-double', confirmText: isApprovalFailed ? 'ลองใหม่' : 'ยืนยันจัดยา', onConfirm: handleApprove })} disabled={isApproving} className="bg-gradient-main text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center hover:scale-105">{isApproving ? '...' : <span><i className="fa-solid fa-check-double mr-2"></i> {isApprovalFailed ? 'ลองอนุมัติอีกครั้ง' : 'บันทึกจัดยาแล้ว'}</span>}</button>
+                    <button onClick={() => (canSendInvs ? ctx.setConfirmDialog({ title: 'ส่งเข้า INVS และยืนยันจัดยา', message: 'ใบนี้ยังไม่ได้ส่งเข้า INVS — ระบบจะบันทึกการแก้ไข (ถ้ามี) แล้วเปิดหน้าตรวจก่อนส่ง เมื่อส่ง INVS สำเร็จจะยืนยันจัดยาให้ต่อทันที', icon: 'fa-database', confirmText: 'ตรวจ INVS ต่อ', onConfirm: () => handleInvsPreflight(true) }) : ctx.setConfirmDialog({ title: isApprovalFailed ? 'ลองอนุมัติอีกครั้ง' : 'ยืนยันจัดยา', message: isApprovalFailed ? 'การอนุมัติครั้งก่อนล้มเหลว ระบบจะเขียนข้อมูลเดิมซ้ำแบบ idempotent แล้ว finalize อีกครั้ง' : 'คุณตรวจสอบยอดและต้องการจัดยานี้ใช่หรือไม่?', icon: 'fa-check-double', confirmText: isApprovalFailed ? 'ลองใหม่' : 'ยืนยันจัดยา', onConfirm: handleApprove }))} disabled={isApproving || isInvsBusy} className="bg-gradient-main text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center hover:scale-105">{isApproving ? '...' : <span><i className="fa-solid fa-check-double mr-2"></i> {isApprovalFailed ? 'ลองอนุมัติอีกครั้ง' : canSendInvs ? 'ส่ง INVS + บันทึกจัดยา' : 'บันทึกจัดยาแล้ว'}</span>}</button>
                  </>
               )}
             </div>
@@ -4596,7 +4603,7 @@ const ViewReqView = ({ ctx }) => {
           </div>
           {showSignEdit && <SignRolesModal initial={signRoles} defaults={signDefaults} onClose={() => setShowSignEdit(false)} onSave={saveSignRoles} />}
           {showInvsModal && invsPreflight && (
-            <Modal title="ตรวจสอบก่อนส่งเข้า INVS (Admin)" isOpen={true} onClose={()=>!isInvsBusy && setShowInvsModal(false)} maxWidth="max-w-6xl">
+            <Modal title={approveAfterInvs ? 'ตรวจสอบก่อนส่งเข้า INVS + ยืนยันจัดยา (Admin)' : 'ตรวจสอบก่อนส่งเข้า INVS (Admin)'} isOpen={true} onClose={()=>{ if (!isInvsBusy) { setShowInvsModal(false); setApproveAfterInvs(false); } }} maxWidth="max-w-6xl">
               <div className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                   <div className="bg-slate-50 border rounded-xl p-3"><div className="text-xs text-slate-500 font-bold">หน่วยเบิก INVS</div><div className="font-black">{invsPreflight.dept_id || '-'}</div><div className="text-[10px] text-slate-400">{invsPreflight.dept_name || ''}</div></div>
@@ -4618,8 +4625,9 @@ const ViewReqView = ({ ctx }) => {
 
                 {!invsPreflight.live_send_enabled && !invsPreflight.already_sent && <div className="bg-slate-900 text-white rounded-xl p-3 text-xs"><b>Dry-run mode:</b> Bridge ยังตั้ง <code>allow_live_send=false</code> จึงยังไม่มีการ INSERT ลง INVS เมื่อผลตรวจถูกต้องแล้วค่อยเปิด LIVE ใน config.php</div>}
                 <div className="flex justify-end gap-2">
-                  <button onClick={()=>setShowInvsModal(false)} disabled={isInvsBusy} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold">ปิด</button>
-                  {!invsPreflight.already_sent && <button disabled={isInvsBusy || !invsPreflight.ok || !invsPreflight.live_send_enabled} onClick={()=>ctx.setConfirmDialog({title:'ยืนยันส่งเข้า INVS',message:`ระบบจะสร้าง SM_PO + SM_PO_C จำนวน ${invsPreflight.item_count || 0} รายการในฐาน INVS และล็อกการแก้ใบนี้ใน Sawee VMI หลังส่งสำเร็จ ยืนยันหรือไม่?`,icon:'fa-database',iconColor:'text-cyan-600',confirmBtnClass:'bg-cyan-600 hover:bg-cyan-700',confirmText:'ส่งเข้า INVS จริง',onConfirm:handleInvsSend})} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-black disabled:opacity-40"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>ส่งเข้า INVS จริง</button>}
+                  <button onClick={()=>{ setShowInvsModal(false); setApproveAfterInvs(false); }} disabled={isInvsBusy} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold">ปิด</button>
+                  {approveAfterInvs && invsPreflight.already_sent && <button id="invs-approve-only" disabled={isInvsBusy || isApproving} onClick={async ()=>{ setShowInvsModal(false); setApproveAfterInvs(false); await ctx.refreshData(); await handleApprove(); }} className="px-4 py-2 rounded-xl bg-gradient-main text-white font-bold disabled:opacity-50"><i className="fa-solid fa-check-double mr-2"></i>ยืนยันจัดยา (มีใน INVS แล้ว)</button>}
+                  {!invsPreflight.already_sent && <button disabled={isInvsBusy || !invsPreflight.ok || !invsPreflight.live_send_enabled} onClick={()=>ctx.setConfirmDialog({title:'ยืนยันส่งเข้า INVS',message:`ระบบจะสร้าง SM_PO + SM_PO_C จำนวน ${invsPreflight.item_count || 0} รายการในฐาน INVS และล็อกการแก้ใบนี้ใน Sawee VMI หลังส่งสำเร็จ${approveAfterInvs ? ' แล้วยืนยันจัดยา (ตัดสต๊อก) ต่อทันที' : ''} ยืนยันหรือไม่?`,icon:'fa-database',iconColor:'text-cyan-600',confirmBtnClass:'bg-cyan-600 hover:bg-cyan-700',confirmText:approveAfterInvs ? 'ส่ง INVS + ยืนยันจัดยา' : 'ส่งเข้า INVS จริง',onConfirm:handleInvsSend})} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-black disabled:opacity-40"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{approveAfterInvs ? 'ส่ง INVS + ยืนยันจัดยา' : 'ส่งเข้า INVS จริง'}</button>}
                 </div>
               </div>
             </Modal>

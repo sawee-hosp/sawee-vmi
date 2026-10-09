@@ -312,6 +312,16 @@
     );
 
     // cols: [{ label, width, when, className }] — when === false จะไม่แสดงคอลัมน์นั้น
+    // v6.6.2 เรียงรายการใบเบิก รพ.สต. ภายในหมวด: loc = ตำแหน่งยา (ค่าเริ่มต้น เหมือนใบพิมพ์) · name = ชื่อ ก-ฮ/A-Z · code = รหัส
+    const reqItemSorter = (mode, locOf) => (a, b) => mode === 'name' ? String(a.name || '').localeCompare(String(b.name || ''), 'th')
+      : mode === 'code' ? String(a.drugId || '').localeCompare(String(b.drugId || ''), 'th', { numeric: true })
+      : compareByLocation(locOf(a.drugId), a.name, locOf(b.drugId), b.name);
+    // หัวคอลัมน์ที่คลิกเพื่อเรียงได้ — คลิกซ้ำกลับไปเรียงตามตำแหน่ง (ลูกศรไม่พิมพ์)
+    const SortLabel = ({ label, mode, sortMode, setSortMode }) => (
+      <span role="button" tabIndex={0} title={sortMode === mode ? 'คลิกเพื่อกลับไปเรียงตามตำแหน่งยา' : `คลิกเพื่อเรียงตาม${label}`}
+        onClick={() => setSortMode(sortMode === mode ? 'loc' : mode)} onKeyDown={e => { if (e.key === 'Enter') setSortMode(sortMode === mode ? 'loc' : mode); }}
+        className="cursor-pointer select-none hover:underline">{label}<span className="no-print ml-1 text-[9px] text-slate-500">{sortMode === mode ? '▼' : '⇅'}</span></span>
+    );
     const OfficialTableHead = ({ cols }) => (
       <thead>
         <tr className="bg-gray-200">
@@ -1841,7 +1851,8 @@ const CreateReqView = ({ ctx, round = null }) => {
       const [acknowledged, setAcknowledged] = useState(false);
       const [searchTerm, setSearchTerm] = useState(''); 
       const [filterType, setFilterType] = useState('all'); 
-      const [showCalc, setShowCalc] = useState(false); 
+      const [showCalc, setShowCalc] = useState(false);
+      const [itemSort, setItemSort] = useState('loc'); // v6.6.2 loc | name | code 
       const [showInactive, setShowInactive] = useState(false);
       const [showChangedOnly, setShowChangedOnly] = useState(false);
       const [isDirty, setIsDirty] = useState(false);
@@ -2728,7 +2739,7 @@ const CreateReqView = ({ ctx, round = null }) => {
       const workingTypeKeys = Object.keys(workingGroupedItems).sort((a,b)=>Number(a)-Number(b));
       // v6.6 ภายในหมวด เรียงตามตำแหน่งยา (sawee_location) แล้วชื่อยา · ไม่มีตำแหน่งไว้ท้ายเรียงตามชื่อ
       const locOfDrug = (id) => ctx.findDrug(id)?.invs_location;
-      workingTypeKeys.forEach(k => workingGroupedItems[k].sort((a,b) => compareByLocation(locOfDrug(a.drugId), a.name, locOfDrug(b.drugId), b.name)));
+      workingTypeKeys.forEach(k => workingGroupedItems[k].sort(reqItemSorter(itemSort, locOfDrug)));
       const rowNumberByDrug = new Map(workingTypeKeys.flatMap(k => workingGroupedItems[k]).map((item, idx) => [String(item.drugId), idx + 1]));
 
       const deleteExistingReqForMonth = async () => {
@@ -2879,7 +2890,7 @@ const CreateReqView = ({ ctx, round = null }) => {
               <table className={`official-table w-full text-[11px] border-collapse border border-black mb-2 ${showCalc?'min-w-[1500px]':'min-w-[1250px]'}`}>
                 <OfficialTableHead cols={[
                   { label:'ที่', width:'4%' },
-                  { label:'ชื่อยา/เวชภัณฑ์', width:'25%' },
+                  { label:<SortLabel label="ชื่อยา/เวชภัณฑ์" mode="name" sortMode={itemSort} setSortMode={setItemSort} />, width:'25%' },
                   { label:'หน่วย', width:'6%' },
                   { label:'บรรจุ', width:'5%' },
                   { label:'ยอดใช้', width:'7%' },
@@ -2891,7 +2902,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                   { label:'ราคา/หน่วย', width:'7%' },
                   { label:'มูลค่า (บาท)', width:'8%' },
                   { label:'คงเหลือ', width:'7%' },
-                  { label:'รหัส', width:'6%' }
+                  { label:<SortLabel label="รหัส" mode="code" sortMode={itemSort} setSortMode={setItemSort} />, width:'6%' }
                 ]} />
                 {workingTypeKeys.map(typeKey => (
                   <tbody key={typeKey}>
@@ -3293,6 +3304,7 @@ const ViewReqView = ({ ctx }) => {
       const [editingPreviewQtyDrugId, setEditingPreviewQtyDrugId] = useState(null);
       const [editingQtyDraft, setEditingQtyDraft] = useState({});
       const [showHiddenItems, setShowHiddenItems] = useState(false);
+      const [itemSort, setItemSort] = useState('loc'); // v6.6.2 loc | name | code
       const [targetHelpData, setTargetHelpData] = useState(null);
       const [showValueAudit, setShowValueAudit] = useState(false);
       const [auditSortMode, setAuditSortMode] = useState('usage');
@@ -4270,7 +4282,7 @@ const ViewReqView = ({ ctx }) => {
         .forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
       // v6.6 ภายในหมวด เรียงตามตำแหน่งยา แล้วชื่อยา
       const locOfReqDrug = (id) => ctx.findDrug(id)?.invs_location;
-      Object.keys(groupedItems).forEach(k => groupedItems[k].sort((a,b) => compareByLocation(locOfReqDrug(a.drugId), a.name, locOfReqDrug(b.drugId), b.name)));
+      Object.keys(groupedItems).forEach(k => groupedItems[k].sort(reqItemSorter(itemSort, locOfReqDrug)));
       
       let grandTotalItems = 0;
       let grandTotalPrice = 0;
@@ -4443,7 +4455,7 @@ const ViewReqView = ({ ctx }) => {
              <table className="official-table w-full text-[11px] border-collapse border border-black mb-2 relative">
                 <OfficialTableHead cols={[
                    { label:'ที่', width:'5%' },
-                   { label:'ชื่อยา/เวชภัณฑ์', width:'29%' },
+                   { label:<SortLabel label="ชื่อยา/เวชภัณฑ์" mode="name" sortMode={itemSort} setSortMode={setItemSort} />, width:'29%' },
                    { label:'หน่วย', width:'6%' },
                    { label:'บรรจุ', width:'5%' },
                    { label:'ยอดใช้', width:'6%' },
@@ -4453,7 +4465,7 @@ const ViewReqView = ({ ctx }) => {
                    { label:'ราคา/หน่วย', width:'6.5%' },
                    { label:'มูลค่า (บาท)', width:'8%' },
                    { label:'คงเหลือ', width:'7%' },
-                   { label:'รหัส', width:'6%' },
+                   { label:<SortLabel label="รหัส" mode="code" sortMode={itemSort} setSortMode={setItemSort} />, width:'6%' },
                    // ช่องปุ่มลบ (แสดงเฉพาะตอนแก้ไข ไม่แสดงตอนพิมพ์)
                    { label:<i className="fa-solid fa-trash"></i>, width:'4%', className:'no-print text-red-500', when: canEdit }
                 ]} />

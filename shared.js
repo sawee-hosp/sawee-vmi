@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.6.1';
+const APP_VERSION = '6.6.2';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -561,6 +561,39 @@ const getNextFiscalTerm = (hospitalId, month, year, requisitions) => {
 };
 
 const formatRequisitionNo = (term, fiscalYear) => Math.max(1, toNonNegativeInt(term, 1)) + '/' + fiscalYear;
+// v6.6.2 รอบบิลแบบ ครั้งที่/ปีงบ 2 หลัก เช่น 01/2570 (ใบที่ทำ 20-31 ก.ย. = รอบ ต.ค. = ครั้งที่ 1 ปีงบถัดไป)
+const formatBillRound = (req, requisitions) => {
+  if (!req) return '-';
+  const fy = getReqFiscalYear(req);
+  const term = getEffectiveFiscalTerm(req, requisitions || []);
+  return String(Math.max(1, toNonNegativeInt(term, 1))).padStart(2, '0') + '/' + fy;
+};
+
+// ─── v6.6.2 วันที่เบิก = วันจันทร์แรกของเดือนรอบเบิกที่ไม่ใช่วันหยุดราชการ ───
+// วันหยุดวันที่ตายตัว (MM-DD) — ถ้าตรงเสาร์/อาทิตย์ หยุดชดเชยวันจันทร์ถัดไป
+const RX_FIXED_HOLIDAYS = ['01-01', '04-06', '04-13', '04-14', '04-15', '05-04', '06-03', '07-28', '08-12', '10-13', '10-23', '12-05', '12-10', '12-31'];
+// วันหยุดตามจันทรคติ/วันหยุดพิเศษ ครม. (YYYY-MM-DD ค.ศ.) — เพิ่มได้ที่นี่ หรือแก้วันที่ในหน้าตรวจก่อนส่ง INVS
+const RX_EXTRA_HOLIDAYS = [];
+const rxHolidaySet = (year) => {
+  const set = new Set(RX_EXTRA_HOLIDAYS);
+  RX_FIXED_HOLIDAYS.forEach(function (md) {
+    const d = new Date(year, Number(md.slice(0, 2)) - 1, Number(md.slice(3)));
+    set.add(toYmd(d));
+    const wd = d.getDay();
+    if (wd === 6 || wd === 0) { const sub = new Date(d); sub.setDate(d.getDate() + (wd === 6 ? 2 : 1)); while (set.has(toYmd(sub))) sub.setDate(sub.getDate() + 1); set.add(toYmd(sub)); }
+  });
+  return set;
+};
+// month 1-12, year ค.ศ. → 'YYYY-MM-DD'
+const firstWorkingMondayOf = (month, year) => {
+  const y = Number(year), m = Number(month);
+  if (!y || !m) return '';
+  const hol = new Set([].concat(Array.from(rxHolidaySet(y)), Array.from(rxHolidaySet(y - 1))));
+  const d = new Date(y, m - 1, 1);
+  while (d.getDay() !== 1) d.setDate(d.getDate() + 1);
+  while (hol.has(toYmd(d))) d.setDate(d.getDate() + 7);
+  return toYmd(d);
+};
 
 // ─── VMI CORE (แหล่งความจริงเดียว) ──────────────────────
 const calcUsageStats = (usages) => {

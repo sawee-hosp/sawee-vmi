@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.9.2: ขอเกิน lot แรกแต่รวมทุก lot ในคลังพอ → ส่งได้ (เตือน) ตัดข้าม lot ตอนยืนยันจ่ายใน INVS
  *   v2.9.1: ส่ง INVS ย้อนหลังได้สำหรับใบสถานะ Completed ที่ยังไม่มีเลข INVS
  *   v2.9.0: ตำแหน่งยาจาก sawee_location.LOC_CODE (ว่าง/0 = ไม่มีตำแหน่ง) · คำค้นหาเพิ่ม inst_name.REF_CODE
  *   v2.7.0: คำค้นหาจาก inst_name, ตำแหน่งจากตาราง location (ตามคลัง), รองรับ HOSxP ที่เก็บวันที่เป็น พ.ศ. (date_mode)
@@ -23,7 +24,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.9.1';
+const BRIDGE_VERSION = '2.9.2';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -374,6 +375,12 @@ function findFirstLot(mysqli $db,string $workingCode,string $stockId): ?array {
           ORDER BY RECORD_NUMBER ASC LIMIT 1";
     $st=$db->prepare($sql); $st->bind_param('ss',$workingCode,$stockId); $st->execute(); $r=$st->get_result()->fetch_assoc(); $st->close(); return $r ?: null;
 }
+// v2.9.2 ยอดคงเหลือรวมทุก lot ในคลังจ่าย (ใช้ตัดสินว่าขอเกิน lot แรกแต่ยังพอในคลังหรือไม่)
+function totalOnHand(mysqli $db,string $workingCode,string $stockId): array {
+    $st=$db->prepare("SELECT COALESCE(SUM(QTY_ON_HAND),0) AS qty, COUNT(*) AS lots FROM inv_md_c WHERE TRIM(WORKING_CODE)=TRIM(?) AND DEPT_ID=? AND COALESCE(QTY_ON_HAND,0)>0");
+    $st->bind_param('ss',$workingCode,$stockId); $st->execute(); $r=$st->get_result()->fetch_assoc(); $st->close();
+    return ['qty'=>finiteNumber($r['qty'] ?? 0),'lots'=>(int)($r['lots'] ?? 0)];
+}
 function drugExists(mysqli $db,string $workingCode): ?array {
     $st=$db->prepare('SELECT WORKING_CODE, DRUG_NAME FROM drug_gn WHERE TRIM(WORKING_CODE)=TRIM(?) LIMIT 1');
     $st->bind_param('s',$workingCode); $st->execute(); $r=$st->get_result()->fetch_assoc(); $st->close(); return $r ?: null;
@@ -462,8 +469,12 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital): ar
         $masterPack=finiteNumber($it['packSize'] ?? 0);
         if ($masterPack>0 && abs($masterPack-$pack)>0.000001) $warnings[]="{$drugId}: Pack ใน Sawee VMI {$masterPack} ต่างจาก lot INVS {$pack} — จะใช้ค่า INVS";
         if ($qty>$lotQty) {
+            // v2.9.2 ส่ง 1 บรรทัดต่อยา อ้าง lot แรก (FEFO) — ถ้ารวมทุก lot ในคลังยังพอ ให้ส่งได้ แล้วไปตัดข้าม lot/ปรับจำนวนจริงตอนยืนยันจ่ายใน INVS
+            $all=totalOnHand($db,$drugId,$stockId);
             $msg="{$drugId}: ขอ {$qty} แต่ lot ตั้งต้น {$lot['LOT_NO']} เหลือ {$lotQty}";
-            if (!empty($config['invs']['block_if_first_lot_short'])) $errors[]=$msg.' (v1.0 บล็อกการส่งเพื่อความปลอดภัย)'; else $warnings[]=$msg;
+            if ($all['qty']>=$qty) $warnings[]=$msg." — รวม {$all['lots']} lot ในคลังมี {$all['qty']} พอจ่าย: ส่งได้ ให้ตัดข้าม lot/ปรับจำนวนตอนยืนยันจ่ายใน INVS";
+            elseif (!empty($config['invs']['block_if_first_lot_short'])) $errors[]=$msg." และรวมทุก lot ในคลังมีแค่ {$all['qty']} (บล็อกการส่ง — ลดจำนวนจ่ายก่อน)";
+            else $warnings[]=$msg." และรวมทุก lot ในคลังมีแค่ {$all['qty']} — INVS จะจ่ายได้ไม่ครบ";
         }
         $nlem=findNlem($db,$drugId,cleanText($lot['TRADE_CODE'] ?? ''),isset($lot['PACK_CODE'])?(int)$lot['PACK_CODE']:null);
         $lines[]=[

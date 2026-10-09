@@ -32,6 +32,10 @@
 - **ท้ายใบห้องยา/หน่วยงาน:** ผู้ลงนาม 4 จุด ผู้เบิก · ผู้สั่งจ่าย · ผู้รับของ · ผู้จ่าย (แก้ชื่อ/ตำแหน่งได้ วันที่เว้นว่าง) จำไว้ในใบ `sign_people`
 - **ห้องยา:** ซ่อนหมวด 5 (ยาโครงการฯ) และ 6 (วัคซีน) ได้ — ค่าเริ่มต้นซ่อนทั้งคู่ จำไว้ใน localStorage `rxfill_ph_hide_types`
 
+## ใบเบิก รพ.สต. — แอดมินจัดยา + INVS
+- Bridge `preflight`/`send` รับเฉพาะใบสถานะ Pending/Draft → ต้องส่ง INVS ก่อน "บันทึกจัดยา" (Completed)
+- ใบที่ยังไม่ส่ง INVS ปุ่มจัดยาเป็น "ส่ง INVS + บันทึกจัดยา": บันทึกการแก้ไขอัตโนมัติ → ตรวจ INVS → ส่งสำเร็จแล้ว handleApprove ต่อทันที
+
 ## ตำแหน่งยา / คำค้นหา (Bridge `invs_extras` → master_drugs.invs_location / invs_keywords)
 - ตำแหน่งมาจาก `sawee_location.LOC_CODE` (DEPT_ID = default_stock_id) — ว่างหรือ `0` = ไม่มีตำแหน่ง (ล้างค่าเดิม)
 - คำค้นหา: `inst_name.INST_NAME` + `REF_CODE`

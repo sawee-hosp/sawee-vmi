@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.9.4: รวม invs_extra_items (รายการส่ง INVS เพิ่ม เช่น น้ำเกลือ ที่ไม่อยู่ใน VMI) เข้าไปตอน preflight/send
  *   v2.9.3: TOTAL_COST = มูลค่ารวม (เดิมบวกราคาต่อหน่วย) · วันที่เบิกรับจากหน้าเว็บ (request_date YYYYMMDD)
  *   v2.9.2: ขอเกิน lot แรกแต่รวมทุก lot ในคลังพอ → ส่งได้ (เตือน) ตัดข้าม lot ตอนยืนยันจ่ายใน INVS
  *   v2.9.1: ส่ง INVS ย้อนหลังได้สำหรับใบสถานะ Completed ที่ยังไม่มีเลข INVS
@@ -25,7 +26,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.9.3';
+const BRIDGE_VERSION = '2.9.4';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -455,7 +456,24 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
     if ($status==='Completed') $warnings[]='ใบนี้บันทึกจัดยาแล้วใน Sawee VMI — ส่งเข้า INVS ย้อนหลัง (ไม่เปลี่ยนสถานะ/สต๊อกใน Sawee VMI)';
     // skipped_items เป็นข้อมูลจากขั้นตอน import รบ.301 ที่ผู้ใช้ตั้งใจไม่เบิก
     // INVS ต้องพิจารณาเฉพาะรายการที่อยู่ใน req.items และมีจำนวนจ่าย > 0 เท่านั้น
-    $items=is_array($req['items'] ?? null) ? $req['items'] : [];
+    $items=is_array($req['items'] ?? null) ? array_values($req['items']) : [];
+    // v2.9.4 รายการส่ง INVS เพิ่ม (invs_extra_items) ที่แอดมินใส่ เช่น น้ำเกลือ — ไม่ผ่าน VMI; ถ้ายาซ้ำกับในใบให้รวมจำนวน
+    $idxByDrug=[];
+    foreach ($items as $i=>$it) { if (is_array($it)) $idxByDrug[cleanText($it['drugId'] ?? '')]=$i; }
+    foreach ((is_array($req['invs_extra_items'] ?? null) ? $req['invs_extra_items'] : []) as $ex) {
+        if (!is_array($ex)) continue;
+        $exId=cleanText($ex['drugId'] ?? ''); $exQty=finiteNumber($ex['qty'] ?? 0);
+        if ($exId==='' || $exQty<=0) continue;
+        if (isset($idxByDrug[$exId])) {
+            $k=$idxByDrug[$exId];
+            $items[$k]['dispenseQty']=finiteNumber($items[$k]['dispenseQty'] ?? $items[$k]['finalRequestedQty'] ?? 0)+$exQty;
+            $items[$k]['_extra_qty']=$exQty;
+            $warnings[]="{$exId}: รวมรายการส่ง INVS เพิ่ม {$exQty} เข้ากับรายการในใบ";
+        } else {
+            $idxByDrug[$exId]=count($items);
+            $items[]=['drugId'=>$exId,'dispenseQty'=>$exQty,'name'=>cleanText($ex['name'] ?? ''),'type'=>'','_extra'=>true];
+        }
+    }
     $seenDrug=[];
     foreach ($items as $idx=>$it) {
         if (!is_array($it)) continue;
@@ -494,7 +512,7 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
             'vendor_code'=>cleanText($lot['VENDOR_CODE'] ?? ''),'manufac_code'=>cleanText($lot['MANUFAC_CODE'] ?? ''),'trade_code'=>cleanText($lot['TRADE_CODE'] ?? $drugId),
             'pack_code'=>($lot['PACK_CODE']!==null && $lot['PACK_CODE']!=='')?(int)$lot['PACK_CODE']:null,'nlem'=>$nlem,
             'location'=>cleanText($lot['LOCATION'] ?? ''),'mod_sys'=>cleanText($lot['MOD_SYS'] ?? cfg($config,'invs','mod_sys','MED')),
-            'vmi_pack_size'=>$masterPack
+            'vmi_pack_size'=>$masterPack,'extra'=>!empty($it['_extra']),'extra_qty'=>finiteNumber($it['_extra_qty'] ?? 0)
         ];
     }
     if (!$lines) $errors[]='ไม่มีรายการที่มีจำนวนจ่ายมากกว่า 0';

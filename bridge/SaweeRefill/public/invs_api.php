@@ -1,6 +1,8 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.9.4: รวม invs_extra_items (รายการส่ง INVS เพิ่ม เช่น น้ำเกลือ ที่ไม่อยู่ใน VMI) เข้าไปตอน preflight/send
+ *   v2.9.3: TOTAL_COST = มูลค่ารวม (เดิมบวกราคาต่อหน่วย) · วันที่เบิกรับจากหน้าเว็บ (request_date YYYYMMDD)
  *   v2.9.2: ขอเกิน lot แรกแต่รวมทุก lot ในคลังพอ → ส่งได้ (เตือน) ตัดข้าม lot ตอนยืนยันจ่ายใน INVS
  *   v2.9.1: ส่ง INVS ย้อนหลังได้สำหรับใบสถานะ Completed ที่ยังไม่มีเลข INVS
  *   v2.9.0: ตำแหน่งยาจาก sawee_location.LOC_CODE (ว่าง/0 = ไม่มีตำแหน่ง) · คำค้นหาเพิ่ม inst_name.REF_CODE
@@ -24,7 +26,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.9.2';
+const BRIDGE_VERSION = '2.9.4';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -429,7 +431,16 @@ function cleanupOwnPartial(mysqli $db,string $subPoNo,string $marker): void {
     $st=$db->prepare("DELETE FROM sm_po WHERE SUB_PO_NO=? AND REF_NO=? AND (CONFIRM_FLAG IS NULL OR CONFIRM_FLAG<>'Y') AND (SEND_FLAG IS NULL OR SEND_FLAG<>'Y')"); $st->bind_param('ss',$subPoNo,$marker); $st->execute(); $st->close();
 }
 
-function buildPreflight(mysqli $db,array $config,array $req,array $hospital): array {
+// v2.9.3 วันที่เบิก (SUB_PO_DATE/REQ_DATE) จากหน้าเว็บ = จันทร์แรกของเดือนรอบเบิกที่ไม่ใช่วันหยุด — รับ YYYYMMDD ห่างจากวันนี้ไม่เกิน 120 วัน ไม่งั้นใช้วันนี้
+function pickRequestDate($v): string {
+    $v=preg_replace('/\D/','',(string)$v);
+    if (strlen($v)===8 && checkdate((int)substr($v,4,2),(int)substr($v,6,2),(int)substr($v,0,4))) {
+        $diff=abs((strtotime(substr($v,0,4).'-'.substr($v,4,2).'-'.substr($v,6,2))-strtotime(date('Y-m-d')))/86400);
+        if ($diff<=120) return $v;
+    }
+    return date('Ymd');
+}
+function buildPreflight(mysqli $db,array $config,array $req,array $hospital,string $reqDate=''): array {
     $status=cleanText($req['status'] ?? '');
     if (strtoupper(cleanText($req['invs_status'] ?? ''))==='SENT' || cleanText($req['invs_sub_po_no'] ?? '')!=='') {
         return ['already_sent'=>true,'sub_po_no'=>cleanText($req['invs_sub_po_no'] ?? ''),'items'=>[],'warnings'=>[],'errors'=>[],'ok'=>true];
@@ -445,7 +456,24 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital): ar
     if ($status==='Completed') $warnings[]='ใบนี้บันทึกจัดยาแล้วใน Sawee VMI — ส่งเข้า INVS ย้อนหลัง (ไม่เปลี่ยนสถานะ/สต๊อกใน Sawee VMI)';
     // skipped_items เป็นข้อมูลจากขั้นตอน import รบ.301 ที่ผู้ใช้ตั้งใจไม่เบิก
     // INVS ต้องพิจารณาเฉพาะรายการที่อยู่ใน req.items และมีจำนวนจ่าย > 0 เท่านั้น
-    $items=is_array($req['items'] ?? null) ? $req['items'] : [];
+    $items=is_array($req['items'] ?? null) ? array_values($req['items']) : [];
+    // v2.9.4 รายการส่ง INVS เพิ่ม (invs_extra_items) ที่แอดมินใส่ เช่น น้ำเกลือ — ไม่ผ่าน VMI; ถ้ายาซ้ำกับในใบให้รวมจำนวน
+    $idxByDrug=[];
+    foreach ($items as $i=>$it) { if (is_array($it)) $idxByDrug[cleanText($it['drugId'] ?? '')]=$i; }
+    foreach ((is_array($req['invs_extra_items'] ?? null) ? $req['invs_extra_items'] : []) as $ex) {
+        if (!is_array($ex)) continue;
+        $exId=cleanText($ex['drugId'] ?? ''); $exQty=finiteNumber($ex['qty'] ?? 0);
+        if ($exId==='' || $exQty<=0) continue;
+        if (isset($idxByDrug[$exId])) {
+            $k=$idxByDrug[$exId];
+            $items[$k]['dispenseQty']=finiteNumber($items[$k]['dispenseQty'] ?? $items[$k]['finalRequestedQty'] ?? 0)+$exQty;
+            $items[$k]['_extra_qty']=$exQty;
+            $warnings[]="{$exId}: รวมรายการส่ง INVS เพิ่ม {$exQty} เข้ากับรายการในใบ";
+        } else {
+            $idxByDrug[$exId]=count($items);
+            $items[]=['drugId'=>$exId,'dispenseQty'=>$exQty,'name'=>cleanText($ex['name'] ?? ''),'type'=>'','_extra'=>true];
+        }
+    }
     $seenDrug=[];
     foreach ($items as $idx=>$it) {
         if (!is_array($it)) continue;
@@ -484,16 +512,17 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital): ar
             'vendor_code'=>cleanText($lot['VENDOR_CODE'] ?? ''),'manufac_code'=>cleanText($lot['MANUFAC_CODE'] ?? ''),'trade_code'=>cleanText($lot['TRADE_CODE'] ?? $drugId),
             'pack_code'=>($lot['PACK_CODE']!==null && $lot['PACK_CODE']!=='')?(int)$lot['PACK_CODE']:null,'nlem'=>$nlem,
             'location'=>cleanText($lot['LOCATION'] ?? ''),'mod_sys'=>cleanText($lot['MOD_SYS'] ?? cfg($config,'invs','mod_sys','MED')),
-            'vmi_pack_size'=>$masterPack
+            'vmi_pack_size'=>$masterPack,'extra'=>!empty($it['_extra']),'extra_qty'=>finiteNumber($it['_extra_qty'] ?? 0)
         ];
     }
     if (!$lines) $errors[]='ไม่มีรายการที่มีจำนวนจ่ายมากกว่า 0';
     $totalItem=count($lines);
-    $totalCost=round(array_sum(array_map(fn($x)=>(float)$x['cost'],$lines)),2);
+    // v2.9.3 TOTAL_COST = ผลรวม (จำนวน × ราคา) เท่ากับมูลค่ารวม — เดิมบวกราคาต่อหน่วยทำให้ "จำนวนเงิน" ใน INVS เพี้ยน
+    $totalCost=round(array_sum(array_map(fn($x)=>(float)$x['value'],$lines)),2);
     $totalValue=round(array_sum(array_map(fn($x)=>(float)$x['value'],$lines)),2);
     return [
         'ok'=>count($errors)===0,'already_sent'=>false,'dept_id'=>$deptId,'dept_name'=>cleanText($dept['DEPT_NAME'] ?? ''),'stock_id'=>$stockId,'stock_name'=>cleanText($stock['DEPT_NAME'] ?? ''),
-        'request_date'=>date('Ymd'),'item_count'=>$totalItem,'total_cost'=>$totalCost,'total_value'=>$totalValue,
+        'request_date'=>($reqDate!=='' ? $reqDate : date('Ymd')),'item_count'=>$totalItem,'total_cost'=>$totalCost,'total_value'=>$totalValue,
         'items'=>$lines,'warnings'=>$warnings,'errors'=>$errors
     ];
 }
@@ -934,7 +963,7 @@ try {
         $db->close(); respond($payload);
     }
 
-    $pre=buildPreflight($db,$config,$req,$hospital);
+    $pre=buildPreflight($db,$config,$req,$hospital,pickRequestDate($body['request_date'] ?? ''));
     $pre['marker']=$marker; $pre['requisition_id']=$reqId; $pre['hospital_id']=$hospitalId; $pre['bridge_version']=BRIDGE_VERSION; $pre['live_send_enabled']=!empty($config['bridge']['allow_live_send']);
     if ($action==='preflight') { $db->close(); logBridge($config,'INFO','PREFLIGHT',['req_id'=>$reqId,'admin_uid'=>$admin['uid'],'ok'=>$pre['ok'],'errors'=>$pre['errors']]); respond($pre); }
 

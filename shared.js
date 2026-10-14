@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.6.1';
+const APP_VERSION = '6.6.3';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -164,6 +164,18 @@ const compareLocationCode = (a, b) => {
     if (c) return c;
   }
   return ta.length - tb.length;
+};
+// v6.6.3 กลุ่มตำแหน่ง = อักษรนำหน้า (A01 → A) หรือเลขชั้นแรก (7/1/2-1 → 7) — ใช้คั่นแถวด้วยเส้นจุดเมื่อกลุ่มเดียวกัน
+const locationGroupKey = (loc) => {
+  const s = normDrugLocation(loc).toUpperCase();
+  if (!s) return '';
+  const m = s.match(/^[A-Zก-ฮ]+/) || s.match(/^\d+/);
+  return m ? m[0] : s.charAt(0);
+};
+// คืน [{ top, bottom }] ต่อแถว: true = เส้นด้านนั้นเป็นเส้นจุด (แถวติดกันอยู่กลุ่มตำแหน่งเดียวกัน)
+const locationDotFlags = (list, locOf) => {
+  const keys = (list || []).map(function (it) { return locationGroupKey(locOf(it)); });
+  return keys.map(function (k, i) { return { top: !!k && i > 0 && keys[i - 1] === k, bottom: !!k && i < keys.length - 1 && keys[i + 1] === k }; });
 };
 // เรียงรายการในใบเบิก: มีตำแหน่งก่อน (เรียงตามตำแหน่ง → ชื่อ) แล้วยาไม่มีตำแหน่งเรียงตามชื่อ
 const compareByLocation = (locA, nameA, locB, nameB) => {
@@ -561,6 +573,39 @@ const getNextFiscalTerm = (hospitalId, month, year, requisitions) => {
 };
 
 const formatRequisitionNo = (term, fiscalYear) => Math.max(1, toNonNegativeInt(term, 1)) + '/' + fiscalYear;
+// v6.6.2 รอบบิลแบบ ครั้งที่/ปีงบ 2 หลัก เช่น 01/2570 (ใบที่ทำ 20-31 ก.ย. = รอบ ต.ค. = ครั้งที่ 1 ปีงบถัดไป)
+const formatBillRound = (req, requisitions) => {
+  if (!req) return '-';
+  const fy = getReqFiscalYear(req);
+  const term = getEffectiveFiscalTerm(req, requisitions || []);
+  return String(Math.max(1, toNonNegativeInt(term, 1))).padStart(2, '0') + '/' + fy;
+};
+
+// ─── v6.6.2 วันที่เบิก = วันจันทร์แรกของเดือนรอบเบิกที่ไม่ใช่วันหยุดราชการ ───
+// วันหยุดวันที่ตายตัว (MM-DD) — ถ้าตรงเสาร์/อาทิตย์ หยุดชดเชยวันจันทร์ถัดไป
+const RX_FIXED_HOLIDAYS = ['01-01', '04-06', '04-13', '04-14', '04-15', '05-04', '06-03', '07-28', '08-12', '10-13', '10-23', '12-05', '12-10', '12-31'];
+// วันหยุดตามจันทรคติ/วันหยุดพิเศษ ครม. (YYYY-MM-DD ค.ศ.) — เพิ่มได้ที่นี่ หรือแก้วันที่ในหน้าตรวจก่อนส่ง INVS
+const RX_EXTRA_HOLIDAYS = [];
+const rxHolidaySet = (year) => {
+  const set = new Set(RX_EXTRA_HOLIDAYS);
+  RX_FIXED_HOLIDAYS.forEach(function (md) {
+    const d = new Date(year, Number(md.slice(0, 2)) - 1, Number(md.slice(3)));
+    set.add(toYmd(d));
+    const wd = d.getDay();
+    if (wd === 6 || wd === 0) { const sub = new Date(d); sub.setDate(d.getDate() + (wd === 6 ? 2 : 1)); while (set.has(toYmd(sub))) sub.setDate(sub.getDate() + 1); set.add(toYmd(sub)); }
+  });
+  return set;
+};
+// month 1-12, year ค.ศ. → 'YYYY-MM-DD'
+const firstWorkingMondayOf = (month, year) => {
+  const y = Number(year), m = Number(month);
+  if (!y || !m) return '';
+  const hol = new Set([].concat(Array.from(rxHolidaySet(y)), Array.from(rxHolidaySet(y - 1))));
+  const d = new Date(y, m - 1, 1);
+  while (d.getDay() !== 1) d.setDate(d.getDate() + 1);
+  while (hol.has(toYmd(d))) d.setDate(d.getDate() + 7);
+  return toYmd(d);
+};
 
 // ─── VMI CORE (แหล่งความจริงเดียว) ──────────────────────
 const calcUsageStats = (usages) => {
@@ -1072,9 +1117,11 @@ const buildInternalReqFormHtml = (opts) => {
   let n = 0, total = 0;
   const body = typeKeys.map(function (k) {
     const list = groups[k].slice().sort(byLoc);
+    const dots = locationDotFlags(list, function (it) { return locOf(it.drugId); });
+    const trOpen = function (i) { const c = (dots[i].top ? 'ldt ' : '') + (dots[i].bottom ? 'ldb' : ''); return c ? '<tr class="' + c.trim() + '">' : '<tr>'; };
     const subtotal = list.reduce(function (s, it) { return s + valueOf(it); }, 0);
     total += subtotal;
-    const rows = list.map(function (it) {
+    const rows = list.map(function (it, li) {
       n++;
       const pack = safePackSize(it.packSize);
       const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
@@ -1085,7 +1132,7 @@ const buildInternalReqFormHtml = (opts) => {
         const man = it.source === 'manual';
         const z = function (v, s) { return man && !(toNonNegativeNumber(v) > 0) ? '' : s; };
         const tgt = it.targetQty != null ? z(it.targetQty, qty(toNonNegativeNumber(it.targetQty), pack)) : '-';
-        return '<tr>' +
+        return trOpen(li) +
           '<td class="c">' + n + '</td>' +
           '<td class="name">' + esc(it.name) + '</td>' +
           '<td class="c muted">' + esc(it.unit) + '</td>' +
@@ -1100,7 +1147,7 @@ const buildInternalReqFormHtml = (opts) => {
           '<td class="c code">' + esc(it.drugId) + '</td>' +
           '</tr>';
       }
-      return '<tr>' +
+      return trOpen(li) +
         '<td class="c">' + n + '</td>' +
         '<td class="name">' + esc(it.name) + '</td>' +
         '<td class="c muted">' + esc(it.unit) + (pack > 1 ? '<div class="xs">บรรจุ ' + pack + '</div>' : '') + '</td>' +
@@ -1149,6 +1196,7 @@ const buildInternalReqFormHtml = (opts) => {
     '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
     '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:22px;text-align:center;page-break-inside:avoid;font-size:12.5px}.nw{white-space:nowrap}' +
     '.blankrow td{height:22px}' +
+    '.items tr.ldt td{border-top-style:dotted}.items tr.ldb td{border-bottom-style:dotted}' +
     '</style></head><body>' +
     '<h1>ใบเบิกวัสดุ/เวชภัณฑ์</h1>' +
     '<div class="meta"><div>เลขที่ <b>' + esc(opts.formNo) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +

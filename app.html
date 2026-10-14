@@ -198,6 +198,11 @@
     @media (max-width: 640px) { .vmi-map { height: 470px; } }
     /* v6.6 Target Stock เทาอ่อนทั้งคอลัมน์ · ยอดเหลือ (เครดิต) ตัวน้ำเงินพื้นขาว — ทั้งบนจอและตอนพิมพ์ */
     .official-table th.col-target, .official-table td.col-target { background: #f1f1f1 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    /* v6.6.3 แถวติดกันที่อยู่กลุ่มตำแหน่งเดียวกัน (อักษรนำ/ชั้นเดียวกัน) คั่นด้วยเส้นจุด — เปลี่ยนกลุ่มใช้เส้นทึบเดิม */
+    @media print {
+      table.official-table tr.loc-dot-top > td { border-top-style: dotted !important; }
+      table.official-table tr.loc-dot-bottom > td { border-bottom-style: dotted !important; }
+    }
     .official-table td.col-credit { color: #1d4ed8 !important; font-weight: 600; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     /* v5.9: คอลัมน์จำนวนจ่ายเป็นสีเขียวอ่อนเพื่อโฟกัสง่าย (เฉพาะบนจอ ไม่พิมพ์สี) */
     @media screen {
@@ -215,11 +220,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.6.1"></script>
+  <script src="shared.js?v=6.6.3"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.6.1';
+      var need = '6.6.3';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -649,7 +654,7 @@
                           <tr key={req.id} className={`border-b transition cursor-pointer ${isPendingHighlight ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-slate-50'}`} onClick={() => { ctx.setCurrentReqId(req.id); ctx.setCurrentView('view_req'); }}>
                             <td className="p-4 font-semibold text-slate-700">{req.id}</td>
                             <td className="p-4 text-slate-600">{req.created_by_name || '-'} {isAdmin && <span className="text-xs text-indigo-500 block">{ctx.findHospital(req.hospitalId)?.hospital_name}</span>}</td>
-                            <td className="p-4 text-slate-600">{req.month}/{req.year}</td>
+                            <td className="p-4 text-slate-600" title={`ใบเดือน ${req.month}/${req.year}`}>{formatBillRound(req, ctx.appDb.requisitions)}</td>
                             <td className="p-4">
                               <span className={`px-3 py-1 rounded-lg text-xs font-bold ${req.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' : req.status === 'Rejected' || req.status === 'ApprovalFailed' ? 'bg-red-100 text-red-700' : req.status === 'Approving' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
                                  {req.status === 'Completed' ? 'สำเร็จ' : req.status === 'Rejected' ? 'ไม่อนุมัติ' : req.status === 'ApprovalFailed' ? 'อนุมัติล้มเหลว' : req.status === 'Approving' ? 'กำลังอนุมัติ' : 'รอจัดยา'}
@@ -2914,7 +2919,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                           : <button type="button" onClick={applyNcdsOutreach} className="no-print ml-3 px-2.5 py-0.5 rounded-lg bg-emerald-600 text-white text-[11px] font-bold hover:bg-emerald-700"><i className="fa-solid fa-people-group mr-1"></i>ปรับค่าผู้ป่วยออกหน่วย รอบวันที่ {ncdsDatesLabel} ({ncdsByDrug.size} รายการ)</button>
                       )}
                     </td></tr>
-                    {(workingGroupedItems[typeKey] || []).map(item => {
+                    {(() => { const grpItems = workingGroupedItems[typeKey] || []; const locDots = itemSort === 'loc' ? locationDotFlags(grpItems, it => locOfDrug(it.drugId)) : []; return grpItems.map((item, gi) => {
                       const drug = ctx.findDrug(item.drugId);
                       const unitObj = drug ? ctx.findUnit(drug.unit_id) : null;
                       const displayUnit = unitObj ? unitObj.unit_name : (item.unit || drug?.unit_id || '');
@@ -2931,7 +2936,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                       const packChange = getReqPackChange(item);
                       const masterPriceSource = safeText(drug?.price_source);
                       return (
-                        <tr id={`req-row-${item.drugId}`} key={item.drugId} className={rowClass}>
+                        <tr id={`req-row-${item.drugId}`} key={item.drugId} className={`${rowClass}${locDots[gi]?.top ? ' loc-dot-top' : ''}${locDots[gi]?.bottom ? ' loc-dot-bottom' : ''}`}>
                           <td className="text-center">{rowNumberByDrug.get(String(item.drugId))}</td>
                           <td className="font-semibold text-left pl-1 whitespace-normal">
                             {item.name}
@@ -2985,7 +2990,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                           <td className="text-center font-mono text-gray-600">{item.drugId}</td>
                         </tr>
                       );
-                    })}
+                    }); })()}
                   </tbody>
                 ))}
                 <tfoot>
@@ -3317,7 +3322,40 @@ const ViewReqView = ({ ctx }) => {
       const [showInvsModal, setShowInvsModal] = useState(false);
       const [invsPreflight, setInvsPreflight] = useState(null);
       const [isInvsBusy, setIsInvsBusy] = useState(false);
-      const [approveAfterInvs, setApproveAfterInvs] = useState(false); // v6.6.1 ส่ง INVS สำเร็จแล้วยืนยันจัดยาต่อทันที
+      const [approveAfterInvs, setApproveAfterInvs] = useState(false);
+      // v6.6.3 รายการส่ง INVS เพิ่ม (ไม่ผ่าน VMI/เครดิต) เช่น น้ำเกลือที่ต้องคิดราคาในใบนี้ — INVS ไม่ให้เพิ่มรายการในใบที่มาจากเว็บ
+      const [extraCode, setExtraCode] = useState('');
+      const [extraQty, setExtraQty] = useState('');
+      const [extraBusy, setExtraBusy] = useState(false);
+      const invsExtraItems = Array.isArray(req?.invs_extra_items) ? req.invs_extra_items : [];
+      const saveInvsExtras = async (mutate) => {
+        setExtraBusy(true);
+        try {
+          const ref = db.collection('requisitions').doc(req.id);
+          await db.runTransaction(async (tx) => {
+            const snap = await tx.get(ref);
+            if (!snap.exists) throw new Error('ไม่พบใบเบิก');
+            const cur = snap.data();
+            if (String(cur.invs_status || '').toUpperCase() === 'SENT' || cur.invs_sub_po_no) throw new Error('ใบนี้ส่งเข้า INVS แล้ว แก้รายการส่งเพิ่มไม่ได้');
+            const next = mutate(Array.isArray(cur.invs_extra_items) ? cur.invs_extra_items : []);
+            tx.update(ref, { invs_extra_items: next, updated_at: firebase.firestore.FieldValue.serverTimestamp(), updated_by_uid: ctx.currentUser.uid, updated_by_name: ctx.currentUser.name });
+          });
+          await ctx.refreshData();
+          return true;
+        } catch (e) { ctx.showToast(e?.message || String(e), 'error'); return false; }
+        finally { setExtraBusy(false); }
+      };
+      const addInvsExtra = async () => {
+        const code = safeText(extraCode).split(/\s/)[0];
+        const qty = toNonNegativeNumber(extraQty);
+        if (!code) return ctx.showToast('ระบุรหัสยา INVS', 'error');
+        if (!(qty > 0)) return ctx.showToast('ระบุจำนวน (หน่วยย่อย) มากกว่า 0', 'error');
+        const drug = ctx.findDrug(code);
+        const ok = await saveInvsExtras(list => [...list.filter(x => String(x.drugId) !== code), { drugId: code, qty, name: safeText(drug?.drug_name), added_by: safeText(ctx.currentUser?.name), added_at: new Date().toISOString() }]);
+        if (ok) { setExtraCode(''); setExtraQty(''); ctx.showToast('เพิ่มรายการส่ง INVS แล้ว — กดส่งเข้า INVS เพื่อตรวจราคา/lot'); }
+      };
+      // v6.6.2 วันที่เบิกใน INVS = จันทร์แรกของเดือนรอบเบิกที่ไม่ใช่วันหยุด (แก้ได้ในหน้าตรวจ)
+      const [invsReqDate, setInvsReqDate] = useState(() => firstWorkingMondayOf(req?.month, req?.year) || toYmd(new Date())); // v6.6.1 ส่ง INVS สำเร็จแล้วยืนยันจัดยาต่อทันที
 
       const toDateSafe = (value) => {
         if (!value) return null;
@@ -3895,7 +3933,7 @@ const ViewReqView = ({ ctx }) => {
         }
         setIsInvsBusy(true);
         try {
-          const data = await callInvsBridge('preflight', req.id);
+          const data = await callInvsBridge('preflight', req.id, { request_date: String(invsReqDate).replace(/-/g, '') });
           setInvsPreflight(data);
           setShowInvsModal(true);
           if (data.already_sent) { await rxTouch('requisitions', req.id); await ctx.refreshData(); }
@@ -3913,7 +3951,7 @@ const ViewReqView = ({ ctx }) => {
         if (!isAdmin || !req || invsSent || isInvsBusy) return;
         setIsInvsBusy(true);
         try {
-          const data = await callInvsBridge('send', req.id);
+          const data = await callInvsBridge('send', req.id, { request_date: String(invsReqDate).replace(/-/g, '') });
           await rxTouch('requisitions', req.id); // Bridge แก้เอกสารจากฝั่งเซิร์ฟเวอร์ → แตะเวลาให้แคชทุกเครื่องเห็น
           setInvsPreflight(data);
           ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
@@ -4394,6 +4432,28 @@ const ViewReqView = ({ ctx }) => {
             </div>
           )}
 
+          {canSendInvs && (
+              <div className="mb-6 bg-cyan-50 p-4 rounded-xl border border-cyan-200 no-print">
+                 <div className="font-bold text-cyan-900"><i className="fa-solid fa-database mr-2"></i>รายการส่ง INVS เพิ่ม <span className="text-xs font-normal text-cyan-700">(ไม่ผ่าน VMI/เครดิต รพ.สต. เช่น น้ำเกลือที่ต้องคิดราคาในใบนี้ — ส่งเข้า INVS พร้อมใบ)</span></div>
+                 <div className="flex flex-wrap gap-2 mt-3 items-center">
+                   <input id="invs-extra-code" list="all-drugs-view" value={extraCode} onChange={e => setExtraCode(e.target.value)} placeholder="รหัสยา INVS เช่น 23223" className="border border-cyan-300 rounded-lg p-2 w-56 bg-white" />
+                   <input id="invs-extra-qty" type="number" min="0" value={extraQty} onChange={e => setExtraQty(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addInvsExtra(); }} placeholder="จำนวน (หน่วยย่อย)" className="border border-cyan-300 rounded-lg p-2 w-40 bg-white text-right" />
+                   <button id="invs-extra-add" onClick={addInvsExtra} disabled={extraBusy} className="bg-cyan-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-cyan-700 disabled:opacity-50"><i className="fa-solid fa-plus mr-1"></i>เพิ่ม</button>
+                   <span className="text-xs text-slate-500">ชื่อ/ราคา/lot จะตรวจจาก INVS ตอนกด "ส่งเข้า INVS"</span>
+                 </div>
+                 {invsExtraItems.length > 0 && (
+                   <table className="w-full text-sm mt-3 bg-white rounded-lg overflow-hidden">
+                     <thead className="bg-cyan-100 text-cyan-900 text-xs"><tr><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">ชื่อ</th><th className="p-2 text-right">จำนวน (หน่วยย่อย)</th><th className="p-2 text-left">เพิ่มโดย</th><th className="p-2"></th></tr></thead>
+                     <tbody>{invsExtraItems.map(x => (
+                       <tr key={x.drugId} className="border-t"><td className="p-2 font-mono">{x.drugId}</td><td className="p-2">{x.name || ctx.findDrug(x.drugId)?.drug_name || <span className="text-slate-400">(ดูชื่อในหน้าตรวจ INVS)</span>}</td>
+                         <td className="p-2 text-right font-bold">{toNonNegativeNumber(x.qty).toLocaleString('th-TH')}</td><td className="p-2 text-xs text-slate-500">{x.added_by || ''}</td>
+                         <td className="p-2 text-right"><button onClick={() => saveInvsExtras(list => list.filter(y => String(y.drugId) !== String(x.drugId)))} disabled={extraBusy} className="text-red-600 text-xs font-bold hover:underline">ลบ</button></td></tr>
+                     ))}</tbody>
+                   </table>
+                 )}
+              </div>
+          )}
+
           {/* ⭐️ ส่วนเพิ่มยาในหน้า Preview ขั้นตอนสุดท้าย */}
           {canEdit && (
               <div className="flex flex-col md:flex-row gap-4 mb-6 items-center bg-slate-50 p-4 rounded-xl border border-slate-200 no-print">
@@ -4480,6 +4540,7 @@ const ViewReqView = ({ ctx }) => {
                    grandTotalItems += subTotalItems;
                    grandTotalPrice += subTotalPrice;
 
+                   const typeLocDots = itemSort === 'loc' ? locationDotFlags(typeItems, x => locOfReqDrug(x.drugId)) : [];
                    return (
                       <tbody key={typeKey}>
                          <tr className="highlight-row">
@@ -4490,8 +4551,9 @@ const ViewReqView = ({ ctx }) => {
                                </div>
                             </td>
                          </tr>
-                         {typeItems.map((it) => {
+                         {typeItems.map((it, gi) => {
                             globalItemIndex++;
+                            const locDot = typeLocDots[gi] || {};
                             const itemValue = getRequisitionItemValue(it);
                             
                             const drug = ctx.findDrug(it.drugId);
@@ -4505,7 +4567,7 @@ const ViewReqView = ({ ctx }) => {
                             const rowClass = (isDisabled || isDiscontinued) ? 'bg-slate-200 text-slate-500 print:bg-gray-200' : (isVaccine ? 'bg-red-50/50 print:bg-transparent' : hiddenZeroRow ? 'bg-slate-50 text-slate-400 no-print' : '');
 
                             return (
-                               <tr id={`req-item-${it.drugId}`} key={it.drugId} className={rowClass}>
+                               <tr id={`req-item-${it.drugId}`} key={it.drugId} className={`${rowClass}${locDot.top ? ' loc-dot-top' : ''}${locDot.bottom ? ' loc-dot-bottom' : ''}`}>
                                   <td className="text-center">{globalItemIndex}</td>
                                   <td className="font-semibold text-left pl-1">
                                      {it.name} 
@@ -4631,10 +4693,16 @@ const ViewReqView = ({ ctx }) => {
                 <div className="overflow-auto max-h-[52vh] border rounded-xl">
                   <table className="w-full text-xs whitespace-nowrap">
                     <thead className="bg-slate-100 sticky top-0"><tr><th className="p-2 text-left">ยา</th><th className="p-2 text-right">จำนวน</th><th className="p-2">Lot</th><th className="p-2">หมดอายุ</th><th className="p-2 text-right">เหลือใน Lot</th><th className="p-2 text-right">Pack</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">ราคา/Pack</th><th className="p-2 text-right">มูลค่า</th></tr></thead>
-                    <tbody>{(invsPreflight.items || []).map((x,i)=><tr key={`${x.drug_id||x.WORKING_CODE}-${i}`} className="border-t"><td className="p-2"><div className="font-bold">{x.drug_name || ''}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE}</div></td><td className="p-2 text-right font-black">{toNonNegativeNumber(x.qty ?? x.QTY_ORDER).toLocaleString()}</td><td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td><td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td><td className="p-2 text-right">{x.lot_qty_on_hand !== undefined ? toNonNegativeNumber(x.lot_qty_on_hand).toLocaleString() : '-'}</td><td className="p-2 text-right">{toNonNegativeNumber(x.pack_ratio ?? x.PACK_RATIO).toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(x.cost ?? x.COST)}</td><td className="p-2 text-right">{formatUnitPrice(x.pack_cost ?? x.PACK_COST)}</td><td className="p-2 text-right font-black text-indigo-700">฿{toNonNegativeNumber(x.value ?? x.VALUE).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>)}</tbody>
+                    <tbody>{(invsPreflight.items || []).map((x,i)=><tr key={`${x.drug_id||x.WORKING_CODE}-${i}`} className="border-t"><td className="p-2"><div className="font-bold">{x.drug_name || ''}{x.extra ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">ส่ง INVS เพิ่ม</span> : x.extra_qty > 0 ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">+{toNonNegativeNumber(x.extra_qty).toLocaleString('th-TH')} ส่งเพิ่ม</span> : null}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE}</div></td><td className="p-2 text-right font-black">{toNonNegativeNumber(x.qty ?? x.QTY_ORDER).toLocaleString()}</td><td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td><td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td><td className="p-2 text-right">{x.lot_qty_on_hand !== undefined ? toNonNegativeNumber(x.lot_qty_on_hand).toLocaleString() : '-'}</td><td className="p-2 text-right">{toNonNegativeNumber(x.pack_ratio ?? x.PACK_RATIO).toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(x.cost ?? x.COST)}</td><td className="p-2 text-right">{formatUnitPrice(x.pack_cost ?? x.PACK_COST)}</td><td className="p-2 text-right font-black text-indigo-700">฿{toNonNegativeNumber(x.value ?? x.VALUE).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>)}</tbody>
                   </table>
                 </div>
 
+                {!invsPreflight.already_sent && <div className="flex flex-wrap items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-sm">
+                  <label className="font-bold text-indigo-800" htmlFor="invs-req-date">วันที่เบิก (INVS)</label>
+                  <input id="invs-req-date" type="date" value={invsReqDate} onChange={e => setInvsReqDate(e.target.value)} disabled={isInvsBusy} className="p-1.5 border border-indigo-300 rounded-lg bg-white" />
+                  <span className="text-indigo-700">{thaiDateLong(invsReqDate)}</span>
+                  <span className="text-xs text-slate-500">ค่าเริ่มต้น = วันจันทร์แรกของเดือนรอบเบิกที่ไม่ใช่วันหยุดราชการ · ถ้าตรงวันหยุดพิเศษ/จันทรคติ แก้ได้ที่นี่</span>
+                </div>}
                 {!invsPreflight.live_send_enabled && !invsPreflight.already_sent && <div className="bg-slate-900 text-white rounded-xl p-3 text-xs"><b>Dry-run mode:</b> Bridge ยังตั้ง <code>allow_live_send=false</code> จึงยังไม่มีการ INSERT ลง INVS เมื่อผลตรวจถูกต้องแล้วค่อยเปิด LIVE ใน config.php</div>}
                 <div className="flex justify-end gap-2">
                   <button onClick={()=>{ setShowInvsModal(false); setApproveAfterInvs(false); }} disabled={isInvsBusy} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold">ปิด</button>

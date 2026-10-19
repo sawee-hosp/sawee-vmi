@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.6.3';
+const APP_VERSION = '6.6.4';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -603,7 +603,11 @@ const firstWorkingMondayOf = (month, year) => {
   const hol = new Set([].concat(Array.from(rxHolidaySet(y)), Array.from(rxHolidaySet(y - 1))));
   const d = new Date(y, m - 1, 1);
   while (d.getDay() !== 1) d.setDate(d.getDate() + 1);
-  while (hol.has(toYmd(d))) d.setDate(d.getDate() + 7);
+  // v6.6.4 จันทร์แรกตรงวันหยุด → วันทำการถัดไปในสัปดาห์เดียวกัน (อังคาร–ศุกร์) ไม่ข้ามไปสัปดาห์หน้า
+  for (let i = 0; i < 5; i++) {
+    const c = new Date(d); c.setDate(d.getDate() + i);
+    if (!hol.has(toYmd(c))) return toYmd(c);
+  }
   return toYmd(d);
 };
 

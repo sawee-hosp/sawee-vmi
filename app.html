@@ -220,11 +220,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.6.3"></script>
+  <script src="shared.js?v=6.6.4"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.6.3';
+      var need = '6.6.4';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -635,7 +635,9 @@
                    <thead>
                      <tr className="border-b text-sm text-slate-500 bg-white">
                        <th className="p-4 font-medium">รหัสเอกสาร</th>
+                       <th className="p-4 font-medium">วันเวลาที่ส่ง</th>
                        <th className="p-4 font-medium">ผู้ทำรายการ</th>
+                       {isAdmin && <th className="p-4 font-medium">รพ.สต.</th>}
                        <th className="p-4 font-medium">รอบบิล</th>
                        <th className="p-4 font-medium">สถานะ</th>
                        <th className="p-4 font-medium text-right">เอกสาร</th>
@@ -648,12 +650,14 @@
                         if (adminSelectedCard === 'pending') return ['Draft','Pending'].includes(r.status);
                         if (adminSelectedCard === 'completed') return r.status === 'Completed';
                         return true;
-                     }).slice(0,20).map(req => {
+                     }).sort((a, b) => tsToMillis(b.submitted_at || b.created_at) - tsToMillis(a.submitted_at || a.created_at)).slice(0,20).map(req => { // v6.6.4 ใหม่ → เก่า ตามเวลาส่ง
                        const isPendingHighlight = isAdmin && adminSelectedCard === 'pending';
                        return (
                           <tr key={req.id} className={`border-b transition cursor-pointer ${isPendingHighlight ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-slate-50'}`} onClick={() => { ctx.setCurrentReqId(req.id); ctx.setCurrentView('view_req'); }}>
                             <td className="p-4 font-semibold text-slate-700">{req.id}</td>
-                            <td className="p-4 text-slate-600">{req.created_by_name || '-'} {isAdmin && <span className="text-xs text-indigo-500 block">{ctx.findHospital(req.hospitalId)?.hospital_name}</span>}</td>
+                            <td className="p-4 text-slate-600 text-sm">{formatAppDateTime(req.submitted_at || req.created_at)}</td>
+                            <td className="p-4 text-slate-600">{req.created_by_name || '-'}</td>
+                            {isAdmin && <td className="p-4 text-indigo-700">{ctx.findHospital(req.hospitalId)?.hospital_name || req.hospitalId}</td>}
                             <td className="p-4 text-slate-600" title={`ใบเดือน ${req.month}/${req.year}`}>{formatBillRound(req, ctx.appDb.requisitions)}</td>
                             <td className="p-4">
                               <span className={`px-3 py-1 rounded-lg text-xs font-bold ${req.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' : req.status === 'Rejected' || req.status === 'ApprovalFailed' ? 'bg-red-100 text-red-700' : req.status === 'Approving' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
@@ -679,7 +683,7 @@
                           </tr>
                        )
                      })}
-                     {validReqs.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">ไม่มีข้อมูลการเบิกยา</td></tr>}
+                     {validReqs.length === 0 && <tr><td colSpan={isAdmin ? 7 : 6} className="p-8 text-center text-slate-400">ไม่มีข้อมูลการเบิกยา</td></tr>}
                    </tbody>
                  </table>
                </div>
@@ -3243,18 +3247,23 @@ const CreateReqView = ({ ctx, round = null }) => {
       return ['ผู้เบิก', `ผอ.รพ.สต.${name}`, hosp?.affiliation === 'OPT' ? 'ปฏิบัติราชการแทน นายก อบจ.ชุมพร' : 'สาธารณสุขอำเภอสวี', 'ผู้อนุมัติ', 'ผู้จ่าย', 'ผู้รับ'];
     };
     const pickSignRoles = (v) => Array.isArray(v) && v.length === SIGN_ROLE_HINTS.length && v.some(x => safeText(x)) ? v.map(x => safeText(x)) : null;
-    const SignRolesModal = ({ initial, defaults, onClose, onSave }) => {
+    // v6.6.4 ชื่อผู้ลงนาม (จำไว้ในใบ sign_names และค่าประจำ รพ.สต.)
+    const pickSignNames = (v) => Array.isArray(v) && v.length === SIGN_ROLE_HINTS.length && v.some(x => safeText(x)) ? v.map(x => safeText(x)) : null;
+    const SignRolesModal = ({ initial, defaults, initialNames, onClose, onSave }) => {
       const [rows, setRows] = useState(() => initial.slice());
+      const [names, setNames] = useState(() => (initialNames || SIGN_ROLE_HINTS.map(() => '')).slice());
       const [asDefault, setAsDefault] = useState(true);
       const [busy, setBusy] = useState(false);
-      const submit = async () => { setBusy(true); try { await onSave(rows, asDefault); } catch (e) { alert('บันทึกไม่สำเร็จ: ' + (e?.message || e)); } finally { setBusy(false); } };
+      const submit = async () => { setBusy(true); try { await onSave(rows, asDefault, names); } catch (e) { alert('บันทึกไม่สำเร็จ: ' + (e?.message || e)); } finally { setBusy(false); } };
       return (
-        <Modal isOpen onClose={() => !busy && onClose()} title="แก้ไขตำแหน่งผู้ลงนามท้ายใบเบิก" maxWidth="max-w-2xl">
+        <Modal isOpen onClose={() => !busy && onClose()} title="แก้ไขชื่อ/ตำแหน่งผู้ลงนามท้ายใบเบิก" maxWidth="max-w-2xl">
           <div className="space-y-3">
             <p className="text-sm text-slate-500">แก้ได้ทุกเมื่อ แม้ใบจะล็อกจำนวนแล้ว (ไม่กระทบรายการยา) · ขึ้นบรรทัดใหม่ได้ เช่น ใส่ชื่อ (นาย ก.) บรรทัดแรก แล้วตำแหน่งบรรทัดถัดไป</p>
             {rows.map((v, i) => (
               <label key={i} className="block">
                 <span className="text-xs font-bold text-slate-500">แถวที่ {i + 1} · {SIGN_ROLE_HINTS[i]}</span>
+                <input id={`sign-name-${i}`} value={names[i] || ''} onChange={e => setNames(r => r.map((x, j) => j === i ? e.target.value : x))} placeholder="ชื่อ-สกุล (เว้นว่างได้)"
+                  className="w-full mt-1 p-2.5 border rounded-xl text-sm focus:ring-2 focus:ring-indigo-300 outline-none" />
                 <textarea id={`sign-role-${i}`} rows={v.includes('\n') ? 2 : 1} value={v} onChange={e => setRows(r => r.map((x, j) => j === i ? e.target.value : x))} placeholder={defaults[i]}
                   className="w-full mt-1 p-2.5 border rounded-xl text-sm resize-y focus:ring-2 focus:ring-indigo-300 outline-none" />
               </label>
@@ -4329,19 +4338,22 @@ const ViewReqView = ({ ctx }) => {
       // ตำแหน่งผู้ลงนามท้ายใบ: ใบนี้ → ค่าประจำ รพ.สต. → ค่าเริ่มต้น (แก้ได้เสมอแม้ใบถูกล็อก เพราะไม่กระทบจำนวนยา)
       const signDefaults = defaultRpstSignRoles(hosp);
       const signRoles = pickSignRoles(req.sign_roles) || pickSignRoles(hosp?.sign_roles) || signDefaults;
+      // ชื่อผู้ลงนาม: ใบนี้ → ค่าประจำ รพ.สต. → ผู้เบิก = ผู้ส่งใบ, ผู้จ่าย = ผู้จัดยา
+      const signNames = pickSignNames(req.sign_names) || pickSignNames(hosp?.sign_names) || SIGN_ROLE_HINTS.map((_, i) => i === 0 ? safeText(req.created_by_name) : i === 4 ? safeText(req.approved_by_name) : '');
       const canEditSign = isAdmin || String(ctx.currentUser?.hospital_id || '') === String(req.hospitalId);
-      const saveSignRoles = async (roles, asHospitalDefault) => {
+      const saveSignRoles = async (roles, asHospitalDefault, names) => {
         const clean = roles.map(r => safeText(r).slice(0, 120));
+        const cleanNames = (names || []).map(r => safeText(r).slice(0, 120));
         const stamp = firebase.firestore.FieldValue.serverTimestamp();
-        await db.collection('requisitions').doc(String(req.id)).update({ sign_roles: clean, sign_roles_updated_at: stamp, sign_roles_updated_by: safeText(ctx.currentUser?.name) });
+        await db.collection('requisitions').doc(String(req.id)).update({ sign_roles: clean, sign_names: cleanNames, sign_roles_updated_at: stamp, sign_roles_updated_by: safeText(ctx.currentUser?.name) });
         if (asHospitalDefault && hosp?.hospital_id) {
-          try { await db.collection('master_hospitals').doc(String(hosp.hospital_id)).update({ sign_roles: clean, sign_roles_updated_at: stamp }); }
+          try { await db.collection('master_hospitals').doc(String(hosp.hospital_id)).update({ sign_roles: clean, sign_names: cleanNames, sign_roles_updated_at: stamp }); }
           catch (e) { ctx.showToast('บันทึกในใบนี้แล้ว แต่ตั้งเป็นค่าประจำ รพ.สต. ไม่สำเร็จ: ' + (e?.message || e) + ' (ตรวจว่า deploy กฎ v6.1 แล้ว)', 'error'); }
         }
         ctx.setAppDb(prev => ({ ...prev,
-          requisitions: (prev.requisitions || []).map(r => String(r.id) === String(req.id) ? { ...r, sign_roles: clean } : r),
-          hospitals: asHospitalDefault ? (prev.hospitals || []).map(h => String(h.hospital_id) === String(hosp?.hospital_id) ? { ...h, sign_roles: clean } : h) : prev.hospitals }));
-        ctx.showToast('บันทึกตำแหน่งผู้ลงนามแล้ว');
+          requisitions: (prev.requisitions || []).map(r => String(r.id) === String(req.id) ? { ...r, sign_roles: clean, sign_names: cleanNames } : r),
+          hospitals: asHospitalDefault ? (prev.hospitals || []).map(h => String(h.hospital_id) === String(hosp?.hospital_id) ? { ...h, sign_roles: clean, sign_names: cleanNames } : h) : prev.hospitals }));
+        ctx.showToast('บันทึกชื่อ/ตำแหน่งผู้ลงนามแล้ว');
         setShowSignEdit(false);
       };
 
@@ -4353,7 +4365,8 @@ const ViewReqView = ({ ctx }) => {
             <div className="flex gap-2">
               {req.excel_url && <a href={req.excel_url} target="_blank" rel="noopener noreferrer" className="bg-emerald-100 px-4 py-2 rounded-xl font-bold flex items-center text-emerald-700 hover:bg-emerald-200 transition border border-emerald-200 shadow-sm"><i className="fa-solid fa-file-excel mr-2"></i> ดูไฟล์ Excel (รบ.301)</a>}
               {isAdmin && <button onClick={()=>setShowValueAudit(true)} className="bg-violet-100 text-violet-700 border border-violet-200 px-4 py-2 rounded-xl font-bold shadow-sm hover:bg-violet-200 transition"><i className="fa-solid fa-magnifying-glass-chart mr-2"></i>ตรวจสอบมูลค่า</button>}
-              {canSendInvs && <button onClick={() => handleInvsPreflight(false)} disabled={isInvsBusy} className="bg-cyan-600 text-white border border-cyan-700 px-4 py-2 rounded-xl font-bold shadow hover:bg-cyan-700 transition disabled:opacity-50"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{isInvsBusy?'กำลังตรวจ INVS...':'ส่งเข้า INVS'}</button>}
+              {/* v6.6.4 ใบรอจัดยาใช้ปุ่มเดียว "ส่ง INVS + บันทึกจัดยา" — ปุ่มนี้เหลือไว้ส่งย้อนหลังเฉพาะใบที่จัดยาแล้ว */}
+              {canSendInvs && !isPending && <button onClick={() => handleInvsPreflight(false)} disabled={isInvsBusy} className="bg-cyan-600 text-white border border-cyan-700 px-4 py-2 rounded-xl font-bold shadow hover:bg-cyan-700 transition disabled:opacity-50"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{isInvsBusy?'กำลังตรวจ INVS...':'ส่งเข้า INVS (ย้อนหลัง)'}</button>}
               {isAdmin && invsSent && <div className="bg-cyan-50 text-cyan-800 border border-cyan-200 px-3 py-2 rounded-xl text-xs font-black"><i className="fa-solid fa-circle-check mr-1"></i>INVS {req.invs_sub_po_no || 'SENT'}</div>}
               {isAdmin && <div className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded-xl px-2 py-1 text-xs text-indigo-800" title="Admin แก้เลขใบเบิกได้โดยไม่กระทบจำนวนยา/Stock"><span className="font-bold">เลขใบเบิก</span><input type="number" min="1" step="1" value={fiscalTermDraft} onChange={e=>setFiscalTermDraft(Math.max(1,toNonNegativeInt(e.target.value,1)))} className="w-14 h-7 border border-indigo-200 rounded bg-white text-center font-black outline-none"/><span className="font-black">/{fiscalYear}</span><button onClick={handleSaveRequisitionNumber} disabled={isSavingReqNo} className="h-7 px-2 rounded bg-indigo-600 text-white font-bold disabled:opacity-50">{isSavingReqNo?'...':'บันทึก'}</button></div>}
               {isAdmin && canEdit && <button onClick={()=>setShowHiddenItems(v=>!v)} className={`border px-4 py-2 rounded-xl font-bold shadow-sm transition ${showHiddenItems?'bg-slate-800 text-white border-slate-800':'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'}`}><i className={`fa-solid ${showHiddenItems?'fa-eye-slash':'fa-eye'} mr-2`}></i>{showHiddenItems?'ซ่อนรายการ 0':`แสดงรายการที่ซ่อน (${hiddenItemCount})`}</button>}
@@ -4653,7 +4666,7 @@ const ViewReqView = ({ ctx }) => {
 
              {canEditSign && (
                  <div className="no-print flex justify-end mb-1">
-                     <button id="edit-sign-roles" onClick={() => setShowSignEdit(true)} className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-100"><i className="fa-solid fa-signature mr-1"></i>แก้ไขตำแหน่งผู้ลงนาม</button>
+                     <button id="edit-sign-roles" onClick={() => setShowSignEdit(true)} className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-100"><i className="fa-solid fa-signature mr-1"></i>แก้ไขชื่อ/ตำแหน่งผู้ลงนาม</button>
                  </div>
              )}
              <div className="flex flex-col text-[9pt] px-4 w-full break-inside-avoid mt-4 print:mt-4" id="sign-block">
@@ -4662,7 +4675,7 @@ const ViewReqView = ({ ctx }) => {
                          <div className="w-1/2 flex items-end pl-8">
                              <span className="w-9 shrink-0">ลงชื่อ</span>
                              <span className="shrink-0">.................................................</span>
-                             <span className="ml-2 min-w-[10rem] whitespace-pre-line leading-tight">{role}</span>
+                             <span className="ml-2 min-w-[10rem] whitespace-pre-line leading-tight">{signNames[idx] ? <>({signNames[idx]}){'\n'}</> : null}{role}</span>
                          </div>
                          <div className="w-1/2 flex items-end justify-center">
                              <span className="mr-2 text-right">วันที่</span>
@@ -4675,7 +4688,7 @@ const ViewReqView = ({ ctx }) => {
              {/* v6.5.2 เลขหน้ามุมขวาบน + เวลาพิมพ์ท้ายกระดาษทุกหน้า (margin box ของ @page — ไม่ล้นไปหน้าใหม่) */}
              <style>{`@media print{@page{@top-right{content:"หน้า " counter(page) "/" counter(pages);font-family:Sarabun,Tahoma,sans-serif;font-size:9px;color:#555}@bottom-right{content:"พิมพ์เมื่อ: ${new Date().toLocaleString('th-TH')}";font-family:Sarabun,Tahoma,sans-serif;font-size:9px;color:#666}}}`}</style>
           </div>
-          {showSignEdit && <SignRolesModal initial={signRoles} defaults={signDefaults} onClose={() => setShowSignEdit(false)} onSave={saveSignRoles} />}
+          {showSignEdit && <SignRolesModal initial={signRoles} defaults={signDefaults} initialNames={signNames} onClose={() => setShowSignEdit(false)} onSave={saveSignRoles} />}
           {showInvsModal && invsPreflight && (
             <Modal title={approveAfterInvs ? 'ตรวจสอบก่อนส่งเข้า INVS + ยืนยันจัดยา (Admin)' : 'ตรวจสอบก่อนส่งเข้า INVS (Admin)'} isOpen={true} onClose={()=>{ if (!isInvsBusy) { setShowInvsModal(false); setApproveAfterInvs(false); } }} maxWidth="max-w-6xl">
               <div className="space-y-4">
@@ -4701,7 +4714,7 @@ const ViewReqView = ({ ctx }) => {
                   <label className="font-bold text-indigo-800" htmlFor="invs-req-date">วันที่เบิก (INVS)</label>
                   <input id="invs-req-date" type="date" value={invsReqDate} onChange={e => setInvsReqDate(e.target.value)} disabled={isInvsBusy} className="p-1.5 border border-indigo-300 rounded-lg bg-white" />
                   <span className="text-indigo-700">{thaiDateLong(invsReqDate)}</span>
-                  <span className="text-xs text-slate-500">ค่าเริ่มต้น = วันจันทร์แรกของเดือนรอบเบิกที่ไม่ใช่วันหยุดราชการ · ถ้าตรงวันหยุดพิเศษ/จันทรคติ แก้ได้ที่นี่</span>
+                  <span className="text-xs text-slate-500">ค่าเริ่มต้น = วันจันทร์แรกของเดือนรอบเบิก ถ้าตรงวันหยุดใช้วันทำการถัดไปในสัปดาห์นั้น · วันหยุดพิเศษ/จันทรคติ แก้ได้ที่นี่</span>
                 </div>}
                 {!invsPreflight.live_send_enabled && !invsPreflight.already_sent && <div className="bg-slate-900 text-white rounded-xl p-3 text-xs"><b>Dry-run mode:</b> Bridge ยังตั้ง <code>allow_live_send=false</code> จึงยังไม่มีการ INSERT ลง INVS เมื่อผลตรวจถูกต้องแล้วค่อยเปิด LIVE ใน config.php</div>}
                 <div className="flex justify-end gap-2">

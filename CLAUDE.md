@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.6.3 · Bridge v2.9.4)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.6.4 · Bridge v2.9.4)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **แก้เฉพาะจุดที่ขอ / เฉพาะไฟล์ที่เกี่ยวข้อง** — อย่า refactor หรือเปลี่ยนสิ่งที่ไม่ได้ขอ
@@ -10,7 +10,7 @@
   - `internal.html` หน่วยงานใน รพ. + ห้องยา (PharmacyReqView: ดึงยอดใช้ HOSxP, ประมาณการ, พิมพ์ใบเบิก, Draft "รอส่ง")
   - `shared.js` JS ล้วน (ไม่มี JSX) — utils, calcPharmacySuggestion, buildInternalReqFormHtml (ใบพิมพ์), Firestore read-saver (IndexedDB cache + delta sync, tombstones, app_meta epoch, write hooks)
   - HTML ใช้ React 18 + Babel in-page (`<script type="text/babel">`)
-- `firebase/` — firestore.rules (v6.5), firestore.indexes.json
+- `firebase/` — firestore.rules (v6.6.4), firestore.indexes.json
 - `bridge/SaweeRefill/` — PHP Bridge/CLI (มีเฉพาะไฟล์ที่เคยแก้) ติดตั้งจริงที่ `C:\SaweeRefill\` (public/ cli/ tools/ private/ logs/ cache/)
   - `C:\xampp\htdocs\SaweeRefill\invs_api.php` เป็นไฟล์จิ๋ว `require 'C:\\SaweeRefill\\public\\invs_api.php';`
   - config อยู่ `C:\SaweeRefill\private\config.php` · Task Scheduler รัน `C:\SaweeRefill\tools\SYNC_BACKGROUND.bat`
@@ -20,6 +20,7 @@
 - **Version guard:** เมื่อแก้ shared.js ให้ bump `APP_VERSION` ใน shared.js และให้ตรงกับ `shared.js?v=` และ `var need = '...'` ในทั้ง 3 HTML
 - หลังแก้ HTML ตรวจ syntax JSX: `node tests/check_jsx.js app.html internal.html` (ต้องมี typescript)
 - **ความปลอดภัย:** ห้ามใส่ service account / `config.php` / รหัสผ่านใน repo หรือ zip; Bridge เขียนลง INVS ได้เฉพาะ `sm_po` / `sm_po_c`
+- หน่วยงานภายใน: แอดมินเลือกปีงบ (ปีที่แล้ว/ปีนี้/ปีหน้า) และคีย์ใบโดยระบุวันที่เอง (ไม่ใช้รอบ) → `round.manual` เลขที่ = ลำดับใบในปีงบนั้น, เก็บ `manual_backdate: true` ไม่เก็บ round_id
 - สถานะใบเบิกภายใน: Draft (รอส่ง) / Pending / Rejected / Cancelled / Completed — "ลบใบรอส่ง" = เปลี่ยนเป็น Cancelled + `draft_deleted: true` (ไม่ delete จริง เพราะ delta sync)
 - ทุกการเขียน Firestore ต้องผ่าน write hooks (ประทับ `updated_at`) เพื่อให้ cache ซิงก์ถูก
 
@@ -34,13 +35,15 @@
 
 ## ใบเบิก รพ.สต. — แอดมินจัดยา + INVS
 - Bridge `preflight`/`send` รับใบ Pending/Draft และ (v2.9.1) Completed ที่ยังไม่มีเลข INVS
-- ใบที่ยังไม่ส่ง INVS ปุ่มจัดยาเป็น "ส่ง INVS + บันทึกจัดยา": บันทึกการแก้ไขอัตโนมัติ → ตรวจ INVS → ส่งสำเร็จแล้ว handleApprove ต่อทันที
-- ใบ Completed ที่ยังไม่มีเลข INVS ส่งย้อนหลังได้ (ปุ่ม "ส่งเข้า INVS") — ไม่เปลี่ยนสถานะ/สต๊อกใน VMI
+- ใบรอจัดยาที่ยังไม่ส่ง INVS มีปุ่มเดียว "ส่ง INVS + บันทึกจัดยา" (ไม่มีปุ่มส่ง INVS อย่างเดียว): บันทึกการแก้ไขอัตโนมัติ → ตรวจ INVS → ส่งสำเร็จแล้ว handleApprove ต่อทันที
+- ใบ Completed ที่ยังไม่มีเลข INVS ส่งย้อนหลังได้ (ปุ่ม "ส่งเข้า INVS (ย้อนหลัง)") — ไม่เปลี่ยนสถานะ/สต๊อกใน VMI
 - ส่ง INVS 1 บรรทัด/ยา อ้าง lot แรก (FEFO) — ขอเกิน lot แรกแต่รวมทุก lot ในคลังพอ = ส่งได้ (เตือน) ไปตัดข้าม lot ตอนยืนยันจ่ายใน INVS; รวมทุก lot ไม่พอ = บล็อกเมื่อ `block_if_first_lot_short`
 - ตารางใบ รพ.สต. (สร้าง/ดูใบ) เรียงในหมวดตามตำแหน่งยาเป็นค่าเริ่มต้น คลิกหัว "ชื่อยา/เวชภัณฑ์" หรือ "รหัส" เพื่อสลับ (`reqItemSorter`)
 - ใบ รพ.สต. `month/year` = เดือนรอบเบิก (ทำ 20-31 ของเดือน M = รอบ M+1) · คอลัมน์ "รอบบิล" แสดง `formatBillRound` เช่น 01/2570
-- วันที่เบิกที่ส่ง INVS (SUB_PO_DATE/REQ_DATE) = `firstWorkingMondayOf(month, year)` (ข้ามวันหยุดตายตัว+ชดเชย, เพิ่มวันหยุดจันทรคติใน `RX_EXTRA_HOLIDAYS`) แก้ได้ในหน้าตรวจก่อนส่ง → Bridge `request_date`
+- วันที่เบิกที่ส่ง INVS (SUB_PO_DATE/REQ_DATE) = `firstWorkingMondayOf(month, year)` = จันทร์แรกของเดือน ถ้าตรงวันหยุด → วันทำการถัดไปในสัปดาห์เดียวกัน (วันหยุดตายตัว+ชดเชย, เพิ่มวันหยุดจันทรคติใน `RX_EXTRA_HOLIDAYS`) แก้ได้ในหน้าตรวจก่อนส่ง → Bridge `request_date`
 - sm_po.TOTAL_COST = ผลรวมมูลค่า (v2.9.3) เท่ากับ TOTAL_VALUE
+- แดชบอร์ดแอดมิน: รายการใบเรียงใหม่→เก่าตาม `submitted_at || created_at` แสดงวันเวลา แยกคอลัมน์ผู้ทำรายการ / รพ.สต.
+- ท้ายใบ รพ.สต.: ตำแหน่ง `sign_roles` + ชื่อ `sign_names` (6 แถว) จำในใบและเป็นค่าประจำ รพ.สต. ได้
 - INVS ไม่ให้เพิ่มรายการในใบที่มาจากเว็บ → แอดมินใส่ "รายการส่ง INVS เพิ่ม" (`invs_extra_items` [{drugId, qty หน่วยย่อย}]) ในหน้าดูใบก่อนส่ง — ไม่ผ่าน VMI/เครดิต; Bridge รวมเข้า sm_po_c (ยาซ้ำ = รวมจำนวน)
 
 ## ตำแหน่งยา / คำค้นหา (Bridge `invs_extras` → master_drugs.invs_location / invs_keywords)

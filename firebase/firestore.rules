@@ -1,5 +1,5 @@
 rules_version = '2';
-// Sawee Rxfill Firestore Rules v6.6 — v6.5 + ผู้เบิกแก้ผู้ลงนามท้ายใบ (sign_people) ได้ทุกสถานะ
+// Sawee Rxfill Firestore Rules v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -83,7 +83,7 @@ service cloud.firestore {
       allow update: if isAdmin()
                     || (ownsHospital(resource.data.get('hospital_id', docId))
                         && request.resource.data.diff(resource.data).affectedKeys()
-                             .hasOnly(['sign_roles', 'sign_roles_updated_at', 'updated_at'])
+                             .hasOnly(['sign_roles', 'sign_names', 'sign_roles_updated_at', 'updated_at'])
                         && request.resource.data.sign_roles is list
                         && request.resource.data.sign_roles.size() <= 8);
     }
@@ -214,7 +214,7 @@ service cloud.firestore {
                     // ตำแหน่งผู้ลงนามท้ายใบ แก้ได้ทุกสถานะ (ไม่กระทบจำนวนยา)
                     || (ownsHospital(resource.data.hospitalId)
                         && request.resource.data.diff(resource.data).affectedKeys()
-                             .hasOnly(['sign_roles', 'sign_roles_updated_at', 'sign_roles_updated_by', 'updated_at'])
+                             .hasOnly(['sign_roles', 'sign_names', 'sign_roles_updated_at', 'sign_roles_updated_by', 'updated_at'])
                         && request.resource.data.sign_roles is list
                         && request.resource.data.sign_roles.size() <= 8);
 

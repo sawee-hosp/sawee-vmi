@@ -220,11 +220,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.6.4"></script>
+  <script src="shared.js?v=6.6.5"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.6.4';
+      var need = '6.6.5';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -2739,7 +2739,7 @@ const CreateReqView = ({ ctx, round = null }) => {
         return matchSearch && matchType && matchInactive;
       });
       // วัคซีนถูกซ่อนจากตารางและใบพิมพ์ของ รบ.301 แต่ข้อมูลยังถูกเก็บครบ (ผู้ดูแลระบบยังเห็นบนจอ)
-      const canSeeVaccineRows = normalizeUserRole(ctx.currentUser?.role) === 'admin';
+      const canSeeVaccineRows = false; // v6.6.5 วัคซีนไม่แสดงในใบเบิก รพ.สต. ทุกบทบาท และไม่นับรวมรายการ
       const workingGroupedItems = filteredItems.filter(it => canSeeVaccineRows || String(it.type) !== '6').reduce((acc, item) => {
         const key = safeText(item.type, '1') || '1';
         (acc[key] ||= []).push(item);
@@ -3006,7 +3006,7 @@ const CreateReqView = ({ ctx, round = null }) => {
 
             <div className="no-print mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
               <div className="text-xs text-slate-500">
-                รายการที่บันทึก {items.filter(i=>toNonNegativeNumber(i.usage)>0 || toNonNegativeNumber(i.finalRequestedQty ?? i.dispenseQty)>0).length} รายการ
+                รายการที่บันทึก {items.filter(i=>String(i.type)!=='6' && (toNonNegativeNumber(i.usage)>0 || toNonNegativeNumber(i.finalRequestedQty ?? i.dispenseQty)>0)).length} รายการ
                 <span className="mx-2">•</span>ขอเพิ่ม {items.filter(i=>getRequestBadge(i)?.type==='more').length}
                 <span className="mx-2">•</span>ขอลด {items.filter(i=>getRequestBadge(i)?.type==='less').length}
                 <span className={`ml-3 font-bold ${isDirty?'text-amber-600':'text-emerald-600'}`}>{isDirty?'มีข้อมูลยังไม่บันทึก':'บันทึกล่าสุดแล้ว'}</span>
@@ -4324,7 +4324,7 @@ const ViewReqView = ({ ctx }) => {
       const itemsToDisplay = (isAdmin && showHiddenItems) ? editableItems : editableItems.filter(it => !isHiddenReqItem(it));
 
       // วัคซีนถูกซ่อนจากตารางและใบพิมพ์ แต่ยังคงอยู่ใน editableItems และถูกบันทึกตามปกติ
-      const canSeeVaccineRows = isAdmin;
+      const canSeeVaccineRows = false; // v6.6.5 วัคซีนไม่แสดงในใบเบิก รพ.สต. ทุกบทบาท และไม่นับรวมรายการ
       itemsToDisplay.filter(it => canSeeVaccineRows || String(it.type) !== '6')
         .forEach(it => { if(groupedItems[it.type]) groupedItems[it.type].push(it); else groupedItems['1'].push(it); });
       // v6.6 ภายในหมวด เรียงตามตำแหน่งยา แล้วชื่อยา

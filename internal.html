@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.6.4"></script>
+  <script src="shared.js?v=6.6.5"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.6.4';
+      var need = '6.6.5';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -192,6 +192,15 @@
     };
 
     // ช่องค้นหายาจาก master_drugs (ไม่แสดงยา "ยกเลิกใช้" ทุกหน่วย และวัคซีน type 6 · ยา "ยกเลิก รพ.สต." ยังเบิกได้)
+    // v6.6.5 ชื่อพ้องทั้งหมด (คำค้นหา INVS + ชื่อที่ระบบเรียนรู้) — แสดงตอนค้นหาเท่านั้น ไม่ใส่ลงใบเบิก
+    const drugSynonyms = (d) => {
+      const seen = new Set([normalizeForMatch(d.drug_name)]), out = [];
+      [...String(d.invs_keywords || '').split(','), ...String(d.fuzzy || '').split(',')].forEach(x => {
+        const t = safeText(x), n = normalizeForMatch(t);
+        if (t && n && !seen.has(n)) { seen.add(n); out.push(t); }
+      });
+      return out;
+    };
     const DrugSearchBox = ({ ctx, onPick, excludeIds, placeholder, autoFocus }) => {
       const [q, setQ] = useState('');
       const [open, setOpen] = useState(false);
@@ -199,7 +208,20 @@
       const results = useMemo(() => {
         if (!q.trim()) return [];
         const ex = excludeIds || new Set();
+        // v6.6.5 จัดอันดับ: รหัสตรง 100% (INVS/HOSxP) → รหัสขึ้นต้น → ชื่อขึ้นต้น → อื่น ๆ
+        const ql = q.trim().toLowerCase(), qn = normalizeForMatch(q);
+        const rank = (d) => {
+          const id = String(d.drug_id || '').toLowerCase();
+          const hx = String(d.hosxp_code || '').toLowerCase().split(/[,;\s]+/).filter(Boolean);
+          if (id === ql || hx.includes(ql)) return 0;
+          if (id.startsWith(ql) || hx.some(c => c.startsWith(ql))) return 1;
+          if (normalizeForMatch(d.drug_name).startsWith(qn)) return 2;
+          return 3;
+        };
         return ctx.drugs.filter(d => !isDrugDiscontinuedAll(d) && String(d.type) !== '6' && drugMatches(d, q))
+          .map(d => ({ d, r: rank(d) }))
+          .sort((a, b) => a.r - b.r || String(a.d.drug_name).localeCompare(String(b.d.drug_name), 'th'))
+          .map(x => x.d)
           .slice(0, 30)
           .map(d => ({ d, added: ex.has(String(d.drug_id)) }));
       }, [q, ctx.drugs, excludeIds]);
@@ -224,7 +246,8 @@
                 <button key={d.drug_id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => pick(d)}
                   className={`w-full text-left px-4 py-2.5 flex items-center gap-3 border-b last:border-0 ${i === hi ? 'bg-teal-50' : 'hover:bg-slate-50'}`}>
                   <span className="font-mono text-xs text-slate-400 w-16 shrink-0">{d.drug_id}</span>
-                  <span className="flex-1 text-sm font-medium">{d.drug_name}{d.invs_keywords ? <span className="block text-[11px] text-slate-400 font-normal">{d.invs_keywords}</span> : null}</span>
+                  {(d.image_url || d.img_url) ? <img src={d.image_url || d.img_url} alt="" loading="lazy" className="w-10 h-10 object-contain rounded border bg-white shrink-0" onError={e => { e.currentTarget.style.display = 'none'; }} /> : null}
+                  <span className="flex-1 text-sm font-medium">{d.drug_name}{(() => { const syn = drugSynonyms(d); return syn.length ? <span className="block text-[11px] text-slate-500 font-normal">ชื่อพ้อง: {syn.join(' · ')}</span> : null; })()}</span>
                   <span className="text-xs text-slate-400 shrink-0">{ctx.unitName(d)}{safePackSize(d.pack_size) > 1 ? ` · แพ็ค ${safePackSize(d.pack_size)}` : ''}</span>
                   {added && <span className="text-[10px] font-bold text-teal-700 bg-teal-100 px-1.5 py-0.5 rounded">อยู่ในใบแล้ว</span>}
                 </button>

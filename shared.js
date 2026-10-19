@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.6.4';
+const APP_VERSION = '6.6.5';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1112,11 +1112,12 @@ const buildInternalReqFormHtml = (opts) => {
   // v6.5 ห้องยา: คอลัมน์แบบใบเบิก รพ.สต. — ยอดใช้ · คงเหลือ(น้ำเงิน) · Target Stock(เทา) · จำนวนจ่าย(หนา)
   // opts.blankQty = เว้นช่องจำนวนจ่าย/มูลค่า/คงเหลือหลังเบิก ไว้เขียนเอง
   const blank = !!opts.blankQty;
-  const colCount = isPharmacy ? 12 : 9;
+  const colCount = isPharmacy ? 12 : 10;
+  // v6.6.5 หน่วยงาน: มูลค่า = จำนวนเบิก × ราคา (ช่องจำนวนจ่ายเว้นว่างให้ห้องยาเขียน) · ห้องยา: คิดจากจำนวนจ่ายเหมือนเดิม
   const valueOf = function (it) {
     const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
     const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
-    return (disp / safePackSize(it.packSize)) * toNonNegativeNumber(it.price);
+    return ((isPharmacy ? disp : req0) / safePackSize(it.packSize)) * toNonNegativeNumber(it.price);
   };
   let n = 0, total = 0;
   const body = typeKeys.map(function (k) {
@@ -1154,10 +1155,10 @@ const buildInternalReqFormHtml = (opts) => {
       return trOpen(li) +
         '<td class="c">' + n + '</td>' +
         '<td class="name">' + esc(it.name) + '</td>' +
-        '<td class="c muted">' + esc(it.unit) + (pack > 1 ? '<div class="xs">บรรจุ ' + pack + '</div>' : '') + '</td>' +
-        (isPharmacy ? '<td class="c">' + qty(it.usage, pack) + '</td>' : '') +
-        '<td class="c">' + qty(req0, pack) + '</td>' +
-        '<td class="c b">' + qty(disp, pack) + '</td>' +
+        '<td class="c muted">' + esc(it.unit) + '</td>' +
+        '<td class="c">' + pack + '</td>' +
+        '<td class="c b">' + qty(req0, pack) + '</td>' +
+        '<td class="c"></td>' + // v6.6.5 จำนวนจ่าย: เว้นว่างให้ห้องยาเขียน
         '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
         '<td class="r b">' + money(valueOf(it)) + '</td>' +
         '<td class="c">' + (isPharmacy ? qty(Math.max(0, toNonNegativeNumber(it.onHand)), pack) : '') + '</td>' +
@@ -1175,7 +1176,9 @@ const buildInternalReqFormHtml = (opts) => {
       (pos ? '<div>ตำแหน่ง ' + esc(pos) + '</div>' : '<div>ตำแหน่ง ................................</div>') + '<div>วันที่ ........./........./.........</div></div>';
   };
   const signers = opts.signers || internalSignersFor(req);
-  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบเบิกวัสดุ/เวชภัณฑ์ ' + esc(opts.formNo) + '</title>' +
+  // v6.6.5 ชื่อไฟล์ PDF = ชื่อหน่วยงาน + เดือนปีที่เบิก (title ของเอกสาร)
+  const fileTitle = (safeText(opts.deptName || req.dept_name) + ' ' + parts.month + ' ' + parts.year).replace(/[\\/:*?"<>|]+/g, '-').trim();
+  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(fileTitle) + '</title>' +
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
     '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
     '<style>' +
@@ -1200,7 +1203,8 @@ const buildInternalReqFormHtml = (opts) => {
     '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
     '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:22px;text-align:center;page-break-inside:avoid;font-size:12.5px}.nw{white-space:nowrap}' +
     '.blankrow td{height:22px}' +
-    '.items tr.ldt td{border-top-style:dotted}.items tr.ldb td{border-bottom-style:dotted}' +
+    // v6.6.5 กลุ่มตำแหน่งเดียวกัน: จุดไข่ปลาเล็ก 0.1pt
+    '.items tr.ldt td{border-top:0.1pt dotted #444}.items tr.ldb td{border-bottom:0.1pt dotted #444}' +
     '</style></head><body>' +
     '<h1>ใบเบิกวัสดุ/เวชภัณฑ์</h1>' +
     '<div class="meta"><div>เลขที่ <b>' + esc(opts.formNo) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +
@@ -1211,7 +1215,7 @@ const buildInternalReqFormHtml = (opts) => {
       ? '<th style="width:4%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">หน่วย</th><th style="width:5%">บรรจุ</th>' +
         '<th style="width:7.5%">ยอดใช้</th><th style="width:7.5%">ยอด<br>เหลือ</th><th class="tgt" style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
         '<th style="width:7.5%">ราคา/<br>หน่วย</th><th style="width:8.5%">มูลค่า<br>(บาท)</th><th style="width:7.5%">คง<br>เหลือ</th><th style="width:6%">รหัส</th>'
-      : '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:8%">รูปแบบยา</th>' +
+      : '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:7%">หน่วย</th><th style="width:6%">บรรจุ</th>' +
         '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:8%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
         '<th style="width:8%">คง<br>เหลือ</th><th style="width:7%">รหัส</th>') +
     '</tr></thead><tbody>' + body +
@@ -1230,9 +1234,13 @@ const printHtmlDocument = (html) => new Promise(function (resolve) {
   document.body.appendChild(f);
   const doc = f.contentWindow.document;
   doc.open(); doc.write(html); doc.close();
+  // v6.6.5 Chrome ใช้ title ของหน้าเป็นชื่อไฟล์ "บันทึกเป็น PDF" → ยืม title ของใบชั่วคราวระหว่างพิมพ์
+  const oldTitle = document.title;
   const go = function () {
+    const t = safeText(doc.title);
+    if (t) document.title = t;
     try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { console.warn(e); }
-    setTimeout(function () { f.remove(); resolve(); }, 1500);
+    setTimeout(function () { document.title = oldTitle; f.remove(); resolve(); }, 1500);
   };
   const fontsReady = f.contentWindow.document.fonts && f.contentWindow.document.fonts.ready;
   if (fontsReady) Promise.race([fontsReady, new Promise(function (r) { setTimeout(r, 2500); })]).then(function () { setTimeout(go, 100); });

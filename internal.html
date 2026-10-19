@@ -50,11 +50,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.6.3"></script>
+  <script src="shared.js?v=6.6.4"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.6.3';
+      var need = '6.6.4';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -408,9 +408,32 @@
       const usedBy = (r) => ctx.reqs.find(q => q.round_id === r.id && q.status !== 'Cancelled');
       const [sel, setSel] = useState(() => { const open = list.filter(r => !usedBy(r)); return pickDefaultRound(open, today)?.id || ''; });
       const [fyViewState, setFyView] = useState(0);
-      if (!list.length) {
+      // v6.6.4 แอดมินคีย์ใบย้อนหลัง/ปีงบอื่นได้ โดยระบุวันที่ในใบเอง (ไม่ผูกรอบเบิก) — เลขที่ = ลำดับใบของหน่วยงานในปีงบนั้น
+      const [manualFy, setManualFy] = useState(0);
+      const [manualDate, setManualDate] = useState('');
+      const fyBounds = (fy) => ({ min: (fy - 544) + '-10-01', max: (fy - 543) + '-09-30' });
+      const manualPick = (fy) => {
+        if (!ctx.isAdmin) return null;
+        const b = fyBounds(fy);
+        const date = manualDate && manualDate >= b.min && manualDate <= b.max ? manualDate : (today >= b.min && today <= b.max ? today : b.max);
+        const fno = nextInternalFormNo(ctx.reqs, ctx.dept?.dept_id, date);
+        const pick = () => onPick({ id: 'manual-' + date, manual: true, round_no: Number(String(fno.no).split('/')[0]), round_date: date, fiscal_year: fno.fiscalYear });
         return (
-          <div className="bg-white rounded-2xl border shadow-sm p-8 max-w-2xl space-y-4 animate-fade-in">
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-wrap items-center gap-3">
+            <span className="font-bold text-amber-900"><i className="fa-solid fa-clock-rotate-left mr-1"></i>แอดมิน: คีย์ใบปีงบ {fy} โดยระบุวันที่เอง (ไม่ใช้รอบ)</span>
+            <input id="manual-form-date" type="date" min={b.min} max={b.max} value={date} onChange={e => setManualDate(e.target.value)} className="p-2 border border-amber-300 rounded-lg bg-white" />
+            <span className="text-sm text-amber-800">{thaiDateLong(date)} · เลขที่ <b>{fno.no}</b></span>
+            <button id="manual-form-start" onClick={pick} className="px-4 py-2 rounded-xl bg-amber-600 text-white font-bold hover:bg-amber-700"><i className="fa-solid fa-arrow-right mr-1"></i>เริ่มกรอกใบเบิก</button>
+          </div>
+        );
+      };
+      const adminFyChips = ctx.isAdmin ? [fyNow - 1, fyNow, fyNow + 1] : [];
+      if (!list.length) {
+        const fyM = manualFy || fyNow;
+        return (
+          <div className="bg-white rounded-2xl border shadow-sm p-8 max-w-3xl space-y-4 animate-fade-in">
+            {ctx.isAdmin && <div className="flex flex-wrap gap-2">{adminFyChips.map(y => <button key={y} onClick={() => setManualFy(y)} className={`px-3 py-1.5 rounded-lg text-sm font-bold ${fyM === y ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600'}`}>ปีงบ {y}</button>)}</div>}
+            {manualPick(fyM)}
             <h2 className="text-xl font-extrabold">ยังไม่มีรอบเบิกในระบบ</h2>
             <p className="text-slate-600">แอดมินยังไม่ได้กำหนดรอบเบิกของปีงบนี้ (จัดการฐานข้อมูล › รอบเบิก) ระบบจะใช้เลขที่ใบอัตโนมัติและวันที่วันนี้แทน</p>
             <button onClick={() => onPick(null)} className="px-6 py-3 rounded-xl bg-gradient-main text-white font-bold">สร้างใบเบิกต่อ</button>
@@ -418,13 +441,13 @@
         );
       }
       const chosen = list.find(r => r.id === sel);
-      const fyList = [...new Set(list.map(r => Number(r.fiscal_year)))].sort();
+      const fyList = [...new Set([...list.map(r => Number(r.fiscal_year)), ...adminFyChips])].sort();
       const nextRound = pickDefaultRound(list.filter(r => !usedBy(r) && String(r.round_date) >= today), today);
       const fyView = fyViewState || Number(chosen?.fiscal_year) || fyNow;
       const todayMonth = today.slice(0, 7);
       const months = (() => {
         const m = new Map();
-        list.filter(r => Number(r.fiscal_year) === fyView || fyList.length === 1).slice().sort((a, b) => String(a.round_date).localeCompare(String(b.round_date)))
+        list.filter(r => Number(r.fiscal_year) === fyView || (fyList.length === 1 && !ctx.isAdmin)).slice().sort((a, b) => String(a.round_date).localeCompare(String(b.round_date)))
           .forEach(r => { const k = String(r.round_date).slice(0, 7); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
         return [...m.entries()];
       })();
@@ -442,6 +465,7 @@
             ))}
             {nextRound && <span className="text-sm text-slate-600 ml-auto"><i className="fa-regular fa-calendar-check mr-1 text-teal-600"></i>รอบถัดไป <b>{thaiWeekday(nextRound.round_date)} {thaiDateLong(nextRound.round_date)}</b> · ส่งสมุดเบิกภายใน <b>{thaiWeekday(roundSubmitBy(nextRound), true)} {thaiDateShort(roundSubmitBy(nextRound))}</b></span>}
           </div>
+          {!months.length && <div className="bg-slate-50 border rounded-2xl p-4 text-slate-500">ยังไม่มีรอบเบิกของปีงบ {fyView}{ctx.isAdmin ? ' — คีย์ใบโดยระบุวันที่เองด้านล่าง หรือเพิ่มรอบที่ จัดการฐานข้อมูล › รอบเบิก' : ''}</div>}
           <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3" role="radiogroup" aria-label="รอบเบิก">
             {months.map(([key, rs]) => (
               <section key={key} className={`rounded-2xl border bg-white overflow-hidden ${key === todayMonth ? 'border-teal-400 shadow-md' : 'border-slate-200'}`}>
@@ -482,6 +506,7 @@
             <button onClick={() => chosen && onPick(chosen)} disabled={!chosen} className="px-6 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40"><i className="fa-solid fa-arrow-right mr-2"></i>เริ่มกรอกใบเบิก{chosen ? ` · ${roundFormNo(chosen)}` : ''}</button>
             {chosen && <span className="text-sm text-slate-500">ใบเบิกเลขที่ <b>{roundFormNo(chosen)}</b> วันที่ <b>{thaiDateLong(chosen.round_date)}</b></span>}
           </div>
+          {manualPick(fyView)}
         </div>
       );
     };
@@ -536,13 +561,14 @@
       } else {
         reqId = buildInternalReqId(dept.dept_id);
         const today = toYmd(new Date());
-        if (round && ctx.reqs.some(q => q.round_id === round.id && q.status !== 'Cancelled')) throw new Error(`หน่วยงานนี้มีใบเบิกของรอบที่ ${round.round_no} แล้ว — แก้ไขใบเดิมแทน`);
+        if (round && !round.manual && ctx.reqs.some(q => q.round_id === round.id && q.status !== 'Cancelled')) throw new Error(`หน่วยงานนี้มีใบเบิกของรอบที่ ${round.round_no} แล้ว — แก้ไขใบเดิมแทน`);
         const fno = round ? { no: roundFormNo(round), fiscalYear: Number(round.fiscal_year) } : nextInternalFormNo(ctx.reqs, dept.dept_id, today);
         await db.collection('internal_requisitions').doc(reqId).set({
           ...common,
           id: reqId,
           form_no: fno.no, form_date: round ? round.round_date : today, fiscal_year: fno.fiscalYear,
-          ...(round ? { round_id: round.id, round_no: Number(round.round_no), round_date: round.round_date } : {}),
+          ...(round && !round.manual ? { round_id: round.id, round_no: Number(round.round_no), round_date: round.round_date } : {}),
+          ...(round && round.manual ? { manual_backdate: true } : {}),
           doc_no: buildDocNo(dept.dept_id),
           revision: 1,
           created_by_uid: user.uid, created_by_name: safeText(user.name), created_by_position: safeText(user.position),

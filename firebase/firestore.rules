@@ -1,5 +1,5 @@
 rules_version = '2';
-// Sawee Rxfill Firestore Rules v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
+// Sawee Rxfill Firestore Rules v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -109,9 +109,24 @@ service cloud.firestore {
                     || (isActiveUser()
                         && request.auth.uid == userId
                         && request.resource.data.diff(resource.data).affectedKeys()
-                             .hasOnly(['name', 'position', 'updated_at']));
+                             .hasOnly(['name', 'position', 'updated_at']))
+                    // v6.8 ผู้ใช้ยกเลิกการผูก LINE ของตัวเองได้ (การผูกทำโดย webhook ฝั่งเซิร์ฟเวอร์เท่านั้น)
+                    || (isActiveUser()
+                        && request.auth.uid == userId
+                        && request.resource.data.diff(resource.data).affectedKeys()
+                             .hasOnly(['line_user_id', 'line_display_name', 'line_unlinked_at', 'line_unlink_reason', 'updated_at'])
+                        && request.resource.data.line_user_id == '');
 
       allow delete: if isAdmin();
+    }
+
+    // v6.8 รหัสผูก LINE 6 หลัก (ใช้ครั้งเดียว อายุ 10 นาที) — webhook อ่าน/ลบด้วย service account
+    match /line_link_codes/{code} {
+      allow create: if isActiveUser()
+                    && code.matches('^[0-9]{6}$')
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.keys().hasOnly(['uid', 'name', 'role', 'expires_at', 'created_at', 'updated_at']);
+      allow read, update, delete: if false;
     }
 
     match /master_drugs/{docId} {

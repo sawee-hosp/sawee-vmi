@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.7.1 · Bridge v2.9.5)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.8.0 · Bridge v2.9.5)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **แก้เฉพาะจุดที่ขอ / เฉพาะไฟล์ที่เกี่ยวข้อง** — อย่า refactor หรือเปลี่ยนสิ่งที่ไม่ได้ขอ
@@ -10,7 +10,8 @@
   - `internal.html` หน่วยงานใน รพ. + ห้องยา (PharmacyReqView: ดึงยอดใช้ HOSxP, ประมาณการ, พิมพ์ใบเบิก, Draft "รอส่ง")
   - `shared.js` JS ล้วน (ไม่มี JSX) — utils, calcPharmacySuggestion, buildInternalReqFormHtml (ใบพิมพ์), Firestore read-saver (IndexedDB cache + delta sync, tombstones, app_meta epoch, write hooks)
   - HTML ใช้ React 18 + Babel in-page (`<script type="text/babel">`)
-- `firebase/` — firestore.rules (v6.6.4), firestore.indexes.json
+- `firebase/` — firestore.rules (v6.8), firestore.indexes.json
+- `api/line-webhook.js` — Vercel function (Node, ไม่มี dependency) env: LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, LINE_BOT_ID, FIREBASE_SERVICE_ACCOUNT, LINE_MONTHLY_LIMIT
 - `bridge/SaweeRefill/` — PHP Bridge/CLI (มีเฉพาะไฟล์ที่เคยแก้) ติดตั้งจริงที่ `C:\SaweeRefill\` (public/ cli/ tools/ private/ logs/ cache/)
   - `C:\xampp\htdocs\SaweeRefill\invs_api.php` เป็นไฟล์จิ๋ว `require 'C:\\SaweeRefill\\public\\invs_api.php';`
   - config อยู่ `C:\SaweeRefill\private\config.php` · Task Scheduler รัน `C:\SaweeRefill\tools\SYNC_BACKGROUND.bat`
@@ -57,6 +58,12 @@
 - เลือกจำนวนคืนรายล็อต (vmi_virtual_lots) · "ยอดมีจริง" คำนวณคืนจากล็อตใกล้หมดอายุก่อน · ตัวกรอง ≤180 / ≤30 วัน
 - รายการเพิ่มเอง (ไม่มีในระบบ/Lot ไม่ตรง) = `manual: true` บันทึกในใบ ไม่ตัดสต๊อก แอดมินตรวจ
 - ใบพิมพ์ `buildReturnFormHtml` (shared.js) แบบฟอร์มทางการ ผู้ส่งคืน/ผู้ตรวจสอบ/ผู้รับคืน/หัวหน้าคลังยา · เหตุผล `RETURN_REASONS`
+
+## LINE OA (v6.8 เฟส 1)
+- ผูกบัญชี: หน้าเว็บสร้าง `line_link_codes/{6 หลัก}` {uid, expires_at 10 นาที} → ผู้ใช้ส่งรหัสในแชต OA → webhook ตรวจลายเซ็น แล้วเขียน `users.line_user_id/line_display_name/line_linked_at` (ผู้ใช้เขียนเองไม่ได้ ยกเลิกเองได้)
+- GET `/api/line-webhook` คืน { botId, addFriendUrl } ให้ทำ QR (qrcodejs จาก cdnjs) · unfollow = ล้างการผูก · 1 LINE ผูกได้ 1 ผู้ใช้
+- app.html: `LineLinkPanel` (หน้าแก้ไขข้อมูลส่วนตัว) + `LineLinkPrompt` modal ตอนเข้าใช้ เฉพาะ รพ.สต./แอดมินที่ยังไม่ผูก ปิดแล้วไม่ขึ้นซ้ำใน session นั้น (หน่วยงานภายในยังไม่มี)
+- ยังไม่ทำ: push สรุป 15:00, ตัวนับโควตา 300/เดือน, LINE Console
 
 ## ตำแหน่งยา / คำค้นหา (Bridge `invs_extras` → master_drugs.invs_location / invs_keywords)
 - ตำแหน่งมาจาก `sawee_location.LOC_CODE` (DEPT_ID = default_stock_id) — ว่างหรือ `0` = ไม่มีตำแหน่ง (ล้างค่าเดิม)

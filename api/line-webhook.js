@@ -2,77 +2,10 @@
 // env: LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, LINE_BOT_ID, FIREBASE_SERVICE_ACCOUNT (JSON ทั้งไฟล์)
 // หน้าที่: ผูกบัญชีผู้ใช้กับ LINE ด้วยรหัส 6 หลัก (line_link_codes/{code}) → users/{uid}.line_user_id
 //          GET ?info=1 → { botId, addFriendUrl } ให้หน้าเว็บสร้าง QR
-const crypto = require('crypto');
-
-const env = (k) => String(process.env[k] || '').trim();
+const { crypto, env, fsGet, fsPatch, fsDelete, fsQuery, nowTs, lineApi, reply } = require('./_lib/core');
 const LINK_TTL_MS = 10 * 60 * 1000;
+const fsFindUsersByLine = (lineUserId) => fsQuery('users', [['line_user_id', 'EQUAL', lineUserId]], { limit: 10 });
 
-// ---------- Google OAuth (service account → access token) ----------
-let tokenCache = { token: '', exp: 0 };
-const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
-function serviceAccount() {
-  const raw = env('FIREBASE_SERVICE_ACCOUNT');
-  if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT not set');
-  const sa = JSON.parse(raw);
-  sa.private_key = String(sa.private_key || '').replace(/\\n/g, '\n');
-  return sa;
-}
-async function googleToken() {
-  if (tokenCache.token && tokenCache.exp > Date.now() + 60000) return tokenCache.token;
-  const sa = serviceAccount();
-  const now = Math.floor(Date.now() / 1000);
-  const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claim = b64url(JSON.stringify({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/datastore', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 }));
-  const sig = b64url(crypto.createSign('RSA-SHA256').update(head + '.' + claim).sign(sa.private_key));
-  const r = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: head + '.' + claim + '.' + sig })
-  });
-  const j = await r.json();
-  if (!r.ok || !j.access_token) throw new Error('Google token failed: ' + JSON.stringify(j).slice(0, 200));
-  tokenCache = { token: j.access_token, exp: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
-  return tokenCache.token;
-}
-
-// ---------- Firestore REST ----------
-const fsBase = () => `https://firestore.googleapis.com/v1/projects/${serviceAccount().project_id}/databases/(default)/documents`;
-const toFs = (v) => v === null ? { nullValue: null } : typeof v === 'boolean' ? { booleanValue: v } : typeof v === 'number' ? { doubleValue: v }
-  : (v && v.__ts) ? { timestampValue: v.__ts } : { stringValue: String(v) };
-const fromFs = (f) => { const o = {}; Object.entries(f || {}).forEach(([k, v]) => { o[k] = v.stringValue ?? v.timestampValue ?? v.integerValue ?? v.doubleValue ?? v.booleanValue ?? null; }); return o; };
-async function fsGet(path) {
-  const r = await fetch(`${fsBase()}/${path}`, { headers: { Authorization: 'Bearer ' + await googleToken() } });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error('Firestore GET ' + path + ' ' + r.status);
-  return fromFs((await r.json()).fields);
-}
-async function fsPatch(path, data) {
-  const mask = Object.keys(data).map(k => 'updateMask.fieldPaths=' + encodeURIComponent(k)).join('&');
-  const fields = {}; Object.entries(data).forEach(([k, v]) => { fields[k] = toFs(v); });
-  const r = await fetch(`${fsBase()}/${path}?${mask}`, { method: 'PATCH', headers: { Authorization: 'Bearer ' + await googleToken(), 'Content-Type': 'application/json' }, body: JSON.stringify({ fields }) });
-  if (!r.ok) throw new Error('Firestore PATCH ' + path + ' ' + r.status + ' ' + (await r.text()).slice(0, 200));
-}
-async function fsDelete(path) {
-  await fetch(`${fsBase()}/${path}`, { method: 'DELETE', headers: { Authorization: 'Bearer ' + await googleToken() } });
-}
-async function fsFindUsersByLine(lineUserId) {
-  const r = await fetch(`${fsBase()}:runQuery`, {
-    method: 'POST', headers: { Authorization: 'Bearer ' + await googleToken(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'users' }], where: { fieldFilter: { field: { fieldPath: 'line_user_id' }, op: 'EQUAL', value: { stringValue: lineUserId } } }, limit: 10 } })
-  });
-  const rows = await r.json();
-  return (Array.isArray(rows) ? rows : []).filter(x => x.document).map(x => ({ id: x.document.name.split('/').pop(), ...fromFs(x.document.fields) }));
-}
-const nowTs = () => ({ __ts: new Date().toISOString() });
-
-// ---------- LINE ----------
-async function lineApi(path, body, method) {
-  const r = await fetch('https://api.line.me/v2/bot/' + path, {
-    method: method || 'POST', headers: { Authorization: 'Bearer ' + env('LINE_CHANNEL_ACCESS_TOKEN'), 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  return r.ok ? (r.headers.get('content-type') || '').includes('json') ? r.json() : {} : null;
-}
-const reply = (token, text) => lineApi('message/reply', { replyToken: token, messages: [{ type: 'text', text }] });
 const HELP = 'สวัสดีครับ นี่คือระบบแจ้งเตือน Sawee Rxfill\nผูกบัญชี: เข้าเว็บ Sawee Rxfill → เมนู "แก้ไขข้อมูลส่วนตัว" → "เชื่อม LINE" แล้วพิมพ์รหัส 6 หลักที่ได้ส่งมาในแชตนี้';
 
 async function handleEvent(ev) {

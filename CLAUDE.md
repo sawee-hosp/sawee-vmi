@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.8.0 · Bridge v2.9.5)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.8.0 · Bridge v2.10.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **แก้เฉพาะจุดที่ขอ / เฉพาะไฟล์ที่เกี่ยวข้อง** — อย่า refactor หรือเปลี่ยนสิ่งที่ไม่ได้ขอ
@@ -63,7 +63,19 @@
 - ผูกบัญชี: หน้าเว็บสร้าง `line_link_codes/{6 หลัก}` {uid, expires_at 10 นาที} → ผู้ใช้ส่งรหัสในแชต OA → webhook ตรวจลายเซ็น แล้วเขียน `users.line_user_id/line_display_name/line_linked_at` (ผู้ใช้เขียนเองไม่ได้ ยกเลิกเองได้)
 - GET `/api/line-webhook` คืน { botId, addFriendUrl } ให้ทำ QR (qrcodejs จาก cdnjs) · unfollow = ล้างการผูก · 1 LINE ผูกได้ 1 ผู้ใช้
 - app.html: `LineLinkPanel` (หน้าแก้ไขข้อมูลส่วนตัว) + `LineLinkPrompt` modal ตอนเข้าใช้ เฉพาะ รพ.สต./แอดมินที่ยังไม่ผูก ปิดแล้วไม่ขึ้นซ้ำใน session นั้น (หน่วยงานภายในยังไม่มี)
-- ยังไม่ทำ: push สรุป 15:00, ตัวนับโควตา 300/เดือน, LINE Console
+
+## LINE แจ้งเตือน (v6.9) — `api/_lib/core.js` (Firestore REST + LINE + โควตา) ใช้ร่วมทุก function
+- `api/line-cron.js` Vercel Cron (`vercel.json` 08:00 UTC = 15:00) auth `Bearer CRON_SECRET` · แอดมิน POST {idToken, dryRun} ดูตัวอย่าง/ส่งทันที
+  - แอดมิน: ใบเบิกใหม่ (รพ.สต.+หน่วยงาน) + ยาใกล้หมดอายุทุกรายการ ≤30/≤180 วัน (ส่งเมื่อมีใบใหม่หรือรายการเปลี่ยน)
+  - จนท.รพ.สต.: เฉพาะล็อตที่เพิ่งข้ามระดับ (`line_meta/expiry_levels`) + ข้อความ "ข้อมูลมาจากระบบ...คืนยา" — **ข้อความถึงเจ้าหน้าที่ไม่ระบุเวลา/วันละครั้ง**
+- โควตา `line_meta/quota_YYYYMM` เทียบ LINE consumption · ≥80% ส่งเฉพาะแอดมิน · ≥95% หยุด · log ทุกครั้ง `line_logs`
+- `api/line-notify.js` (ID token): status / test / dispensed / unlink — ส่ง INVS สำเร็จ (ใบใหม่) → app.html `notifyLineDispensed` แจ้ง จนท.รพ.สต. "ห้องยาจัดยาเรียบร้อยแล้ว" + ลิงก์ใบสรุปการจ่าย
+- `api/dispense-sheet.js?c=r&id=&t=` ใบสรุปการจ่าย (Lot/วันหมดอายุ/จำนวน จาก invs_*_snapshot) เปิดได้ไม่ต้อง login ด้วย HMAC (`SHEET_SECRET` หรือ LINE_CHANNEL_SECRET)
+- app.html แอดมิน: เมนู "LINE Console" (`LineConsoleView`) โควตา · ผู้ผูก/ยังไม่ผูก · ประวัติ 50 รายการ · ทดสอบ/ดูตัวอย่าง/ส่งสรุปตอนนี้
+- env เพิ่ม: CRON_SECRET (จำเป็น), SHEET_SECRET, SITE_URL (ไม่บังคับ) · rules: line_logs/line_meta แอดมินอ่าน เขียนได้เฉพาะเซิร์ฟเวอร์
+
+## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
+- หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)
 
 ## ตำแหน่งยา / คำค้นหา (Bridge `invs_extras` → master_drugs.invs_location / invs_keywords)
 - ตำแหน่งมาจาก `sawee_location.LOC_CODE` (DEPT_ID = default_stock_id) — ว่างหรือ `0` = ไม่มีตำแหน่ง (ล้างค่าเดิม)

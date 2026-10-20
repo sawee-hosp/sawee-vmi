@@ -484,6 +484,117 @@
         </div>
       );
     };
+    // ===== v6.9 LINE แจ้งเตือน (/api/line-notify, /api/line-cron) + LINE Console ของแอดมิน =====
+    const callLineApi = async (path, body) => {
+      if (!/^https?:$/.test(location.protocol)) throw new Error('เปิดจากไฟล์ ไม่มี API');
+      const idToken = await auth.currentUser.getIdToken();
+      const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, idToken }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    };
+    const notifyLineDispensed = (reqId) => { callLineApi('/api/line-notify', { action: 'dispensed', reqId }).catch(e => console.warn('LINE notify:', e.message)); };
+
+    const LineConsoleView = ({ ctx }) => {
+      const [status, setStatus] = useState(null);
+      const [logs, setLogs] = useState([]);
+      const [busy, setBusy] = useState('');
+      const [preview, setPreview] = useState(null);
+      const load = async () => {
+        setBusy('load');
+        try {
+          const [st, snap] = await Promise.all([
+            callLineApi('/api/line-notify', { action: 'status' }).catch(e => ({ error: e.message })),
+            db.collection('line_logs').orderBy('at', 'desc').limit(50).get()
+          ]);
+          setStatus(st); setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (e) { ctx.showToast('โหลดข้อมูล LINE ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      useEffect(() => { load(); }, []);
+      const run = async (key, fn, okMsg) => {
+        setBusy(key);
+        try { const j = await fn(); if (okMsg) ctx.showToast(typeof okMsg === 'function' ? okMsg(j) : okMsg); return j; }
+        catch (e) { ctx.showToast(e?.message || String(e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const users = (ctx.appDb.usersList || []).filter(u => u.status !== 'Inactive');
+      const isAdminU = u => normalizeUserRole(u.role) === 'admin';
+      const isTarget = u => isAdminU(u) || (u.hospital_id && !u.dept_id);
+      const linked = users.filter(u => u.line_user_id);
+      const unlinked = users.filter(u => !u.line_user_id && isTarget(u));
+      const hospName = id => ctx.appDb.hospitals?.find?.(h => String(h.hospital_id) === String(id))?.hospital_name || id || '-';
+      const unlinkUser = u => ctx.setConfirmDialog({
+        title: 'ยกเลิกการเชื่อม LINE?', message: `${u.name || u.id} จะไม่ได้รับแจ้งเตือนผ่าน LINE`, icon: 'fa-link-slash', iconColor: 'text-red-500',
+        confirmBtnClass: 'bg-red-500 hover:bg-red-600', confirmText: 'ยกเลิกการเชื่อม',
+        onConfirm: async () => {
+          await db.collection('users').doc(u.id || u.uid).update({ line_user_id: '', line_display_name: '', line_unlinked_at: firebase.firestore.FieldValue.serverTimestamp(), line_unlink_reason: 'admin', updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+          ctx.showToast('ยกเลิกการเชื่อมแล้ว'); await ctx.refreshData();
+        }
+      });
+      const q = status?.quota;
+      const pct = q ? Math.min(100, Math.round(q.used / q.limit * 100)) : 0;
+      const tierText = { normal: 'ปกติ', admin_only: 'เกิน 80% — ส่งเฉพาะแอดมิน', stop: 'เกิน 95% — หยุดส่ง' };
+      const fmt = v => { const d = v?.toDate ? v.toDate() : v ? new Date(v) : null; return d && !isNaN(d) ? d.toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' }) : '-'; };
+      return (
+        <div className="space-y-6" id="line-console">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-2xl font-black text-slate-800"><i className="fa-brands fa-line text-green-600 mr-2"></i>LINE Console</h2>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={load} disabled={!!busy} className="px-3 py-2 rounded-xl border bg-white font-bold text-sm"><i className={`fa-solid fa-rotate mr-1 ${busy === 'load' ? 'fa-spin' : ''}`}></i>รีเฟรช</button>
+              <button id="line-test" onClick={() => run('test', () => callLineApi('/api/line-notify', { action: 'test' }), 'ส่งข้อความทดสอบแล้ว')} disabled={!!busy || !ctx.currentUser?.line_user_id} className="px-3 py-2 rounded-xl bg-green-600 text-white font-bold text-sm disabled:opacity-40">ส่งทดสอบหาตัวเอง</button>
+              <button id="line-preview" onClick={() => run('preview', () => callLineApi('/api/line-cron', { dryRun: true })).then(j => j && setPreview(j))} disabled={!!busy} className="px-3 py-2 rounded-xl bg-white border border-green-300 text-green-800 font-bold text-sm">ดูตัวอย่างสรุป</button>
+              <button id="line-run" onClick={() => ctx.setConfirmDialog({ title: 'ส่งสรุปแจ้งเตือนตอนนี้?', message: 'ระบบจะส่งสรุปใบเบิกใหม่/ยาใกล้หมดอายุทันที (นับโควตา)', icon: 'fa-paper-plane', iconColor: 'text-green-600', confirmBtnClass: 'bg-green-600 hover:bg-green-700', confirmText: 'ส่งเลย',
+                onConfirm: () => run('run', () => callLineApi('/api/line-cron', { dryRun: false }), j => `ส่งแล้ว ${j.sent || 0} ข้อความ · ข้าม ${j.skipped || 0}`).then(load) })} disabled={!!busy} className="px-3 py-2 rounded-xl bg-emerald-700 text-white font-bold text-sm">ส่งสรุปตอนนี้</button>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-4">
+            <div className="bg-white rounded-2xl border p-5 md:col-span-2">
+              <div className="text-sm font-bold text-slate-500 mb-2">โควตาข้อความเดือนนี้ {q?.month ? `(${q.month.slice(4)}/${Number(q.month.slice(0, 4)) + 543})` : ''}</div>
+              {status?.error ? <div className="text-red-600 text-sm">{status.error}</div> : !q ? <div className="text-slate-400 text-sm">กำลังโหลด...</div> : <>
+                <div className="flex items-end gap-2"><span id="line-quota-used" className="text-4xl font-black text-slate-800">{q.used}</span><span className="text-slate-500 mb-1">/ {q.limit} ข้อความ · เหลือ {q.remaining}</span></div>
+                <div className="h-3 bg-slate-100 rounded-full mt-3 overflow-hidden"><div className={`h-full ${q.tier === 'stop' ? 'bg-red-500' : q.tier === 'admin_only' ? 'bg-amber-500' : 'bg-green-500'}`} style={{ width: pct + '%' }}></div></div>
+                <div className="text-xs text-slate-500 mt-2">สถานะ: <b>{tierText[q.tier] || q.tier}</b> · ระบบนับเอง {q.sent_by_system} · LINE รายงาน {q.line_reported ?? '-'}</div>
+              </>}
+            </div>
+            <div className="bg-white rounded-2xl border p-5">
+              <div className="text-sm font-bold text-slate-500 mb-2">สรุปแจ้งเตือนล่าสุด</div>
+              <div className="text-lg font-black text-slate-800">{fmt(status?.state?.last_run_at)}</div>
+              {status?.state?.last_result && <div className="text-xs text-slate-500 mt-1">ส่ง {status.state.last_result.sent} · ข้าม {status.state.last_result.skipped} · ใบใหม่ {status.state.last_result.newReqs} · ≤30 วัน {status.state.last_result.near30} · ≤180 วัน {status.state.last_result.near180}</div>}
+            </div>
+          </div>
+
+          {preview && <div className="bg-white rounded-2xl border p-5 space-y-3" id="line-preview-box">
+            <div className="flex justify-between"><b>ตัวอย่างข้อความ (ยังไม่ส่ง)</b><button onClick={() => setPreview(null)} className="text-slate-400"><i className="fa-solid fa-xmark"></i></button></div>
+            {preview.admin?.text ? <div><div className="text-xs font-bold text-slate-500">ถึงแอดมิน: {(preview.admin.to || []).join(', ') || '-'}</div><pre className="whitespace-pre-wrap text-sm bg-green-50 rounded-xl p-3 font-sans">{preview.admin.text}</pre></div> : <div className="text-sm text-slate-500">ไม่มีข้อความถึงแอดมิน (ไม่มีใบใหม่และยาใกล้หมดอายุไม่เปลี่ยน)</div>}
+            {(preview.staff || []).map((s, i) => <div key={i}><div className="text-xs font-bold text-slate-500">{s.hospital} → {(s.to || []).join(', ') || 'ไม่มีผู้ผูก LINE'}</div><pre className="whitespace-pre-wrap text-sm bg-slate-50 rounded-xl p-3 font-sans">{s.text}</pre></div>)}
+          </div>}
+
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div className="bg-white rounded-2xl border p-5">
+              <div className="font-bold mb-3">ผูก LINE แล้ว ({linked.length})</div>
+              <table className="w-full text-sm"><thead><tr className="text-left text-slate-500 text-xs"><th className="p-1">ผู้ใช้</th><th className="p-1">หน่วย</th><th className="p-1">ชื่อ LINE</th><th></th></tr></thead>
+                <tbody>{linked.map(u => <tr key={u.id || u.uid} className="border-t"><td className="p-1 font-bold">{u.name}{isAdminU(u) && <span className="ml-1 text-[10px] bg-slate-800 text-white rounded px-1">admin</span>}</td><td className="p-1">{u.hospital_id ? hospName(u.hospital_id) : u.dept_id ? 'หน่วยงานใน รพ.' : '-'}</td><td className="p-1">{u.line_display_name || '-'}</td>
+                  <td className="p-1 text-right"><button onClick={() => unlinkUser(u)} className="text-xs text-red-600 hover:underline">ยกเลิก</button></td></tr>)}</tbody></table>
+            </div>
+            <div className="bg-white rounded-2xl border p-5">
+              <div className="font-bold mb-3">ยังไม่ผูก (รพ.สต./แอดมิน) ({unlinked.length})</div>
+              <div className="flex flex-wrap gap-2">{unlinked.map(u => <span key={u.id || u.uid} className="text-xs bg-slate-100 rounded-lg px-2 py-1">{u.name} · {isAdminU(u) ? 'admin' : hospName(u.hospital_id)}</span>)}</div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border p-5">
+            <div className="font-bold mb-3">ประวัติการส่งล่าสุด (50)</div>
+            <div className="overflow-auto"><table className="w-full text-sm" id="line-logs"><thead><tr className="text-left text-slate-500 text-xs"><th className="p-1">เวลา</th><th className="p-1">ประเภท</th><th className="p-1">ถึง</th><th className="p-1">ผล</th><th className="p-1">ข้อความ</th></tr></thead>
+              <tbody>{logs.map(l => <tr key={l.id} className="border-t align-top"><td className="p-1 whitespace-nowrap">{fmt(l.at)}</td><td className="p-1">{l.type || '-'}</td><td className="p-1">{l.to_name || l.to_uid || '-'}</td>
+                <td className="p-1">{l.ok ? <span className="text-green-700 font-bold">ส่งแล้ว</span> : <span className="text-red-600">{l.skipped || l.error || 'ไม่สำเร็จ'}</span>}</td><td className="p-1 text-xs text-slate-600 whitespace-pre-wrap max-w-md">{l.preview}</td></tr>)}
+                {!logs.length && <tr><td colSpan="5" className="p-3 text-center text-slate-400">ยังไม่มีประวัติ</td></tr>}</tbody></table></div>
+          </div>
+        </div>
+      );
+    };
+
     // แจ้งเตือนตอนเข้าใช้ (รพ.สต. + แอดมิน) ถ้ายังไม่ผูก LINE — ปิดได้ เตือนครั้งเดียวต่อการเข้าใช้
     const LineLinkPrompt = ({ ctx }) => {
       const u = ctx.currentUser;
@@ -496,7 +607,7 @@
       return (
         <Modal isOpen onClose={close} title="รับแจ้งเตือนผ่าน LINE" maxWidth="max-w-2xl">
           <div className="space-y-4">
-            <p className="text-sm text-slate-600">เชื่อมบัญชีกับ LINE OA ของ Sawee Rxfill เพื่อรับแจ้งเตือน{normalizeUserRole(u.role) === 'admin' ? ' ใบเบิกใหม่ และยาใกล้หมดอายุทุกรายการ (สรุปวันละครั้ง 15:00 น.)' : ' ยาใกล้หมดอายุของ รพ.สต. และผลการจัดยา'}</p>
+            <p className="text-sm text-slate-600">เชื่อมบัญชีกับ LINE OA ของ Sawee Rxfill เพื่อรับแจ้งเตือน{normalizeUserRole(u.role) === 'admin' ? ' ใบเบิกใหม่ และยาใกล้หมดอายุทุกรายการ' : ' ยาใกล้หมดอายุของ รพ.สต. และผลการจัดยา'}</p>
             <LineLinkPanel ctx={ctx} />
             <div className="flex justify-between items-center pt-2 border-t">
               <span className="text-xs text-slate-400">เชื่อมภายหลังได้ที่ "แก้ไขข้อมูลส่วนตัว"</span>
@@ -3940,6 +4051,7 @@ const ViewReqView = ({ ctx }) => {
           await rxTouch('requisitions', req.id); // Bridge แก้เอกสารจากฝั่งเซิร์ฟเวอร์ → แตะเวลาให้แคชทุกเครื่องเห็น
           setInvsPreflight(data);
           ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
+          if (!data.already_sent) notifyLineDispensed(req.id); // v6.9 แจ้ง จนท.รพ.สต. ทาง LINE (ไม่รอผล)
           await ctx.refreshData();
           setShowInvsModal(false);
           if (approveAfterInvs) { setApproveAfterInvs(false); setIsInvsBusy(false); await handleApprove(); return; }
@@ -6470,6 +6582,7 @@ const AdminConfigView = ({ ctx }) => {
       // HOSxP code sync (ย้ายขึ้นมาระดับ AdminConfigView: DrugManager ถูกเรียกเป็นฟังก์ชัน จึงใช้ hook ภายในไม่ได้)
       const [isSyncingHosxp, setIsSyncingHosxp] = useState(false);
       const [showInvsExtras, setShowInvsExtras] = useState(false);
+      const [showInvsMaster, setShowInvsMaster] = useState(false); // v6.9 Sync รายการยาจาก INVS
       const [hosxpSyncDiff, setHosxpSyncDiff] = useState(null); // {toUpdate:[],noChange:[],unmatched:[]} or null
 
       // STEP 1: fetch diff from bridge, show preview modal
@@ -6827,6 +6940,9 @@ const AdminConfigView = ({ ctx }) => {
                  </button>
                  <button onClick={handleSyncHosxpCodes} disabled={isSyncingHosxp} className="bg-purple-100 text-purple-700 border border-purple-200 px-4 py-3 rounded-xl font-bold shrink-0 hover:bg-purple-200 transition disabled:opacity-50" title="ดึงรหัส HOSxP จากตาราง inv_has_his ใน INVS แล้วอัปเดต master_drugs อัตโนมัติ">
                    <i className={`fa-solid ${isSyncingHosxp?'fa-spinner fa-spin':'fa-link'} mr-1`}></i>{isSyncingHosxp?'กำลัง Sync...':'Sync รหัส HOSxP'}
+                 </button>
+                 <button id="invs-master-sync-btn" onClick={()=>setShowInvsMaster(true)} className="bg-indigo-100 text-indigo-800 border border-indigo-200 px-4 py-3 rounded-xl font-bold shrink-0 hover:bg-indigo-200 transition" title="ดึงราคา/ขนาดบรรจุ/หน่วย และยาใหม่จาก INVS (ตรวจก่อนบันทึก)">
+                   <i className="fa-solid fa-cloud-arrow-down mr-1"></i> Sync รายการยาจาก INVS
                  </button>
                  <button onClick={()=>setShowInvsExtras(true)} className="bg-cyan-100 text-cyan-800 border border-cyan-200 px-4 py-3 rounded-xl font-bold shrink-0 hover:bg-cyan-200 transition" title="ดึงคำค้นหาและตำแหน่งยาจาก INVS">
                    <i className="fa-solid fa-location-dot mr-1"></i> คำค้นหา/ตำแหน่ง INVS
@@ -7248,6 +7364,7 @@ const AdminConfigView = ({ ctx }) => {
           )}
 
           {showInvsExtras && <InvsExtrasModal ctx={ctx} onClose={() => setShowInvsExtras(false)} />}
+          {showInvsMaster && <InvsMasterSyncModal ctx={ctx} onClose={() => setShowInvsMaster(false)} />}
           {/* HOSxP Sync Diff Preview Modal */}
           {hosxpSyncDiff && (
             <Modal title="ยืนยัน Sync รหัส HOSxP" isOpen={true} onClose={() => setHosxpSyncDiff(null)} maxWidth="max-w-3xl">
@@ -7402,6 +7519,127 @@ const AdminConfigView = ({ ctx }) => {
       }
     };
 
+
+    // ===== v6.9 Sync รายการยาจาก INVS (ราคา / ขนาดบรรจุ / หน่วย + ยาใหม่) — ดูผลและเลือกก่อนบันทึก =====
+    // หลักเดียวกับ cli/sync_master.php: ไม่ทับชื่อที่แสดง หมวด สถานะ fuzzy รอบจ่าย ตัวคูณ ของยาที่มีอยู่
+    const InvsMasterSyncModal = ({ ctx, onClose }) => {
+      const [busy, setBusy] = useState('');
+      const [plan, setPlan] = useState(null); // { creates, updates, units, total }
+      const [pick, setPick] = useState({});   // drug_id -> true
+      const [tab, setTab] = useState('update');
+      const fetchPlan = async () => {
+        setBusy('fetch');
+        try {
+          const data = await callInvsBridge('invs_master');
+          const byId = new Map(ctx.appDb.drugs.map(d => [String(d.drug_id), d]));
+          const creates = [], updates = [];
+          (data.rows || []).forEach(r => {
+            const id = String(r.drug_id), d = byId.get(id);
+            const price = toNonNegativeNumber(r.price), pack = toNonNegativeNumber(r.pack_size), unit = safeText(r.unit_id);
+            if (!d) { creates.push({ r, id, price, pack: pack > 0 ? pack : 1, unit }); return; }
+            const oldPrice = toNonNegativeNumber(d.price), oldPack = toNonNegativeNumber(d.pack_size), oldUnit = safeText(d.unit_id);
+            const priceChanged = price > 0 && (oldPrice <= 0 || Math.abs(oldPrice - price) >= 0.01);
+            const packChanged = pack > 0 && (oldPack <= 0 || Math.abs(oldPack - pack) >= 0.0001);
+            const unitChanged = unit !== '' && oldUnit !== unit;
+            if (priceChanged || packChanged || unitChanged) updates.push({ r, id, d, price, pack, unit, oldPrice, oldPack, oldUnit, priceChanged, packChanged, unitChanged,
+              pct: priceChanged && oldPrice > 0 ? (price - oldPrice) / oldPrice * 100 : null });
+          });
+          const unitMap = new Map((ctx.appDb.units || []).map(u => [String(u.unit_id), u]));
+          const units = (data.units || []).filter(u => u.unit_id && (!unitMap.has(String(u.unit_id)) || safeText(unitMap.get(String(u.unit_id)).unit_name) !== safeText(u.unit_name)));
+          setPlan({ creates, updates, units, total: (data.rows || []).length });
+          const p = {}; updates.forEach(x => { p[x.id] = true; }); creates.forEach(x => { p[x.id] = true; }); setPick(p);
+          setTab(updates.length ? 'update' : 'create');
+        } catch (e) { ctx.showToast('ดึงรายการยาจาก INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      useEffect(() => { fetchPlan(); }, []);
+      const unitName = (id) => (ctx.appDb.units || []).find(u => String(u.unit_id) === String(id))?.unit_name || (plan?.units || []).find(u => String(u.unit_id) === String(id))?.unit_name || id || '-';
+      const apply = async () => {
+        const fv = firebase.firestore.FieldValue;
+        const ups = plan.updates.filter(x => pick[x.id]), crs = plan.creates.filter(x => pick[x.id]);
+        if (!ups.length && !crs.length && !plan.units.length) return ctx.showToast('ไม่ได้เลือกรายการ', 'error');
+        setBusy('apply');
+        try {
+          const ops = [];
+          plan.units.forEach(u => ops.push({ type: 'set', ref: db.collection('master_unit').doc(String(u.unit_id)), options: { merge: true },
+            data: { unit_id: String(u.unit_id), unit_name: safeText(u.unit_name), invs_su_id_ex: safeText(u.su_id_ex), invs_hide: safeText(u.hide), source: 'INVS', invs_synced_at: fv.serverTimestamp() } }));
+          ups.forEach(x => {
+            const data = { invs_drug_name: safeText(x.r.invs_drug_name), invs_sale_unit: safeText(x.r.unit_name), invs_su_id: x.unit, invs_su_id_ex: safeText(x.r.unit_id_ex),
+              master_sync_source: 'INVS', master_sync_version: 'web-6.9', invs_master_synced_at: fv.serverTimestamp() };
+            if (x.priceChanged) Object.assign(data, { price_previous: x.oldPrice, price: x.price, price_source: 'INVS_LATEST_PRICE', price_invs_last_datetime: safeText(x.r.last_datetime), price_updated_at: fv.serverTimestamp() });
+            if (x.packChanged) Object.assign(data, { pack_size_previous: x.oldPack, pack_size: x.pack, invs_pack_size: x.pack, pack_size_updated_at: fv.serverTimestamp() });
+            if (x.unitChanged) Object.assign(data, { unit_id_previous: x.oldUnit, unit_id: x.unit, unit_updated_at: fv.serverTimestamp() });
+            ops.push({ type: 'update', ref: db.collection('master_drugs').doc(x.id), data });
+          });
+          crs.forEach(x => ops.push({ type: 'set', ref: db.collection('master_drugs').doc(x.id), data: {
+            drug_id: x.id, drug_name: safeText(x.r.invs_drug_name) || x.id, price: x.price, pack_size: x.pack, unit_id: x.unit,
+            status: 'Active', unpacked: false, dispense_step: x.pack, usage_multiplier: 1, fuzzy: '', type: '1', needs_vmi_setup: true, created_source: 'INVS',
+            invs_drug_name: safeText(x.r.invs_drug_name), invs_pack_size: x.pack, invs_sale_unit: safeText(x.r.unit_name), invs_su_id: x.unit, invs_su_id_ex: safeText(x.r.unit_id_ex),
+            master_sync_source: 'INVS', master_sync_version: 'web-6.9', price_source: 'INVS_LATEST_PRICE', price_invs_last_datetime: safeText(x.r.last_datetime),
+            price_updated_at: fv.serverTimestamp(), pack_size_updated_at: fv.serverTimestamp(), unit_updated_at: fv.serverTimestamp(), invs_master_synced_at: fv.serverTimestamp(),
+            schema_version: APP_SCHEMA_VERSION } }));
+          await executeBatchChunks(ops);
+          await writeAuditLog(ctx.currentUser, 'INVS_MASTER_SYNC', 'master_drugs', 'BATCH', { updated: ups.length, created: crs.length, units: plan.units.length });
+          ctx.showToast(`Sync จาก INVS แล้ว: แก้ ${ups.length} · ยาใหม่ ${crs.length}${plan.units.length ? ` · หน่วย ${plan.units.length}` : ''}`);
+          await ctx.refreshData(ctx.currentUser, { forceMaster: true }); onClose();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const list = plan ? (tab === 'update' ? plan.updates : plan.creates) : [];
+      const allOn = list.length > 0 && list.every(x => pick[x.id]);
+      const toggleAll = () => setPick(p => { const n = { ...p }; list.forEach(x => { n[x.id] = !allOn; }); return n; });
+      const money = (v) => toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const chosen = plan ? plan.updates.filter(x => pick[x.id]).length + plan.creates.filter(x => pick[x.id]).length : 0;
+      return (
+        <Modal isOpen onClose={() => !busy && onClose()} title="Sync รายการยาจาก INVS" maxWidth="max-w-6xl">
+          <div className="space-y-4">
+            <p className="text-sm text-slate-500">ดึงราคา / ขนาดบรรจุ / หน่วยล่าสุดจาก INVS และยาใหม่ที่ยังไม่มีในระบบ · <b>ไม่ทับ</b> ชื่อที่แสดง หมวด สถานะ ชื่อพ้อง รอบจ่าย ตัวคูณ ของยาที่มีอยู่ · ติ๊กเฉพาะรายการที่ต้องการแล้วกดบันทึก</p>
+            {busy === 'fetch' && <div className="p-8 text-center text-slate-500"><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังอ่านรายการยาจาก INVS...</div>}
+            {plan && (<>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">ยาใน INVS</div><b className="text-lg">{plan.total.toLocaleString('th-TH')}</b></div>
+                <button onClick={() => setTab('update')} className={`text-left rounded-xl p-3 border ${tab === 'update' ? 'border-indigo-400 bg-indigo-50' : 'bg-white'}`}><div className="text-xs text-slate-500">ราคา/บรรจุ/หน่วยเปลี่ยน</div><b className="text-lg">{plan.updates.length}</b></button>
+                <button onClick={() => setTab('create')} className={`text-left rounded-xl p-3 border ${tab === 'create' ? 'border-indigo-400 bg-indigo-50' : 'bg-white'}`}><div className="text-xs text-slate-500">ยาใหม่ (ยังไม่มีในระบบ)</div><b className="text-lg">{plan.creates.length}</b></button>
+                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">หน่วยนับใหม่/เปลี่ยนชื่อ</div><b className="text-lg">{plan.units.length}</b></div>
+              </div>
+              <div className="overflow-auto max-h-[50vh] border rounded-xl">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100 text-xs sticky top-0"><tr>
+                    <th className="p-2 w-10"><input type="checkbox" checked={allOn} onChange={toggleAll} aria-label="เลือกทั้งหมด" /></th>
+                    <th className="p-2 text-left">รหัส / ชื่อ</th>
+                    {tab === 'update' ? <><th className="p-2 text-right">ราคา/Pack เดิม → ใหม่</th><th className="p-2 text-right">บรรจุ เดิม → ใหม่</th><th className="p-2 text-left">หน่วย เดิม → ใหม่</th></>
+                      : <><th className="p-2 text-right">ราคา/Pack</th><th className="p-2 text-right">บรรจุ</th><th className="p-2 text-left">หน่วย</th></>}
+                  </tr></thead>
+                  <tbody>{list.map(x => (
+                    <tr key={x.id} className={`border-t ${pick[x.id] ? '' : 'opacity-50'} ${x.pct !== null && x.pct !== undefined && Math.abs(x.pct) >= 30 ? 'bg-amber-50' : ''}`}>
+                      <td className="p-2 text-center"><input type="checkbox" checked={!!pick[x.id]} onChange={() => setPick(p => ({ ...p, [x.id]: !p[x.id] }))} /></td>
+                      <td className="p-2"><div className="font-bold">{x.d?.drug_name || x.r.invs_drug_name}</div><div className="text-[11px] font-mono text-slate-400">{x.id}{x.d && safeText(x.r.invs_drug_name) && safeText(x.r.invs_drug_name) !== safeText(x.d.drug_name) ? ` · INVS: ${x.r.invs_drug_name}` : ''}</div></td>
+                      {tab === 'update' ? <>
+                        <td className="p-2 text-right">{x.priceChanged ? <><span className="text-slate-400 line-through">{money(x.oldPrice)}</span> → <b>{money(x.price)}</b>{x.pct !== null && <div className={`text-[11px] font-bold ${Math.abs(x.pct) >= 30 ? 'text-amber-700' : 'text-slate-500'}`}>{x.pct > 0 ? '+' : ''}{x.pct.toFixed(1)}%</div>}</> : <span className="text-slate-300">-</span>}</td>
+                        <td className="p-2 text-right">{x.packChanged ? <><span className="text-slate-400 line-through">{x.oldPack}</span> → <b>{x.pack}</b></> : <span className="text-slate-300">-</span>}</td>
+                        <td className="p-2">{x.unitChanged ? <><span className="text-slate-400 line-through">{unitName(x.oldUnit)}</span> → <b>{unitName(x.unit)}</b></> : <span className="text-slate-300">-</span>}</td>
+                      </> : <>
+                        <td className="p-2 text-right">{x.price > 0 ? money(x.price) : <span className="text-red-500 text-xs">ไม่พบราคา</span>}</td>
+                        <td className="p-2 text-right">{x.pack}</td>
+                        <td className="p-2">{unitName(x.unit)}</td>
+                      </>}
+                    </tr>
+                  ))}{!list.length && <tr><td colSpan="5" className="p-6 text-center text-slate-400">ไม่มีรายการ</td></tr>}</tbody>
+                </table>
+              </div>
+              <p className="text-xs text-slate-500">ราคาเปลี่ยน ≥30% แสดงพื้นเหลือง · ยาใหม่จะถูกสร้างเป็นหมวด "ยา" และติดป้าย "ต้องตั้งค่า VMI" ให้ตรวจหมวด/รอบจ่ายต่อ</p>
+              <div className="flex justify-between items-center gap-2 pt-2 border-t">
+                <button onClick={fetchPlan} disabled={!!busy} className="px-4 py-2 rounded-xl bg-white border font-bold text-slate-600"><i className="fa-solid fa-rotate mr-1"></i>ดึงใหม่</button>
+                <div className="flex gap-2">
+                  <button onClick={onClose} disabled={busy === 'apply'} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ปิด</button>
+                  <button id="invs-master-apply" onClick={apply} disabled={!!busy || (!chosen && !plan.units.length)} className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-40">{busy === 'apply' ? 'กำลังบันทึก...' : `บันทึกที่เลือก (${chosen})`}</button>
+                </div>
+              </div>
+            </>)}
+          </div>
+        </Modal>
+      );
+    };
 
     // ===== v5.8 คำค้นหา / ตำแหน่งยา จาก INVS (อ่านอย่างเดียว) =====
     const InvsExtrasModal = ({ ctx, onClose }) => {
@@ -9654,6 +9892,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentUser?.role === 'admin' && <a href="internal.html" className="w-full text-left p-4 rounded-xl font-bold transition flex items-center hover:bg-slate-800 text-slate-300"><i className="fa-solid fa-prescription-bottle-medical w-6 text-center mr-2"></i> เบิกยาห้องยา/หน่วยงาน</a>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('req_summary')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='req_summary'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-table-list w-6 text-center mr-2"></i> สรุปการเบิก</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('map_dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='map_dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-map-location-dot w-6 text-center mr-2"></i> VMI Map Dashboard</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('line_console')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='line_console'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-brands fa-line w-6 text-center mr-2"></i> LINE Console</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
               
               <div className="border-t border-slate-800 my-2 pt-2"></div>
@@ -9681,6 +9920,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'return_drug' && <ReturnDrugView ctx={ctx} />}
               {currentView === 'map_dashboard' && currentUser?.role === 'admin' && <MapDashboardView ctx={ctx} />}
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
+              {currentView === 'line_console' && currentUser?.role === 'admin' && <LineConsoleView ctx={ctx} />}
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}
               {currentView === 'req_summary' && currentUser?.role === 'admin' && <ReqSummaryView ctx={ctx} />}

@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.7.0';
+const APP_VERSION = '6.7.1';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1094,11 +1094,14 @@ const InternalSignersEditor = (props) => {
     }));
 };
 
+// v6.7.1 รหัสเก่าที่ใช้หยิบของ (master_drugs.old_code) แสดงต่อท้ายในวงเล็บ เช่น 259(013) — แสดงผลอย่างเดียว
+const drugCodeLabel = (id, oldCode) => { const o = safeText(oldCode); return safeText(id) + (o && o !== safeText(id) ? '(' + o + ')' : ''); };
 const buildInternalReqFormHtml = (opts) => {
   const req = opts.req || {};
   const isPharmacy = req.kind === 'pharmacy';
   const types = opts.drugTypes || DEFAULT_DRUG_TYPES;
   const locOf = opts.locOf || function () { return ''; };
+  const oldCodeOf = opts.oldCodeOf || function () { return ''; };
   const esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   const money = function (v) { return toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   const qty = function (q, pack) { const s = formatQty(q, pack); return s === '0' ? '0' : s; };
@@ -1149,7 +1152,7 @@ const buildInternalReqFormHtml = (opts) => {
           '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
           '<td class="r b">' + (blank ? '' : z(disp, money(valueOf(it)))) + '</td>' +
           '<td class="c"></td>' + // คงเหลือ: เว้นให้เขียนในกระดาษ
-          '<td class="c code">' + esc(it.drugId) + '</td>' +
+          '<td class="c code">' + esc(drugCodeLabel(it.drugId, oldCodeOf(it.drugId))) + '</td>' +
           '</tr>';
       }
       return trOpen(li) +
@@ -1162,7 +1165,7 @@ const buildInternalReqFormHtml = (opts) => {
         '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
         '<td class="r b">' + money(valueOf(it)) + '</td>' +
         '<td class="c">' + (isPharmacy ? qty(Math.max(0, toNonNegativeNumber(it.onHand)), pack) : '') + '</td>' +
-        '<td class="c code">' + esc(it.drugId) + '</td>' +
+        '<td class="c code">' + esc(drugCodeLabel(it.drugId, oldCodeOf(it.drugId))) + '</td>' +
         '</tr>';
     }).join('');
     return '<tr class="grp"><td colspan="' + colCount + '"><span>' + esc(types[k] || ('หมวด ' + k)) + '</span><span class="sub">' + (blank ? '' : money(subtotal) + ' บาท') + '</span></td></tr>' + rows;

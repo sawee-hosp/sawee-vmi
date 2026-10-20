@@ -220,11 +220,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.7.0"></script>
+  <script src="shared.js?v=6.7.1"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.7.0';
+      var need = '6.7.1';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -2867,7 +2867,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                           <td className="text-right pr-1 text-slate-500">{isVaccine ? 'ไม่ร่วมระบบเบิก' : <div><div className="font-bold text-slate-700">{formatUnitPrice(item.price)}</div>{masterPriceSource === 'INVS_LATEST_PRICE' && <div className="no-print text-[8px] font-bold text-emerald-600">INVS</div>}{priceChange && <div className="no-print text-[8px] font-bold text-amber-700 whitespace-nowrap">เดิม {formatUnitPrice(priceChange.price)} → {formatUnitPrice(priceChange.current)}</div>}</div>}</td>
                           <td className="text-right pr-1 font-semibold">{isVaccine ? 'ไม่ร่วมระบบเบิก' : (isDisabled || isDiscontinued) ? '0.00' : itemValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                           <td className="text-center">{/* คงเหลือ: เว้นให้เขียนในกระดาษ */}</td>
-                          <td className="text-center font-mono text-gray-600">{item.drugId}</td>
+                          <td className="text-center font-mono text-gray-600">{drugCodeLabel(item.drugId, ctx.findDrug(item.drugId)?.old_code)}</td>
                         </tr>
                       );
                     }); })()}
@@ -4502,7 +4502,7 @@ const ViewReqView = ({ ctx }) => {
                                      <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : isDiscontinued ? drugLockLabelOf(drug, it) : itemValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
                                   </td>
                                   <td></td>
-                                  <td className="text-center font-mono text-gray-600">{it.drugId}</td>
+                                  <td className="text-center font-mono text-gray-600">{drugCodeLabel(it.drugId, ctx.findDrug(it.drugId)?.old_code)}</td>
                                   
                                   {/* ⭐️ ปุ่มลบ (แสดงเฉพาะตอนแก้ไข ไม่แสดงตอนพิมพ์) */}
                                   {canEdit && (
@@ -6498,6 +6498,7 @@ const AdminConfigView = ({ ctx }) => {
              schema_version: APP_SCHEMA_VERSION
            };
            if (hosxpCode) payload.hosxp_code = hosxpCode;
+           payload.old_code = safeText(data.old_code); // v6.7.1 รหัสเก่า (แสดงในใบเบิกอย่างเดียว)
            if (!unpacked && rawDispenseStep > 0 && lockedDispenseStep !== rawDispenseStep) {
              ctx.showToast(`ยานี้ห้ามแตกย่อย: รอบจ่าย ${rawDispenseStep} ถูกปรับเป็น ${lockedDispenseStep} ให้ลงตัวกับ Pack ${packSize}`);
            } else if (maximumRaw > 0 && Math.abs(maximumQty - maximumRaw) > 0.000001) {
@@ -6935,6 +6936,10 @@ const AdminConfigView = ({ ctx }) => {
                         <div className="flex-1">
                           <label className="text-sm font-bold text-slate-600 block mb-1">รหัส HOSxP <span className="text-purple-600 text-[10px]">• auto-sync</span></label>
                           <input name="hosxp_code" defaultValue={editTarget.data.hosxp_code || ''} placeholder="รหัสยาใน HOSxP" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-purple-400" />
+                        </div>
+                        <div className="flex-1">
+                          <label className="text-sm font-bold text-slate-600 block mb-1">รหัสเก่า <span className="text-slate-400 text-[10px]">• ใช้หยิบของ แสดงในวงเล็บ เช่น 259(013)</span></label>
+                          <input name="old_code" defaultValue={editTarget.data.old_code || ''} placeholder="เว้นว่างได้" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-slate-400 font-mono" />
                         </div>
                       </div>
                       <div>
@@ -7383,7 +7388,7 @@ const AdminConfigView = ({ ctx }) => {
         <style>@page{size:A4;margin:12mm}body{font-family:Sarabun,'TH SarabunPSK',sans-serif;font-size:14px}h2{margin:0 0 4px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:4px 6px}th{background:#eee}.loc{font-weight:700;font-size:15px;white-space:nowrap}.r{text-align:right}.chk{width:28px}</style></head><body>
         <h2>ใบจัดยา — ${esc(req.dept_name)}</h2><div>เลขที่ ${esc(req.doc_no || req.id)} · ${rows.length} รายการ · เรียงตามตำแหน่งยา${req.invs_sub_po_no ? ' · INVS ' + esc(req.invs_sub_po_no) : ''}</div><br>
         <table><thead><tr><th class="chk">✓</th><th>ตำแหน่ง</th><th>รหัส</th><th>รายการ</th><th class="r">จำนวน</th><th>หน่วย</th><th>แพ็ค</th></tr></thead><tbody>
-        ${rows.map(it => `<tr><td></td><td class="loc">${esc(it.loc || '-')}</td><td>${esc(it.drugId)}</td><td>${esc(it.name)}</td><td class="r"><b>${toNonNegativeNumber(it.dispenseQty).toLocaleString('th-TH')}</b></td><td>${esc(it.unit)}</td><td>${safePackSize(it.packSize) > 1 ? esc(formatQty(it.dispenseQty, it.packSize)) + ' ×' + safePackSize(it.packSize) : ''}</td></tr>`).join('')}
+        ${rows.map(it => `<tr><td></td><td class="loc">${esc(it.loc || '-')}</td><td>${esc(drugCodeLabel(it.drugId, findDrug(it.drugId)?.old_code))}</td><td>${esc(it.name)}</td><td class="r"><b>${toNonNegativeNumber(it.dispenseQty).toLocaleString('th-TH')}</b></td><td>${esc(it.unit)}</td><td>${safePackSize(it.packSize) > 1 ? esc(formatQty(it.dispenseQty, it.packSize)) + ' ×' + safePackSize(it.packSize) : ''}</td></tr>`).join('')}
         </tbody></table><br><div>ผู้จัดยา ........................................ ผู้ตรวจ ........................................</div>
         <script>window.onload=function(){window.print();}<\/script></body></html>`);
       w.document.close();
@@ -7409,7 +7414,7 @@ const AdminConfigView = ({ ctx }) => {
           }
           await printHtmlDocument(buildInternalReqFormHtml({
             req: { ...req, items: items || req.items }, formNo, formDate, deptName: req.dept_name, drugTypes: ctx.appDb.drugTypes,
-            locOf: (id) => safeText(ctx.findDrug(id)?.invs_location), signers
+            locOf: (id) => safeText(ctx.findDrug(id)?.invs_location), oldCodeOf: (id) => ctx.findDrug(id)?.old_code, signers
           }));
           await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_PRINT', 'internal_requisitions', req.id, { form_no: formNo });
           onClose();

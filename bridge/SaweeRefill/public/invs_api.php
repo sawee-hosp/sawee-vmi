@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.9.5: Stock ID ว่าง = ใช้ default · เขียน sm_po.CONFIRM_DATE (= วันที่เบิก) และ CONFIRM_TIME (เวลาส่ง) ตามชนิดคอลัมน์
  *   v2.9.4: รวม invs_extra_items (รายการส่ง INVS เพิ่ม เช่น น้ำเกลือ ที่ไม่อยู่ใน VMI) เข้าไปตอน preflight/send
  *   v2.9.3: TOTAL_COST = มูลค่ารวม (เดิมบวกราคาต่อหน่วย) · วันที่เบิกรับจากหน้าเว็บ (request_date YYYYMMDD)
  *   v2.9.2: ขอเกิน lot แรกแต่รวมทุก lot ในคลังพอ → ส่งได้ (เตือน) ตัดข้าม lot ตอนยืนยันจ่ายใน INVS
@@ -26,7 +27,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.9.4';
+const BRIDGE_VERSION = '2.9.5';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -399,6 +400,7 @@ function loadExistingDetails(mysqli $db,string $subPoNo): array {
 function generateSubPoNoAndInsertHeader(mysqli $db,array $h): string {
     $year2=str_pad((string)(((int)date('Y')+543)%100),2,'0',STR_PAD_LEFT);
     $prefix=$year2.date('md');
+    [$cDate,$cTime]=confirmDateTimeValues($db,(string)$h['req_date']); // อ่าน information_schema ก่อนล็อกตาราง
     $db->query('LOCK TABLES sm_po WRITE, ms_ivo READ');
     try {
         $max=0;
@@ -415,9 +417,9 @@ function generateSubPoNoAndInsertHeader(mysqli $db,array $h): string {
         $subPoNo=$prefix.str_pad((string)$next,4,'0',STR_PAD_LEFT);
 
         $sql="INSERT INTO sm_po (SUB_PO_NO,DEPT_ID,ACC_NO,TOTAL_ITEM,TOTAL_COST,TOTAL_VALUE,SYSDATE,OK,PROCESS,ERROR_ENTER,ERROR_PROCESS,STOCK_ID,USER_ID,SUB_PO_DATE,CONFIRM_FLAG,PRIOR_FLAG,R_S_STATUS,SEND_FLAG,PRINT_FLAG,MOD_SYS,REF_NO,SUB_PO_UNO,CONFIRM_DATE,CONFIRM_TIME,DIST_TYPE,REQ_INTER,CFM_INTER)
-              VALUES (?,?,NULL,?,?,?,NOW(),NULL,NULL,NULL,NULL,?,?,?,'N',NULL,'R','N',NULL,?,?,NULL,NULL,NULL,NULL,'N','N')";
+              VALUES (?,?,NULL,?,?,?,NOW(),NULL,NULL,NULL,NULL,?,?,?,'N',NULL,'R','N',NULL,?,?,NULL,?,?,NULL,'N','N')";
         $st=$db->prepare($sql);
-        $st->bind_param('ssdddsssss',$subPoNo,$h['dept_id'],$h['total_item'],$h['total_cost'],$h['total_value'],$h['stock_id'],$h['user_id'],$h['req_date'],$h['mod_sys'],$h['marker']);
+        $st->bind_param('ssdddsssssss',$subPoNo,$h['dept_id'],$h['total_item'],$h['total_cost'],$h['total_value'],$h['stock_id'],$h['user_id'],$h['req_date'],$h['mod_sys'],$h['marker'],$cDate,$cTime);
         $st->execute(); $st->close();
         $db->query('UNLOCK TABLES');
         return $subPoNo;
@@ -440,6 +442,25 @@ function pickRequestDate($v): string {
     }
     return date('Ymd');
 }
+// v2.9.5 รูปแบบค่าตามชนิดคอลัมน์จริงของ INVS (date/datetime/time หรือ char)
+function invsColumnType(mysqli $db,string $table,string $col): array {
+    $st=$db->prepare("SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=? LIMIT 1");
+    $st->bind_param('ss',$table,$col); $st->execute(); $r=$st->get_result()->fetch_assoc(); $st->close();
+    return ['type'=>strtolower((string)($r['DATA_TYPE'] ?? '')),'len'=>(int)($r['CHARACTER_MAXIMUM_LENGTH'] ?? 0)];
+}
+// CONFIRM_DATE = วันที่เบิก (YYYYMMDD จากหน้าเว็บ) · CONFIRM_TIME = เวลาที่ส่ง
+function confirmDateTimeValues(mysqli $db,string $reqDateYmd): array {
+    $d=invsColumnType($db,'sm_po','CONFIRM_DATE'); $t=invsColumnType($db,'sm_po','CONFIRM_TIME');
+    $ts=strtotime(substr($reqDateYmd,0,4).'-'.substr($reqDateYmd,4,2).'-'.substr($reqDateYmd,6,2)) ?: time();
+    if (in_array($d['type'],['date','datetime','timestamp'],true)) $date=date('Y-m-d',$ts).($d['type']==='date' ? '' : ' '.date('H:i:s'));
+    elseif ($d['type']==='') $date=null;
+    else $date=($d['len']>0 && $d['len']<8) ? null : date('Ymd',$ts);
+    if ($t['type']==='time') $time=date('H:i:s');
+    elseif (in_array($t['type'],['datetime','timestamp'],true)) $time=date('Y-m-d H:i:s');
+    elseif ($t['type']==='') $time=null;
+    else $time=($t['len']>0 && $t['len']<8) ? ($t['len']>=5 ? date('H:i') : date('Hi')) : date('H:i:s');
+    return [$date,$time];
+}
 function buildPreflight(mysqli $db,array $config,array $req,array $hospital,string $reqDate=''): array {
     $status=cleanText($req['status'] ?? '');
     if (strtoupper(cleanText($req['invs_status'] ?? ''))==='SENT' || cleanText($req['invs_sub_po_no'] ?? '')!=='') {
@@ -449,8 +470,10 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
     if (!in_array($status,['Pending','Draft','Completed'],true)) throw new RuntimeException("ใบเบิกสถานะ {$status} ไม่พร้อมส่งเข้า INVS");
     $deptId=cleanText($hospital['invs_dept_id'] ?? '');
     if ($deptId==='') throw new RuntimeException('หน่วยเบิกนี้ยังไม่ได้ตั้งค่า INVS Dept ID (Admin > รพ.สต. หรือ Admin > หน่วยงาน/ห้องยา)');
-    $stockId=cleanText($hospital['invs_stock_id'] ?? cfg($config,'invs','default_stock_id','10'));
-    if ($stockId==='') throw new RuntimeException('ยังไม่ได้ตั้งค่า INVS Stock ID');
+    // v2.9.5 ช่อง Stock ID ว่าง (เคยบันทึกจากฟอร์มเป็น "") = ใช้ค่า default ใน config เหมือนไม่ได้ตั้ง
+    $stockId=cleanText($hospital['invs_stock_id'] ?? '');
+    if ($stockId==='') $stockId=cleanText(cfg($config,'invs','default_stock_id','10'));
+    if ($stockId==='') throw new RuntimeException('ยังไม่ได้ตั้งค่า INVS Stock ID (และไม่มี invs.default_stock_id ใน config)');
     $dept=validateDept($db,$deptId); $stock=validateDept($db,$stockId);
     $warnings=[]; $errors=[]; $lines=[];
     if ($status==='Completed') $warnings[]='ใบนี้บันทึกจัดยาแล้วใน Sawee VMI — ส่งเข้า INVS ย้อนหลัง (ไม่เปลี่ยนสถานะ/สต๊อกใน Sawee VMI)';

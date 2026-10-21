@@ -6136,7 +6136,8 @@ const MapDashboardView = ({ ctx }) => {
                 { header: 'ชื่อ รพ.สต.', className: 'p-4 font-bold text-slate-800', cell: h => h.hospital_name },
                 { header: 'INVS Dept', className: 'p-4 font-mono font-bold text-cyan-700', cell: h => h.invs_dept_id || '-' },
                 { header: 'INVS Stock', className: 'p-4 font-mono text-slate-600', cell: h => h.invs_stock_id || '10' },
-                { header: 'hcode', className: 'p-4 font-mono text-emerald-700', cell: h => h.hcode || <span className="text-slate-300">-</span> }
+                { header: 'hcode', className: 'p-4 font-mono text-emerald-700', cell: h => h.hcode || <span className="text-slate-300">-</span> },
+                { header: 'ขนาด', className: 'p-4 font-black text-center', cell: h => h.rpst_size || <span className="text-slate-300">-</span> }
               ]}
               onEdit={h => setEditTarget({ col: 'master_hospitals', data: h, isNew: false })}
               onDelete={h => ctx.setConfirmDialog({title:'ยืนยันลบข้อมูล', message:`คุณต้องการลบ ${h.hospital_name} ใช่หรือไม่?`, onConfirm: ()=>executeDelete('master_hospitals', h.hospital_id), iconColor:'text-red-500', confirmBtnClass:'bg-red-500 hover:bg-red-600'})}
@@ -6855,6 +6856,7 @@ const AdminConfigView = ({ ctx }) => {
            };
            if (hosxpCode) payload.hosxp_code = hosxpCode;
            payload.old_code = safeText(data.old_code); // v6.7.1 รหัสเก่า (แสดงในใบเบิกอย่างเดียว)
+           payload.rpst_sizes = ['S','M','L'].filter(k => data['rpst_size_' + k]); // v6.9 กรอบบัญชียา รพ.สต. ขนาด S/M/L
            if (!unpacked && rawDispenseStep > 0 && lockedDispenseStep !== rawDispenseStep) {
              ctx.showToast(`ยานี้ห้ามแตกย่อย: รอบจ่าย ${rawDispenseStep} ถูกปรับเป็น ${lockedDispenseStep} ให้ลงตัวกับ Pack ${packSize}`);
            } else if (maximumRaw > 0 && Math.abs(maximumQty - maximumRaw) > 0.000001) {
@@ -6870,7 +6872,7 @@ const AdminConfigView = ({ ctx }) => {
           await batch.commit();
           ctx.showToast('อัปเดตหมวดหมู่สำเร็จ'); await ctx.refreshData(); setEditTarget(null); return;
         } else if (editTarget.col === 'master_hospitals') {
-           docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation, invs_dept_id: safeText(data.invs_dept_id), invs_stock_id: safeText(data.invs_stock_id), hcode: safeText(data.hcode) };
+           docId = data.hospital_id; payload = { hospital_id: data.hospital_id, hospital_name: data.hospital_name, affiliation: data.affiliation, invs_dept_id: safeText(data.invs_dept_id), invs_stock_id: safeText(data.invs_stock_id), hcode: safeText(data.hcode), rpst_size: ['S','M','L'].includes(data.rpst_size) ? data.rpst_size : '' };
         } else if (editTarget.col === 'users') {
           docId = editTarget.data.id;
           payload = {
@@ -7301,6 +7303,10 @@ const AdminConfigView = ({ ctx }) => {
                           <input name="old_code" defaultValue={editTarget.data.old_code || ''} placeholder="เว้นว่างได้" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-slate-400 font-mono" />
                         </div>
                       </div>
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-sm font-bold text-slate-600 mb-1">กรอบบัญชียา รพ.สต. (ขนาดที่มีรายการนี้)</div>
+                        <div className="flex gap-4">{['S','M','L'].map(k => <label key={k} className="flex items-center gap-2 font-bold"><input type="checkbox" name={'rpst_size_' + k} defaultChecked={(editTarget.data.rpst_sizes || []).includes(k)} className="w-4 h-4" />{k}</label>)}</div>
+                      </div>
                       <div>
                         <label className="text-sm font-bold text-slate-600 block mb-1">ชื่อยา</label>
                         <input name="drug_name" defaultValue={editTarget.data.drug_name} placeholder="ชื่อยา" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
@@ -7436,6 +7442,12 @@ const AdminConfigView = ({ ctx }) => {
                         <select name="affiliation" defaultValue={editTarget.data.affiliation || 'SSO'} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
                            <option value="SSO">สสอ. (สาธารณสุขอำเภอ)</option>
                            <option value="OPT">อปท. (องค์การบริหารส่วนท้องถิ่น)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-sm font-bold text-slate-600 block mb-1">ขนาด รพ.สต.</label>
+                        <select name="rpst_size" defaultValue={editTarget.data.rpst_size || ''} className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
+                          <option value="">— ไม่ระบุ —</option><option value="S">S</option><option value="M">M</option><option value="L">L</option>
                         </select>
                       </div>
                       <div>

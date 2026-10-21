@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.10.0: action invs_master (รายการยา/ราคา/pack/หน่วยจาก INVS ให้หน้าเว็บเทียบและเลือกบันทึก)
  *   v2.9.5: Stock ID ว่าง = ใช้ default · เขียน sm_po.CONFIRM_DATE (= วันที่เบิก) และ CONFIRM_TIME (เวลาส่ง) ตามชนิดคอลัมน์
  *   v2.9.4: รวม invs_extra_items (รายการส่ง INVS เพิ่ม เช่น น้ำเกลือ ที่ไม่อยู่ใน VMI) เข้าไปตอน preflight/send
  *   v2.9.3: TOTAL_COST = มูลค่ารวม (เดิมบวกราคาต่อหน่วย) · วันที่เบิกรับจากหน้าเว็บ (request_date YYYYMMDD)
@@ -27,7 +28,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.9.5';
+const BRIDGE_VERSION = '2.10.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -598,7 +599,7 @@ $raw=(string)file_get_contents('php://input');
 $body=json_decode($raw,true);
 if (!is_array($body)) respondError('JSON_INVALID','Request body ต้องเป็น JSON',400);
 $action=cleanText($body['action'] ?? '');
-if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
+if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
 
 // ----------------------------- list_depts (READ-ONLY) -----------------------------
 if ($action==='list_depts') {
@@ -809,6 +810,151 @@ if ($action==='invs_discover') {
         }
         $db->close();
         respond(['ok'=>true,'action'=>'invs_discover','candidates'=>$cols,'probe_value'=>$probe,'probe_hits'=>$hits,'bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
+        respondError('BRIDGE_ERROR',$e->getMessage(),500);
+    }
+}
+
+// ----------------------------- invs_master (READ-ONLY) -----------------------------
+// v2.10.0 รายการยาจาก INVS (drug_gn + ราคาล่าสุด + pack + หน่วย) ให้หน้าเว็บเทียบกับ master_drugs แล้วแอดมินเลือกบันทึกเอง
+// ใช้ SQL เดียวกับ cli/sync_master.php
+function invsMasterUnitJoin(mysqli $db): string {
+    $cols=[]; $st=$db->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='drug_gn'");
+    $st->execute(); $res=$st->get_result(); while ($r=$res->fetch_assoc()) $cols[strtoupper((string)$r['COLUMN_NAME'])]=(string)$r['COLUMN_NAME']; $st->close();
+    $q=fn($x)=>'`'.str_replace('`','``',$x).'`';
+    foreach ([['SU_ID','id'],['SALE_UNIT_ID','id'],['UNIT_ID','id'],['SU_ID_EX','external'],['SALE_UNIT','name']] as [$c,$mode]) {
+        if (!isset($cols[$c])) continue; $a=$cols[$c];
+        if ($mode==='id') return "LEFT JOIN sale_unit su ON su.SU_ID = g.".$q($a);
+        if ($mode==='external') return "LEFT JOIN sale_unit su ON TRIM(su.SU_ID_EX) = TRIM(g.".$q($a).")";
+        return "LEFT JOIN sale_unit su ON su.SU_ID = (SELECT MIN(su2.SU_ID) FROM sale_unit su2 WHERE TRIM(su2.SALE_UNIT)=TRIM(g.".$q($a)."))";
+    }
+    throw new RuntimeException('ไม่พบคอลัมน์หน่วยใน drug_gn (SU_ID / SALE_UNIT_ID / UNIT_ID / SU_ID_EX / SALE_UNIT)');
+}
+function invsMasterSql(string $unitJoin): string {
+    return <<<SQL
+SELECT
+    TRIM(g.WORKING_CODE) AS drug_id,
+    g.DRUG_NAME AS invs_drug_name,
+    CAST(su.SU_ID AS CHAR) AS unit_id,
+    su.SALE_UNIT AS unit_name,
+    su.SU_ID_EX AS unit_id_ex,
+
+    COALESCE(
+        NULLIF((
+            SELECT pr2.PACK_RATIO
+            FROM pack_ratio pr2
+            WHERE TRIM(pr2.WORKING_CODE)=TRIM(g.WORKING_CODE)
+              AND (pr2.HIDE IS NULL OR TRIM(pr2.HIDE) NOT IN ('Y','1'))
+              AND pr2.PACK_RATIO IS NOT NULL AND pr2.PACK_RATIO > 0
+            ORDER BY CASE WHEN pr2.LAST_BUY IS NULL THEN 1 ELSE 0 END,
+                     pr2.LAST_BUY DESC,
+                     pr2.PACK_RATIO DESC
+            LIMIT 1
+        ),0),
+        NULLIF(lc.ACTIVE_PACK,0),
+        NULLIF(st.stock_pack_ratio,0),
+        1
+    ) AS pack_size,
+
+    ROUND(
+        CASE
+            WHEN lc.VALUE IS NOT NULL AND lc.VALUE > 0
+                 AND lc.ACTIVE_QTY IS NOT NULL AND lc.ACTIVE_QTY > 0
+                 AND lc.ACTIVE_PACK IS NOT NULL AND lc.ACTIVE_PACK > 0
+                THEN (lc.VALUE / lc.ACTIVE_QTY) * lc.ACTIVE_PACK
+            WHEN lc.PACK_COST IS NOT NULL AND lc.PACK_COST > 0
+                THEN lc.PACK_COST
+            WHEN lc.VALUE IS NOT NULL AND lc.VALUE > 0
+                 AND lc.ACTIVE_PACK IS NOT NULL AND lc.ACTIVE_PACK > 0
+                THEN (lc.VALUE / lc.ACTIVE_PACK)
+            WHEN pr.BUY_UNIT_COST IS NOT NULL AND pr.BUY_UNIT_COST > 0
+                THEN pr.BUY_UNIT_COST
+            WHEN lc.COST IS NOT NULL AND lc.COST > 0
+                THEN lc.COST * COALESCE(NULLIF(lc.ACTIVE_PACK,0),NULLIF(pr.PACK_RATIO,0),NULLIF(st.stock_pack_ratio,0),1)
+            WHEN st.stock_lot_cost IS NOT NULL AND st.stock_lot_cost > 0
+                THEN st.stock_lot_cost
+            WHEN any_c.PACK_COST IS NOT NULL AND any_c.PACK_COST > 0
+                THEN any_c.PACK_COST
+            WHEN any_c.COST IS NOT NULL AND any_c.COST > 0
+                THEN any_c.COST * COALESCE(NULLIF(any_c.ACTIVE_PACK,0),NULLIF(pr.PACK_RATIO,0),NULLIF(st.stock_pack_ratio,0),1)
+            WHEN g.LAST_BUY_COST IS NOT NULL AND g.LAST_BUY_COST > 0
+                THEN g.LAST_BUY_COST * COALESCE(NULLIF(pr.PACK_RATIO,0),NULLIF(st.stock_pack_ratio,0),1)
+            ELSE 0
+        END, 2
+    ) AS price,
+
+    COALESCE(lc.OPERATE_DATE, pr.LAST_BUY, any_c.OPERATE_DATE) AS last_datetime
+
+FROM drug_gn g
+{$unitJoin}
+
+LEFT JOIN (
+    SELECT c1.*
+    FROM card c1
+    INNER JOIN (
+        SELECT TRIM(WORKING_CODE) AS WORKING_CODE, MAX(RECORD_NUMBER) AS max_rec_id
+        FROM card
+        WHERE (CANCEL_FLAG IS NULL OR TRIM(CANCEL_FLAG) NOT IN ('Y','1'))
+          AND TRIM(R_S_STATUS)='R'
+          AND ((VALUE IS NOT NULL AND VALUE>0) OR (PACK_COST IS NOT NULL AND PACK_COST>0) OR (COST IS NOT NULL AND COST>0))
+        GROUP BY TRIM(WORKING_CODE)
+    ) c2 ON c1.RECORD_NUMBER=c2.max_rec_id AND TRIM(c1.WORKING_CODE)=c2.WORKING_CODE
+) lc ON TRIM(g.WORKING_CODE)=lc.WORKING_CODE
+
+LEFT JOIN (
+    SELECT TRIM(WORKING_CODE) AS WORKING_CODE,
+           MAX(NULLIF(LOT_COST,0)) AS stock_lot_cost,
+           MAX(NULLIF(PACK_RATIO,0)) AS stock_pack_ratio
+    FROM inv_md_c
+    GROUP BY TRIM(WORKING_CODE)
+) st ON TRIM(g.WORKING_CODE)=st.WORKING_CODE
+
+LEFT JOIN (
+    SELECT c1.*
+    FROM card c1
+    INNER JOIN (
+        SELECT TRIM(WORKING_CODE) AS WORKING_CODE, MAX(RECORD_NUMBER) AS max_rec_id
+        FROM card
+        WHERE (CANCEL_FLAG IS NULL OR TRIM(CANCEL_FLAG) NOT IN ('Y','1'))
+          AND ((PACK_COST IS NOT NULL AND PACK_COST>0) OR (COST IS NOT NULL AND COST>0) OR (VALUE IS NOT NULL AND VALUE>0))
+        GROUP BY TRIM(WORKING_CODE)
+    ) c2 ON c1.RECORD_NUMBER=c2.max_rec_id AND TRIM(c1.WORKING_CODE)=c2.WORKING_CODE
+) any_c ON TRIM(g.WORKING_CODE)=any_c.WORKING_CODE
+
+LEFT JOIN (
+    SELECT TRIM(WORKING_CODE) AS WORKING_CODE,
+           MAX(BUY_UNIT_COST) AS BUY_UNIT_COST,
+           MAX(NULLIF(PACK_RATIO,0)) AS PACK_RATIO,
+           MAX(LAST_BUY) AS LAST_BUY
+    FROM pack_ratio
+    WHERE (HIDE IS NULL OR TRIM(HIDE) NOT IN ('Y','1'))
+      AND ((BUY_UNIT_COST IS NOT NULL AND BUY_UNIT_COST>0) OR (PACK_RATIO IS NOT NULL AND PACK_RATIO>0))
+    GROUP BY TRIM(WORKING_CODE)
+) pr ON TRIM(g.WORKING_CODE)=pr.WORKING_CODE
+
+WHERE (g.HIDE IS NULL OR TRIM(g.HIDE) NOT IN ('Y','1'))
+ORDER BY TRIM(g.WORKING_CODE) ASC
+SQL;
+}
+
+if ($action==='invs_master') {
+    $admin=requireAdmin($config,$body);
+    try {
+        $db=connectDb($config);
+        $units=[]; $res=$db->query("SELECT SU_ID, SALE_UNIT, HIDE, SU_ID_EX FROM sale_unit ORDER BY SU_ID");
+        while ($r=$res->fetch_assoc()) $units[]=['unit_id'=>cleanText((string)$r['SU_ID']),'unit_name'=>cleanText($r['SALE_UNIT'] ?? ''),'su_id_ex'=>cleanText($r['SU_ID_EX'] ?? ''),'hide'=>cleanText($r['HIDE'] ?? '')];
+        $res->free();
+        $rows=[]; $res=$db->query(invsMasterSql(invsMasterUnitJoin($db)));
+        while ($r=$res->fetch_assoc()) {
+            $id=cleanText($r['drug_id'] ?? ''); if ($id==='') continue;
+            $rows[]=['drug_id'=>$id,'invs_drug_name'=>cleanText($r['invs_drug_name'] ?? ''),'unit_id'=>cleanText((string)($r['unit_id'] ?? '')),
+                'unit_name'=>cleanText($r['unit_name'] ?? ''),'unit_id_ex'=>cleanText($r['unit_id_ex'] ?? ''),
+                'pack_size'=>finiteNumber($r['pack_size'] ?? 0),'price'=>finiteNumber($r['price'] ?? 0),'last_datetime'=>cleanText((string)($r['last_datetime'] ?? ''))];
+        }
+        $res->free(); $db->close();
+        logBridge($config,'INFO','INVS_MASTER',['admin_uid'=>$admin['uid'],'rows'=>count($rows)]);
+        respond(['ok'=>true,'action'=>'invs_master','rows'=>$rows,'units'=>$units,'bridge_version'=>BRIDGE_VERSION]);
     } catch (Throwable $e) {
         if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
         respondError('BRIDGE_ERROR',$e->getMessage(),500);

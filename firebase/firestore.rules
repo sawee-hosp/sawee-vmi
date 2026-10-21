@@ -129,6 +129,16 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
+    // v6.9 LINE: บันทึกการส่ง/โควตา — เขียนได้เฉพาะเซิร์ฟเวอร์ (service account) แอดมินอ่านได้
+    match /line_logs/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /line_meta/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     match /master_drugs/{docId} {
       allow read: if isActiveUser();
 

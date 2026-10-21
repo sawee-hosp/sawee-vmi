@@ -382,10 +382,14 @@
       const [signers, setSigners] = useState(() => internalSignersFor(req, (ctx.reqs.filter(r => r.id !== req.id && Array.isArray(r.sign_people))
         .sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people));
       const [busy, setBusy] = useState(false);
+      // v6.9 วันที่ในใบ: ผู้เบิกแก้ไม่ได้ (ล็อก) · แอดมินแก้ได้จนกว่าจะส่ง INVS
+      const dateLocked = !ctx.isAdmin || !!req.invs_sub_po_no;
       const doPrint = async () => {
         setBusy(true);
         try {
           let changed = false;
+          try { await db.collection('internal_requisitions').doc(req.id).update({ printed_at: firebase.firestore.FieldValue.serverTimestamp(), printed_by_name: safeText(ctx.currentUser?.name), print_count: firebase.firestore.FieldValue.increment(1) }); changed = true; }
+          catch (e) { /* ผู้เบิกอาจไม่มีสิทธิ์เขียนใบที่อนุมัติแล้ว — พิมพ์ต่อได้ */ }
           if (formNo !== safeText(req.form_no) || formDate !== safeText(req.form_date)) {
             try { await db.collection('internal_requisitions').doc(req.id).update({ form_no: safeText(formNo), form_date: formDate, fiscal_year: fiscalYearBEOfYmd(formDate) }); changed = true; }
             catch (e) { /* ใบที่อนุมัติแล้วผู้เบิกแก้ไม่ได้ — ใช้ค่าที่แก้เฉพาะการพิมพ์ครั้งนี้ */ }
@@ -410,8 +414,8 @@
             <label className="block"><span className="text-sm font-bold text-slate-600">เลขที่</span>
               <input id="form-no" value={formNo} onChange={e => setFormNo(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl font-mono" /></label>
             <label className="block"><span className="text-sm font-bold text-slate-600">วันที่</span>
-              <input id="form-date" type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl" />
-              <span className="text-xs text-slate-500">{thaiDateLong(formDate)}</span></label>
+              <input id="form-date" type="date" value={formDate} disabled={dateLocked} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl disabled:bg-slate-100 disabled:text-slate-500" />
+              <span className="text-xs text-slate-500">{thaiDateLong(formDate)}{dateLocked && <span className="ml-2"><i className="fa-solid fa-lock mr-1"></i>{ctx.isAdmin ? 'ส่ง INVS แล้ว แก้วันที่ไม่ได้' : 'วันที่ล็อกไว้ — แก้ได้เฉพาะห้องยา (ก่อนส่ง INVS)'}</span>}</span></label>
             <InternalSignersEditor value={signers} onChange={setSigners} />
             <p className="text-xs text-slate-500">เลขที่สร้างอัตโนมัติ = ลำดับใบของหน่วยงานในปีงบประมาณ / ปีงบ (พ.ศ.) แก้ได้ก่อนพิมพ์</p>
             <div className="flex justify-end gap-2">
@@ -614,7 +618,11 @@
 
     const DeptReqView = ({ ctx, editReq, round, onDone }) => {
       const [template] = useState(() => editReq ? null : lastDeptTemplate(ctx));
+      // v6.9 ใบเบิกด่วนของรอบนี้ที่ยังไม่รวม → รวมยอดเข้าใบเบิกจริง
+      const urgentRoundId = round?.id || editReq?.round_id || '';
+      const [urgentDocs] = useState(() => urgentRoundId ? (ctx.urgents || []).filter(u => u.status === 'Active' && u.round_id === urgentRoundId) : []);
       const [items, setItems] = useState(() => {
+        const merged = (() => {
         if (editReq) return (editReq.items || []).map(it => { const d = ctx.drugById.get(String(it.drugId)); return { ...it, isDiscontinued: d ? isDrugDiscontinuedAll(d) : !!it.discontinuedAll }; });
         if (!template) return [];
         // โครงจากใบล่าสุด: ข้อมูลยาอัปเดตจาก master, จำนวนเริ่มที่ 0 ให้กรอกเอง
@@ -625,6 +633,20 @@
           const lastQty = toNonNegativeNumber(it.requestQty ?? it.dispenseQty);
           return { ...base, requestQty: 0, dispenseQty: 0, note: '', source: 'template', lastQty, requestMode: it.requestMode || defaultRequestMode(lastQty, safePackSize(base.packSize)) };
         }).filter(Boolean);
+        })();
+        urgentDocs.forEach(u => (u.items || []).forEach(ui => {
+          const q = toNonNegativeNumber(ui.requestQty); if (!q) return;
+          const idx = merged.findIndex(it => String(it.drugId) === String(ui.drugId));
+          if (idx >= 0) {
+            const it = merged[idx]; const nq = toNonNegativeNumber(it.requestQty) + q;
+            merged[idx] = { ...it, requestQty: nq, dispenseQty: nq, urgentQty: toNonNegativeNumber(it.urgentQty) + q, requestMode: defaultRequestMode(nq, safePackSize(it.packSize)) };
+          } else {
+            const drug = ctx.drugById.get(String(ui.drugId));
+            const base = drug ? baseItemFromDrug(ctx, drug) : { drugId: String(ui.drugId), name: ui.name, unit: ui.unit, packSize: ui.packSize, price: ui.price, type: ui.type };
+            merged.push({ ...base, requestQty: q, dispenseQty: q, urgentQty: q, note: '', source: 'urgent', requestMode: defaultRequestMode(q, safePackSize(base.packSize)) });
+          }
+        }));
+        return merged.map(it => it.urgentQty ? { ...it, note: it.note || `รวมเบิกด่วน ${fmtNum(it.urgentQty)} ${it.unit || ''}`.trim() } : it);
       });
       const [note, setNote] = useState(editReq?.note || '');
       const [urgent, setUrgent] = useState(!!editReq?.urgent);
@@ -703,7 +725,11 @@
             setSaving(true);
             try {
               const clean = valid.map(({ lastQty, ...it }) => ({ ...it, source: it.source === 'template' ? 'template' : (it.source || 'manual'), requestQty: toNonNegativeNumber(it.requestQty), dispenseQty: toNonNegativeNumber(it.requestQty), note: safeText(it.note) }));
-              await saveInternalReq({ ctx, editReq, round, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent } });
+              const savedId = await saveInternalReq({ ctx, editReq, round, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent, ...(urgentDocs.length ? { urgent_ids: urgentDocs.map(u => u.id).concat(editReq?.urgent_ids || []) } : {}) } });
+              for (const u of urgentDocs) {
+                try { await db.collection('internal_urgent').doc(u.id).update({ status: 'Merged', merged_req_id: savedId, merged_req_no: safeText(editReq?.form_no || (round ? roundFormNo(round) : '')), merged_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() }); }
+                catch (e) { console.warn('merge urgent', e); }
+              }
               ctx.showToast(editReq ? 'ส่งใบเบิกที่แก้ไขแล้ว' : 'ส่งใบเบิกแล้ว รอห้องยาตรวจสอบ');
               rxTaskDone('int_search');
               await ctx.reload();
@@ -733,6 +759,12 @@
           {hasPendingOther && !editReq && (
             <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm">
               <i className="fa-solid fa-circle-info mr-2"></i>มีใบเบิกของหน่วยงานนี้ที่ยังรอตรวจสอบอยู่ — ถ้าลืมยา สามารถแก้ไขใบเดิมได้ที่เมนู "ใบเบิกของฉัน"
+            </div>
+          )}
+
+          {urgentDocs.length > 0 && (
+            <div id="urgent-merge-banner" className="bg-red-50 border border-red-200 text-red-800 rounded-xl px-4 py-3 text-sm">
+              <i className="fa-solid fa-truck-medical mr-2"></i>รวมยอดจากใบเบิกด่วน {urgentDocs.length} ใบของรอบนี้เข้าในรายการแล้ว (ดูหมายเหตุ "รวมเบิกด่วน" ในแต่ละรายการ) — เมื่อส่งใบเบิก ใบเบิกด่วนจะถูกปิดเป็น "รวมเข้าใบเบิกแล้ว"
             </div>
           )}
 
@@ -1636,10 +1668,16 @@ ORDER BY d.name`;
             </table>
           </div>
           {req.note && <div className="mt-3 text-sm text-slate-600"><b>หมายเหตุ:</b> {req.note}</div>}
+          {req.status !== 'Cancelled' && <div id="req-print-box" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="text-sm text-slate-600">
+              <div><b>วันที่ในใบเบิก:</b> {thaiDateLong(safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at))}{(!ctx.isAdmin || req.invs_sub_po_no) && <i className="fa-solid fa-lock ml-2 text-slate-400" title="ล็อกแล้ว"></i>}</div>
+              <div className="text-xs text-slate-500">{req.printed_at ? `พิมพ์ล่าสุด ${formatAppDateTime(req.printed_at)}${req.printed_by_name ? ' โดย ' + req.printed_by_name : ''}` : 'ยังไม่เคยพิมพ์'}</div>
+            </div>
+            <button id="req-print-main" onClick={() => onPrint(req)} className="px-5 py-2.5 rounded-xl bg-slate-800 text-white font-bold"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบเบิก</button>
+          </div>}
           <div className="flex flex-wrap justify-end gap-2 mt-5">
             {canEdit && req.status === 'Draft' && <button id="req-draft-del" onClick={() => ctx.setConfirmDialog({ title: 'ลบใบรอส่งนี้?', message: 'ลบแล้วเลือกรอบเบิกและดึงยอดใช้ใหม่ได้', icon: 'fa-trash-can', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-500 hover:bg-red-600', confirmText: 'ลบใบรอส่ง', onConfirm: async () => { try { await cancelDraftReq(ctx, req.id); ctx.showToast('ลบใบรอส่งแล้ว'); await ctx.reload(); onClose(); } catch (e) { ctx.showToast(e.message, 'error'); } } })} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50"><i className="fa-solid fa-trash-can mr-2"></i>ลบใบรอส่ง / เริ่มใหม่</button>}
             {canEdit && req.status !== 'Draft' && <button onClick={cancelReq} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50"><i className="fa-solid fa-ban mr-2"></i>ยกเลิกใบ</button>}
-            <button onClick={() => onPrint(req)} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold"><i className="fa-solid fa-print mr-2"></i>พิมพ์</button>
             {canEdit && <button onClick={() => onEdit(req)} className="px-5 py-2 rounded-xl bg-teal-600 text-white font-bold"><i className="fa-solid fa-pen mr-2"></i>{req.status === 'Rejected' ? 'แก้ไขและส่งใหม่' : 'แก้ไขใบเบิก'}</button>}
           </div>
         </Modal>
@@ -1694,6 +1732,194 @@ ORDER BY d.name`;
             </table>
           </div>
           {openReq && <ReqDetailModal ctx={ctx} req={openReq} onClose={() => setOpen(null)} onEdit={(r) => { setOpen(null); onEdit(r); }} onPrint={onPrint} />}
+        </div>
+      );
+    };
+
+    // ===== v6.9 เบิกยาด่วน (ล่วงหน้า) — ผูกกับรอบเบิกที่ยังไม่ยืนยันจ่าย แล้วรวมยอดเข้าใบเบิกจริงของรอบนั้น =====
+    const urgentRoundsFor = (ctx) => {
+      const today = toYmd(new Date());
+      const doneRound = (r) => ctx.reqs.some(q => q.round_id === r.id && (q.status === 'Completed' || q.invs_sub_po_no));
+      return ctx.rounds.filter(r => !doneRound(r) && String(r.round_date) >= toYmd(new Date(Date.now() - 45 * 86400000)))
+        .sort((a, b) => String(a.round_date).localeCompare(String(b.round_date)))
+        .map(r => ({ ...r, upcoming: String(r.round_date) >= today }));
+    };
+    const buildUrgentFormHtml = ({ doc, deptName, oldCodeOf, locOf }) => {
+      const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const items = (doc.items || []).filter(it => toNonNegativeNumber(it.requestQty) > 0).slice().sort((a, b) => String(a.type || '1').localeCompare(String(b.type || '1')) || compareByLocation(locOf(a.drugId), a.name, locOf(b.drugId), b.name));
+      const total = items.reduce((s, it) => s + (toNonNegativeNumber(it.requestQty) / safePackSize(it.packSize)) * toNonNegativeNumber(it.price), 0);
+      const money = (v) => Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const qtyText = (it) => { const p = safePackSize(it.packSize), q = toNonNegativeNumber(it.requestQty); return p > 1 && Math.abs(q / p - Math.round(q / p)) < 1e-9 ? fmtNum(q / p) : fmtNum(q); };
+      const unitText = (it) => { const p = safePackSize(it.packSize), q = toNonNegativeNumber(it.requestQty); return p > 1 && Math.abs(q / p - Math.round(q / p)) < 1e-9 ? 'แพ็ค' : (it.unit || ''); };
+      const rows = items.map((it, i) => '<tr><td class="c">' + (i + 1) + '</td><td>' + esc(it.name) + '</td><td class="c">' + esc(unitText(it)) + '</td><td class="c">' + (safePackSize(it.packSize) > 1 ? safePackSize(it.packSize) + ' ' + esc(it.unit || '') : '1') + '</td>' +
+        '<td class="r b">' + qtyText(it) + '</td><td></td><td class="r">' + money(it.price) + '</td><td class="r">' + money((toNonNegativeNumber(it.requestQty) / safePackSize(it.packSize)) * toNonNegativeNumber(it.price)) + '</td>' +
+        '<td class="c code">' + esc(drugCodeLabel(it.drugId, oldCodeOf(it.drugId))) + '</td></tr>').join('');
+      const blanks = Array.from({ length: Math.max(0, 5 - items.length) }, () => '<tr class="blank"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join('');
+      const title = ('เบิกด่วน ' + deptName + ' ' + thaiDateLong(doc.form_date)).replace(/[\\/:*?"<>|]+/g, '-');
+      const dot = (t, w) => '<span class="dot" style="min-width:' + (w || 10) + 'em">' + esc(t || '') + '</span>';
+      return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+        '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet"><style>' +
+        '@page{size:A4 portrait;margin:14mm 14mm 14mm 14mm}*{box-sizing:border-box}body{font-family:Sarabun,Tahoma,sans-serif;font-size:14px;line-height:1.6;color:#111;margin:0}' +
+        '.org{text-align:right;font-weight:700}.date{text-align:center;margin:10px 0}.dot{display:inline-block;border-bottom:1px dotted #333;text-align:center;padding:0 6px;font-weight:600}' +
+        '.p{margin:4px 0}.ind{text-indent:3em}table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px}th,td{border:1px solid #444;padding:3px 5px}th{background:#eee;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+        '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.code{font-family:Consolas,monospace;font-size:10.5px;color:#444}.blank td{height:22px}' +
+        '.tot td{font-weight:700}.sig{margin-top:18px;margin-left:45%;text-align:center}.sig div{margin:2px 0}.sig2{display:flex;justify-content:space-between;margin-top:26px;text-align:center;font-size:13px}' +
+        '</style></head><body>' +
+        '<div class="org">กลุ่มงานเภสัชกรรมฯ โรงพยาบาลสวี<br>อ.สวี จ.ชุมพร 86130</div>' +
+        '<div class="date">วันที่ ' + dot(thaiDateLong(doc.form_date), 14) + '</div>' +
+        '<div class="p"><b>เรื่อง</b>&nbsp;&nbsp;ขอเบิกยา / เวชภัณฑ์ล่วงหน้า</div>' +
+        '<div class="p"><b>เรียน</b>&nbsp;&nbsp;หัวหน้ากลุ่มงานเภสัชกรรมฯ รพ.สวี</div>' +
+        '<div class="p ind">ด้วยงาน / ฝ่าย/กลุ่มงานฯ ' + dot(deptName, 12) + ' มีความประสงค์ใคร่ขอเบิกยา/เวชภัณฑ์ล่วงหน้า ซึ่งมีความจำเป็นใช้อย่างเร่งด่วน ดังต่อไปนี้</div>' +
+        '<table><thead><tr><th style="width:5%">ที่</th><th>รายการ</th><th style="width:8%">หน่วย</th><th style="width:9%">บรรจุ</th><th style="width:9%">จำนวนเบิก</th><th style="width:9%">จำนวนจ่าย</th><th style="width:9%">ราคา/หน่วย</th><th style="width:10%">มูลค่า</th><th style="width:11%">รหัส</th></tr></thead><tbody>' +
+        rows + blanks + '<tr class="tot"><td colspan="7" class="r">รวม ' + items.length + ' รายการ · มูลค่า (บาท)</td><td class="r">' + money(total) + '</td><td></td></tr></tbody></table>' +
+        (doc.note ? '<div class="p">หมายเหตุ: ' + esc(doc.note) + '</div>' : '') +
+        '<div class="p ind">งาน/ฝ่าย/กลุ่มงานฯ ' + dot(deptName, 10) + ' หวังเป็นอย่างยิ่งว่า คงจะได้รับความร่วมมือ และจะดำเนินการเบิกยา/เวชภัณฑ์ตามรอบที่มีการเบิกจ่ายต่อไป' +
+        (doc.round_date ? ' (รอบเบิกที่ ' + esc(doc.round_no || '-') + ' วันที่ ' + esc(thaiDateLong(doc.round_date)) + ')' : '') + '</div>' +
+        '<div class="p" style="margin-left:6em">จึงเรียนมาเพื่อโปรดพิจารณา</div>' +
+        '<div class="sig"><div>ขอแสดงความนับถือ</div><div style="height:34px"></div><div>(' + dot(doc.head_name, 12) + ')</div><div>หัวหน้างาน / ฝ่าย/กลุ่มงานฯ ' + esc(deptName) + '</div></div>' +
+        '<div class="sig2"><div>ลงชื่อ ................................ ผู้จ่าย<br>(................................)<br>วันที่ ............................</div><div>ลงชื่อ ................................ ผู้รับของ<br>(................................)<br>วันที่ ............................</div></div>' +
+        '</body></html>';
+    };
+
+    const UrgentReqView = ({ ctx }) => {
+      const rounds = useMemo(() => urgentRoundsFor(ctx), [ctx.rounds, ctx.reqs]);
+      const [editId, setEditId] = useState(null); // null = รายการ, 'new' = สร้างใหม่, id = แก้ไข
+      const editing = editId && editId !== 'new' ? ctx.urgents.find(u => u.id === editId) : null;
+      const [roundId, setRoundId] = useState('');
+      const [items, setItems] = useState([]);
+      const [note, setNote] = useState('');
+      const [headName, setHeadName] = useState('');
+      const [formDate, setFormDate] = useState(toYmd(new Date()));
+      const [saving, setSaving] = useState(false);
+      const startNew = () => {
+        setEditId('new'); setItems([]); setNote('');
+        setRoundId((rounds.find(r => r.upcoming) || rounds[0] || {}).id || '');
+        setHeadName(safeText((ctx.urgents[0] || {}).head_name) || safeText(ctx.currentUser?.name)); setFormDate(toYmd(new Date()));
+      };
+      const startEdit = (u) => { setEditId(u.id); setItems((u.items || []).map(x => ({ ...x }))); setNote(u.note || ''); setRoundId(u.round_id || ''); setHeadName(u.head_name || ''); setFormDate(u.form_date || toYmd(new Date())); };
+      const itemIds = useMemo(() => new Set(items.map(it => String(it.drugId))), [items]);
+      const round = rounds.find(r => r.id === roundId) || ctx.rounds.find(r => r.id === roundId) || null;
+      const valid = items.filter(it => toNonNegativeNumber(it.requestQty) > 0);
+      const total = valid.reduce((s, it) => s + (toNonNegativeNumber(it.requestQty) / safePackSize(it.packSize)) * toNonNegativeNumber(it.price), 0);
+      const locOf = (id) => safeText(ctx.drugById.get(String(id))?.invs_location);
+      const oldCodeOf = (id) => ctx.drugById.get(String(id))?.old_code;
+      const doPrint = (u) => printHtmlDocument(buildUrgentFormHtml({ doc: u, deptName: u.dept_name || ctx.dept?.dept_name || '', oldCodeOf, locOf }));
+      const save = async (andPrint) => {
+        if (!round) return ctx.showToast('เลือกรอบเบิกที่จะรวมยอด', 'error');
+        if (!valid.length) return ctx.showToast('ยังไม่มีรายการที่ใส่จำนวน', 'error');
+        setSaving(true);
+        try {
+          const data = {
+            deptId: String(ctx.dept.dept_id), dept_name: safeText(ctx.dept.dept_name), status: 'Active',
+            round_id: round.id, round_no: Number(round.round_no) || 0, round_date: safeText(round.round_date),
+            form_date: formDate, head_name: safeText(headName), note: safeText(note),
+            items: JSON.parse(JSON.stringify(valid.map(it => ({ drugId: it.drugId, name: it.name, unit: it.unit, packSize: it.packSize, price: it.price, type: it.type, requestQty: toNonNegativeNumber(it.requestQty), requestMode: it.requestMode || 'unit' })))),
+            item_count: valid.length, total_value: Math.round(total * 100) / 100,
+            updated_at: firebase.firestore.FieldValue.serverTimestamp(), updated_by_uid: ctx.currentUser.uid, updated_by_name: safeText(ctx.currentUser.name)
+          };
+          let id = editing?.id;
+          if (editing) {
+            if (editing.status !== 'Active') throw new Error('ใบนี้รวมเข้าใบเบิกจริงแล้ว แก้ไขไม่ได้');
+            await db.collection('internal_urgent').doc(id).update(data);
+          } else {
+            id = 'URG-' + buildInternalReqId(ctx.dept.dept_id);
+            await db.collection('internal_urgent').doc(id).set({ ...data, id, created_by_uid: ctx.currentUser.uid, created_by_name: safeText(ctx.currentUser.name), created_at: firebase.firestore.FieldValue.serverTimestamp() });
+          }
+          await writeAuditLog(ctx.currentUser, editing ? 'INTERNAL_URGENT_EDIT' : 'INTERNAL_URGENT_CREATE', 'internal_urgent', id, { dept_id: ctx.dept.dept_id, round_id: round.id, item_count: valid.length });
+          ctx.showToast('บันทึกใบเบิกด่วนแล้ว — ยอดจะรวมเข้าใบเบิกของรอบที่ ' + (round.round_no || '-') + ' อัตโนมัติ');
+          if (andPrint) doPrint({ ...data, id });
+          await ctx.reload(); setEditId(null);
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setSaving(false); }
+      };
+      const cancelUrgent = (u) => ctx.setConfirmDialog({
+        title: 'ยกเลิกใบเบิกด่วนนี้?', message: 'ยอดในใบนี้จะไม่ถูกรวมเข้าใบเบิกของรอบ', icon: 'fa-ban', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-500 hover:bg-red-600', confirmText: 'ยกเลิกใบ',
+        onConfirm: async () => { try { await db.collection('internal_urgent').doc(u.id).update({ status: 'Cancelled', cancelled_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() }); ctx.showToast('ยกเลิกแล้ว'); await ctx.reload(); } catch (e) { ctx.showToast(e.message, 'error'); } }
+      });
+      const statusText = { Active: ['รอรวมเข้าใบเบิกรอบ', 'bg-amber-100 text-amber-800'], Merged: ['รวมเข้าใบเบิกแล้ว', 'bg-emerald-100 text-emerald-800'], Cancelled: ['ยกเลิก', 'bg-slate-100 text-slate-500'] };
+
+      if (!editId) return (
+        <div className="space-y-5 animate-fade-in" id="urgent-list">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div><h2 className="text-2xl font-extrabold text-slate-800"><i className="fa-solid fa-truck-medical text-red-500 mr-2"></i>เบิกยาด่วน</h2>
+              <div className="text-sm text-slate-500">{ctx.dept?.dept_name} · ขอเบิกล่วงหน้าเมื่อจำเป็นเร่งด่วน ยอดจะถูกรวมเข้าใบเบิกของรอบที่เลือกโดยอัตโนมัติ</div></div>
+            <button id="urgent-new" onClick={startNew} className="px-5 py-3 rounded-xl bg-red-600 text-white font-bold shadow-lg"><i className="fa-solid fa-plus mr-2"></i>สร้างใบเบิกด่วน</button>
+          </div>
+          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">วันที่</th><th className="p-3 text-left">รวมเข้ารอบ</th><th className="p-3 text-right">รายการ</th><th className="p-3 text-right">มูลค่า</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th></tr></thead>
+              <tbody>
+                {!ctx.urgents.length && <tr><td colSpan="6" className="p-10 text-center text-slate-400">ยังไม่มีใบเบิกด่วน</td></tr>}
+                {ctx.urgents.map(u => { const st = statusText[u.status] || [u.status, 'bg-slate-100']; return (
+                  <tr key={u.id} className="border-t">
+                    <td className="p-3">{thaiDateLong(u.form_date)}</td>
+                    <td className="p-3">รอบที่ {u.round_no || '-'} · {thaiDateLong(u.round_date)}</td>
+                    <td className="p-3 text-right tnum">{fmtNum(u.item_count ?? (u.items || []).length)}</td>
+                    <td className="p-3 text-right tnum">{fmtMoney(u.total_value)}</td>
+                    <td className="p-3"><span className={`px-2 py-1 rounded-lg text-xs font-bold ${st[1]}`}>{st[0]}</span>{u.merged_req_no && <span className="ml-2 text-xs text-slate-500">ใบ {u.merged_req_no}</span>}</td>
+                    <td className="p-3 text-right whitespace-nowrap space-x-2">
+                      <button onClick={() => doPrint(u)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-bold"><i className="fa-solid fa-print mr-1"></i>พิมพ์</button>
+                      {u.status === 'Active' && <button onClick={() => startEdit(u)} className="px-3 py-1.5 rounded-lg border text-xs font-bold">แก้ไข</button>}
+                      {u.status === 'Active' && <button onClick={() => cancelUrgent(u)} className="px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-bold">ยกเลิก</button>}
+                    </td>
+                  </tr>); })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="space-y-5 animate-fade-in" id="urgent-edit">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div><div className="text-xs font-bold text-red-600">ขอเบิกยา / เวชภัณฑ์ล่วงหน้า</div><h2 className="text-2xl font-extrabold text-slate-800">{editing ? 'แก้ไขใบเบิกด่วน' : 'สร้างใบเบิกด่วน'}</h2></div>
+            <button onClick={() => setEditId(null)} className="px-4 py-2 rounded-xl bg-slate-100 font-bold text-slate-600">กลับ</button>
+          </div>
+          <div className="bg-white rounded-2xl border shadow-sm p-5 grid md:grid-cols-3 gap-4">
+            <label className="block md:col-span-1"><span className="text-sm font-bold text-slate-600">รวมยอดเข้ารอบเบิก (ยังไม่ยืนยันจ่าย)</span>
+              <select id="urgent-round" value={roundId} onChange={e => setRoundId(e.target.value)} className="mt-1 w-full p-2.5 border rounded-xl">
+                <option value="">— เลือกรอบ —</option>
+                {rounds.map(r => <option key={r.id} value={r.id}>รอบที่ {r.round_no} · {thaiDateLong(r.round_date)}{r.upcoming ? '' : ' (ผ่านมาแล้ว)'}</option>)}
+              </select>
+              {!rounds.length && <span className="text-xs text-red-600">ไม่มีรอบเบิกที่ยังไม่ยืนยันจ่าย — แจ้งห้องยาเพิ่มรอบเบิก</span>}
+            </label>
+            <label className="block"><span className="text-sm font-bold text-slate-600">วันที่ในใบ</span>
+              <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border rounded-xl" /></label>
+            <label className="block"><span className="text-sm font-bold text-slate-600">ชื่อหัวหน้างาน (ผู้ลงนาม)</span>
+              <input value={headName} onChange={e => setHeadName(e.target.value)} className="mt-1 w-full p-2.5 border rounded-xl" /></label>
+          </div>
+          <div className="bg-white rounded-2xl border shadow-sm p-5 space-y-4">
+            <DrugSearchBox ctx={ctx} excludeIds={itemIds} autoFocus onPick={d => { if (itemIds.has(String(d.drug_id))) return ctx.showToast('มีในใบแล้ว', 'warn'); const base = baseItemFromDrug(ctx, d); setItems(prev => [...prev, { ...base, requestQty: 0, requestMode: defaultRequestMode(0, safePackSize(base.packSize)) }]); }} />
+            <div className="overflow-x-auto border rounded-xl">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-2 text-left">ที่</th><th className="p-2 text-left">รายการ</th><th className="p-2 text-left">หน่วย</th><th className="p-2 text-right">บรรจุ</th><th className="p-2 text-left">จำนวนเบิก</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">มูลค่า</th><th className="p-2 text-left">รหัส</th><th></th></tr></thead>
+                <tbody>
+                  {!items.length && <tr><td colSpan="9" className="p-8 text-center text-slate-400">ค้นหายาด้านบนเพื่อเพิ่มรายการ</td></tr>}
+                  {items.map((it, i) => (
+                    <tr key={it.drugId} className="border-t">
+                      <td className="p-2 text-slate-400">{i + 1}</td>
+                      <td className="p-2 font-semibold">{it.name}</td>
+                      <td className="p-2">{it.unit}</td>
+                      <td className="p-2 text-right tnum">{safePackSize(it.packSize)}</td>
+                      <td className="p-2"><PackQtyInput compact item={it} inputId={`uq-${it.drugId}`} onChange={(q, m) => setItems(prev => prev.map(x => x.drugId === it.drugId ? { ...x, requestQty: q, dispenseQty: q, requestMode: m } : x))} /></td>
+                      <td className="p-2 text-right tnum">{fmtMoney(it.price)}</td>
+                      <td className="p-2 text-right tnum">{fmtMoney((toNonNegativeNumber(it.requestQty) / safePackSize(it.packSize)) * toNonNegativeNumber(it.price))}</td>
+                      <td className="p-2 font-mono text-xs text-slate-500">{drugCodeLabel(it.drugId, oldCodeOf(it.drugId))}</td>
+                      <td className="p-2 text-right"><button onClick={() => setItems(prev => prev.filter(x => x.drugId !== it.drugId))} className="text-red-500" aria-label="ลบ"><i className="fa-solid fa-xmark"></i></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <input value={note} onChange={e => setNote(e.target.value)} placeholder="หมายเหตุ / เหตุผลที่ต้องเบิกด่วน (ถ้ามี)" className="w-full p-2.5 border rounded-xl" />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-600">{valid.length} รายการ · มูลค่าประมาณ <b>{fmtMoney(total)}</b> บาท</div>
+              <div className="flex gap-2">
+                <button onClick={() => save(false)} disabled={saving} className="px-5 py-2.5 rounded-xl bg-white border-2 border-red-500 text-red-600 font-bold disabled:opacity-50">บันทึก</button>
+                <button id="urgent-save-print" onClick={() => save(true)} disabled={saving} className="px-5 py-2.5 rounded-xl bg-red-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${saving ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>บันทึกและพิมพ์</button>
+              </div>
+            </div>
+          </div>
         </div>
       );
     };
@@ -2022,6 +2248,7 @@ ORDER BY d.name`;
       const [deptId, setDeptId] = useState('');
       const [reqs, setReqs] = useState([]);
       const [stock, setStock] = useState([]);
+      const [urgents, setUrgents] = useState([]);
       const [view, setView] = useState('history');
       const [editReq, setEditReq] = useState(null);
       const [printReq, setPrintReq] = useState(null);
@@ -2050,11 +2277,13 @@ ORDER BY d.name`;
         try {
           const uid = currentUser?.uid || auth.currentUser?.uid || 'anon';
           const tombs = await rxSyncTombs(uid);
-          const [r, s] = await Promise.all([
+          const [r, s, ug] = await Promise.all([
             db.collection('internal_requisitions').where('deptId', '==', String(id)).get(),
             // สต็อกห้องยามีหลายร้อยรายการ → แคช + ดึงเฉพาะที่เปลี่ยน (ต้องมี index dept_id + updated_at)
-            rxSync({ uid, col: 'internal_stock', scope: String(id), tombs, query: db.collection('internal_stock').where('dept_id', '==', String(id)) }).catch(() => null)
+            rxSync({ uid, col: 'internal_stock', scope: String(id), tombs, query: db.collection('internal_stock').where('dept_id', '==', String(id)) }).catch(() => null),
+            db.collection('internal_urgent').where('deptId', '==', String(id)).get().catch(() => null)
           ]);
+          setUrgents(ug ? ug.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => tsToMillis(b.created_at) - tsToMillis(a.created_at)) : []);
           rxCountReads('internal_requisitions[dept]', r.size || 1);
           setReqs(r.docs.map(x => ({ id: x.id, ...x.data() })));
           setStock(s || []);
@@ -2103,7 +2332,7 @@ ORDER BY d.name`;
       if (!currentUser) return null;
 
       const ctx = {
-        currentUser, isAdmin, dept, reqs, stock,
+        currentUser, isAdmin, dept, reqs, stock, urgents,
         drugs: masters.drugs, drugById, unitName: (d) => d ? (unitById.get(String(d.unit_id))?.unit_name || d.unit_id || '') : '',
         showToast, setConfirmDialog, reload: () => reload(), reloadMasters, drugTypes,
         rounds: roundsFor(masters.rounds, 'internal')
@@ -2143,6 +2372,7 @@ ORDER BY d.name`;
                 )}
                 <NavBtn id="new" icon="fa-file-circle-plus" label={editReq ? 'แก้ไขใบเบิก' : 'สร้างใบเบิก'} />
                 <NavBtn id="history" icon="fa-list-check" label="ใบเบิกของฉัน" badge={pendingCount + rejectedCount || null} />
+                {kind === 'dept' && <NavBtn id="urgent" icon="fa-truck-medical" label="เบิกยาด่วน" badge={urgents.filter(u => u.status === 'Active').length || null} />}
                 {kind === 'pharmacy' && <NavBtn id="stock" icon="fa-boxes-stacked" label="สต็อกห้องยา" />}
                 {kind === 'pharmacy' && <NavBtn id="estimate" icon="fa-chart-column" label="ประมาณการใช้ยา" />}
                 {isAdmin && <a href="app.html" className="shrink-0 px-4 py-3 rounded-xl font-bold text-slate-300 hover:bg-slate-800 flex items-center gap-3"><i className="fa-solid fa-arrow-left w-5 text-center"></i><span>กลับหน้าแอดมิน</span></a>}
@@ -2179,6 +2409,7 @@ ORDER BY d.name`;
                     {view === 'new' && (editReq || newRound !== undefined) && kind === 'pharmacy' && <PharmacyReqView key={editReq?.id || 'new-' + deptId + (newRound?.id || '')} ctx={ctx} editReq={editReq} round={editReq ? null : newRound} onDone={() => { setEditReq(null); setView('history'); }} />}
                     {view === 'history' && <HistoryView ctx={ctx} onNew={() => { setEditReq(null); setView('new'); }} onEdit={(r) => { setEditReq(r); setView('new'); }} onPrint={setPrintReq} />}
                     {view === 'stock' && kind === 'pharmacy' && <StockView ctx={ctx} />}
+                    {view === 'urgent' && kind === 'dept' && <UrgentReqView ctx={ctx} />}
                     {view === 'estimate' && kind === 'pharmacy' && <UsageEstimateView ctx={ctx} />}
                   </>
                 )}

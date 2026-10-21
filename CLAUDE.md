@@ -74,6 +74,15 @@
 - app.html แอดมิน: เมนู "LINE Console" (`LineConsoleView`) โควตา · ผู้ผูก/ยังไม่ผูก · ประวัติ 50 รายการ · ทดสอบ/ดูตัวอย่าง/ส่งสรุปตอนนี้
 - env เพิ่ม: CRON_SECRET (จำเป็น), SHEET_SECRET, SITE_URL (ไม่บังคับ) · rules: line_logs/line_meta แอดมินอ่าน เขียนได้เฉพาะเซิร์ฟเวอร์
 
+## v6.9 เพิ่มเติม
+- แจ้งเตือนหมดอายุ: ส่งครั้งเดียวต่อเกณฑ์ (180 / 30 วัน) ทั้งแอดมินและ จนท. · ข้อความ "เป็นข้อความจากระบบ กรุณาเช็คยาจริง หาก EXP ไม่ถูกต้อง แก้ไขได้ในหน้า คลังยาของฉัน"
+- คลังยาของฉัน (app.html MyStockView): `effectiveLots` สมมติยาจริง = Target Stock (config_par.par_qty) หักล็อต EXP ใกล้สุดก่อน (FEFO) — ไม่หักถ้าตรวจนับ/แก้ยอดหลังรับล็อตล่าสุด · cron ใช้สมมติฐานเดียวกัน (`assumeAtTarget`)
+  - สลับ Virtual Shelf / โหมดตาราง (localStorage `rxfill_stock_view`) ตารางแก้ Lot/EXP/คงเหลือ (เก็บ lot_no_before/expiry_before, event MANUAL_ADJUST) กรองหมดอายุ/≤180 วัน เรียงตาม EXP
+  - ล็อตแสดง รับเมื่อ + เลข INVS/รอบบิล · Excel แสดงเฉพาะยอดที่ควรเหลือ
+- ว.3/1: ครุฑโหลดจาก `garuda.png` ที่ราก repo (fallback data URI เดิมซึ่งไฟล์เสีย) · CSS print บีบให้จบ 1 หน้า
+- internal ใบเบิกของฉัน: กล่อง "พิมพ์ใบเบิก" ท้ายตาราง · วันที่ในใบล็อกสำหรับผู้เบิก แอดมินแก้ได้จนส่ง INVS · บันทึก printed_at
+- เบิกยาด่วน (internal.html `UrgentReqView`, collection `internal_urgent`): เลือกรอบที่ยังไม่ยืนยันจ่าย → รายการแบบตารางหน่วยงาน → พิมพ์ "ขอเบิกยา/เวชภัณฑ์ล่วงหน้า" · DeptReqView ของรอบนั้นรวมยอด (`urgentQty`, หมายเหตุ "รวมเบิกด่วน") แล้วปิดใบด่วนเป็น Merged
+
 ## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
 - หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)
 

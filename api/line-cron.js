@@ -3,7 +3,7 @@
 // auth: Authorization: Bearer <CRON_SECRET> (Vercel Cron) หรือ POST { idToken, dryRun } จากแอดมิน
 const { crypto, env, SITE, fsGet, fsSet, fsQuery, nowTs, tsMs, quotaStatus, pushText, verifyUser, isAdminRole, readJson, logLine } = require('./_lib/core');
 
-const DISCLAIMER = 'ข้อมูลนี้มาจากระบบ หากของจริงไม่ตรง กรุณาแจ้งแอดมินให้แก้ไข\nหากตรงและต้องการคืนยา: เข้าเว็บ → คลังยา → "ตรวจนับ / คืนยา" เลือกล็อตที่จะคืน แล้วพิมพ์ใบคืนยา';
+const DISCLAIMER = 'เป็นข้อความจากระบบ กรุณาเช็คยาจริง\nหากวันหมดอายุ (EXP) ไม่ถูกต้อง สามารถแก้ไขได้ในหน้า "คลังยาของฉัน"';
 const daysTo = (raw) => {
   const v = String(raw || '').replace(/\D/g, '').slice(0, 8);
   if (v.length !== 8) return null;
@@ -20,6 +20,27 @@ const fiscalRound = (r) => {
   const m = Number(r.month), y = Number(r.year); if (!m || !y) return '';
   return String(m >= 10 ? m - 9 : m + 3).padStart(2, '0') + '/' + (m >= 10 ? y + 544 : y + 543);
 };
+
+const expKey = (l) => /^\d{8}$/.test(String(l.expiry || '')) ? String(l.expiry) : '99999999';
+function assumeAtTarget(lots, pars) {
+  const target = new Map(pars.map(p => [String(p.hospital_id) + '|' + String(p.drug_id), Number(p.par_qty) || 0]));
+  const groups = new Map();
+  lots.forEach(l => { const k = String(l.hospital_id) + '|' + String(l.drug_id); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(l); });
+  const out = [];
+  groups.forEach((list, k) => {
+    const t = target.get(k) || 0;
+    const lastCount = Math.max(0, ...list.map(l => tsMs(l.manual_adjusted_at)));
+    const lastReceive = Math.max(0, ...list.map(l => tsMs(l.created_at || l.source_at)));
+    const total = list.reduce((s, l) => s + (Number(l.remaining_qty) || 0), 0);
+    if (!t || (lastCount && lastCount >= lastReceive) || total <= t) { out.push(...list); return; }
+    let excess = total - t;
+    list.slice().sort((a, b) => expKey(a).localeCompare(expKey(b))).forEach(l => {
+      const q = Number(l.remaining_qty) || 0; const cut = Math.min(q, excess); excess -= cut;
+      out.push({ ...l, remaining_qty: q - cut });
+    });
+  });
+  return out;
+}
 
 async function runDigest({ dryRun }) {
   const state = (await fsGet('line_meta/state')) || {};
@@ -45,8 +66,10 @@ async function runDigest({ dryRun }) {
   ];
 
   // ล็อตใกล้หมดอายุ (VMI ของ รพ.สต.)
-  const lots = (await fsQuery('vmi_virtual_lots', [['remaining_qty', 'GREATER_THAN', 0]]))
-    .map(l => ({ ...l, days: daysTo(l.expiry) })).filter(l => l.days !== null && l.days <= 180)
+  // v6.9 ใช้สมมติฐานเดียวกับหน้าคลังยา: ยาที่มีจริง = Target Stock ล็อต EXP ใกล้สุดถูกใช้ไปก่อน
+  const [rawLots, pars] = await Promise.all([fsQuery('vmi_virtual_lots', [['remaining_qty', 'GREATER_THAN', 0]]), fsQuery('config_par', [])]);
+  const lots = assumeAtTarget(rawLots, pars)
+    .map(l => ({ ...l, days: daysTo(l.expiry) })).filter(l => l.remaining_qty > 0 && l.days !== null && l.days <= 180)
     .sort((a, b) => a.days - b.days);
   const near30 = lots.filter(l => l.days <= 30), near180 = lots.filter(l => l.days > 30);
   const lotLine = (l, withHosp) => `• ${drugName.get(String(l.drug_id)) || l.drug_id} · Lot ${l.lot_no || '-'} · EXP ${expTh(l.expiry)} (${dayText(l.days)})${withHosp ? ' · ' + (hospName.get(String(l.hospital_id)) || l.hospital_id) : ''} · เหลือ ${Number(l.remaining_qty).toLocaleString('th-TH')}`;
@@ -54,41 +77,43 @@ async function runDigest({ dryRun }) {
   const out = { since, newReqCount: newReqs.length, near30: near30.length, near180: near180.length, admin: null, staff: [], sent: 0, skipped: 0 };
   const quota = dryRun ? await quotaStatus() : null;
 
+  // ----- ล็อตที่เพิ่งข้ามเกณฑ์ 180 / 30 วัน — แจ้งครั้งเดียวต่อเกณฑ์ ไม่ส่งซ้ำวันถัดไป -----
+  const levelsDoc = (await fsGet('line_meta/expiry_levels')) || {};
+  const prev = levelsDoc.levels || {};
+  const next = { ...prev };
+  const crossing = lots.filter(l => { const lv = levelOf(l.days); return lv && (!prev[l.id] || lv < prev[l.id]); });
+  crossing.forEach(l => { next[l.id] = levelOf(l.days); });
+  const c30 = crossing.filter(l => l.days <= 30), c180 = crossing.filter(l => l.days > 30);
+  out.crossing = crossing.length;
+
   // ----- แอดมิน -----
-  const expHash = crypto.createHash('sha1').update(lots.map(l => l.id + ':' + levelOf(l.days)).join('|')).digest('hex').slice(0, 16);
   const admins = linked.filter(u => isAdminRole(u.role));
-  if (newReqs.length || expHash !== state.admin_exp_hash) {
+  if (newReqs.length || crossing.length) {
     const parts = ['สรุป Sawee Rxfill'];
     parts.push(newReqs.length ? `📥 ใบเบิกใหม่ ${newReqs.length} ใบ\n${newReqs.slice(0, 15).join('\n')}${newReqs.length > 15 ? `\n… และอีก ${newReqs.length - 15} ใบ` : ''}` : '📥 ไม่มีใบเบิกใหม่');
-    if (lots.length) {
-      const hospCount = new Set(lots.map(l => l.hospital_id)).size;
-      parts.push(`⏰ ยาใกล้หมดอายุ (ข้อมูลจากระบบ) ${hospCount} รพ.สต.\n• หมดอายุแล้ว/≤30 วัน: ${near30.length} ล็อต\n• 31–180 วัน: ${near180.length} ล็อต\nใกล้สุด:\n${lots.slice(0, 10).map(l => lotLine(l, true)).join('\n')}`);
-    } else parts.push('⏰ ไม่มียาใกล้หมดอายุภายใน 180 วัน');
+    if (crossing.length) {
+      const hospCount = new Set(crossing.map(l => l.hospital_id)).size;
+      parts.push(`⏰ ยาเพิ่งเข้าเกณฑ์ใกล้หมดอายุ ${hospCount} รพ.สต.\n• หมดอายุแล้ว/≤30 วัน: ${c30.length} ล็อต\n• ≤180 วัน: ${c180.length} ล็อต\n${crossing.slice(0, 15).map(l => lotLine(l, true)).join('\n')}${crossing.length > 15 ? `\n… และอีก ${crossing.length - 15} ล็อต` : ''}\n\n${DISCLAIMER}`);
+    }
     parts.push(SITE() + '/app.html');
     out.admin = { text: parts.join('\n\n'), to: admins.map(u => u.name || u.id) };
     if (!dryRun) for (const u of admins) { const r = await pushText(u.line_user_id, out.admin.text, { audience: 'admin', type: 'admin_digest', uid: u.id, name: u.name }); r.ok ? out.sent++ : out.skipped++; }
   }
 
-  // ----- เจ้าหน้าที่ รพ.สต.: ล็อตที่เพิ่งเข้าเกณฑ์ -----
-  const levelsDoc = (await fsGet('line_meta/expiry_levels')) || {};
-  const prev = levelsDoc.levels || {};
-  const next = {};
-  lots.forEach(l => { next[l.id] = prev[l.id] && prev[l.id] <= levelOf(l.days) ? prev[l.id] : prev[l.id] || 0; });
+  // ----- เจ้าหน้าที่ รพ.สต.: เฉพาะล็อตที่เพิ่งเข้าเกณฑ์ -----
   const byHosp = new Map();
-  lots.forEach(l => { const lv = levelOf(l.days); if (!prev[l.id] || lv < prev[l.id]) { const g = byHosp.get(l.hospital_id) || []; g.push(l); byHosp.set(l.hospital_id, g); } });
+  crossing.forEach(l => { const g = byHosp.get(l.hospital_id) || []; g.push(l); byHosp.set(l.hospital_id, g); });
   for (const [hid, list] of byHosp) {
     const staff = linked.filter(u => String(u.hospital_id) === String(hid) && !isAdminRole(u.role));
     const text = `แจ้งเตือนยาใกล้หมดอายุ — ${hospName.get(String(hid)) || hid}\n${list.slice(0, 20).map(l => lotLine(l, false)).join('\n')}${list.length > 20 ? `\n… และอีก ${list.length - 20} ล็อต` : ''}\n\n${DISCLAIMER}\n${SITE()}/app.html`;
     out.staff.push({ hospital: hospName.get(String(hid)) || hid, lots: list.length, to: staff.map(u => u.name || u.id), text });
     if (dryRun) continue;
-    let anyOk = false;
-    for (const u of staff) { const r = await pushText(u.line_user_id, text, { audience: 'staff', type: 'staff_expiry', uid: u.id, name: u.name }); if (r.ok) { anyOk = true; out.sent++; } else out.skipped++; }
-    if (anyOk) list.forEach(l => { next[l.id] = levelOf(l.days); });
+    for (const u of staff) { const r = await pushText(u.line_user_id, text, { audience: 'staff', type: 'staff_expiry', uid: u.id, name: u.name }); r.ok ? out.sent++ : out.skipped++; }
   }
 
   if (!dryRun) {
     await fsSet('line_meta/expiry_levels', { levels: next, updated_at: nowTs() }, false);
-    await fsSet('line_meta/state', { last_run_at: new Date().toISOString(), admin_exp_hash: expHash, last_result: { sent: out.sent, skipped: out.skipped, newReqs: newReqs.length, near30: near30.length, near180: near180.length }, updated_at: nowTs() }, true);
+    await fsSet('line_meta/state', { last_run_at: new Date().toISOString(), last_result: { sent: out.sent, skipped: out.skipped, newReqs: newReqs.length, near30: near30.length, near180: near180.length }, updated_at: nowTs() }, true);
     await logLine({ type: 'digest_run', ok: true, preview: `ส่ง ${out.sent} ข้าม ${out.skipped} · ใบใหม่ ${newReqs.length} · ≤30 วัน ${near30.length} · ≤180 วัน ${near180.length}` });
   } else out.quota = quota;
   return out;

@@ -382,10 +382,14 @@
       const [signers, setSigners] = useState(() => internalSignersFor(req, (ctx.reqs.filter(r => r.id !== req.id && Array.isArray(r.sign_people))
         .sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people));
       const [busy, setBusy] = useState(false);
+      // v6.9 วันที่ในใบ: ผู้เบิกแก้ไม่ได้ (ล็อก) · แอดมินแก้ได้จนกว่าจะส่ง INVS
+      const dateLocked = !ctx.isAdmin || !!req.invs_sub_po_no;
       const doPrint = async () => {
         setBusy(true);
         try {
           let changed = false;
+          try { await db.collection('internal_requisitions').doc(req.id).update({ printed_at: firebase.firestore.FieldValue.serverTimestamp(), printed_by_name: safeText(ctx.currentUser?.name), print_count: firebase.firestore.FieldValue.increment(1) }); changed = true; }
+          catch (e) { /* ผู้เบิกอาจไม่มีสิทธิ์เขียนใบที่อนุมัติแล้ว — พิมพ์ต่อได้ */ }
           if (formNo !== safeText(req.form_no) || formDate !== safeText(req.form_date)) {
             try { await db.collection('internal_requisitions').doc(req.id).update({ form_no: safeText(formNo), form_date: formDate, fiscal_year: fiscalYearBEOfYmd(formDate) }); changed = true; }
             catch (e) { /* ใบที่อนุมัติแล้วผู้เบิกแก้ไม่ได้ — ใช้ค่าที่แก้เฉพาะการพิมพ์ครั้งนี้ */ }
@@ -410,8 +414,8 @@
             <label className="block"><span className="text-sm font-bold text-slate-600">เลขที่</span>
               <input id="form-no" value={formNo} onChange={e => setFormNo(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl font-mono" /></label>
             <label className="block"><span className="text-sm font-bold text-slate-600">วันที่</span>
-              <input id="form-date" type="date" value={formDate} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl" />
-              <span className="text-xs text-slate-500">{thaiDateLong(formDate)}</span></label>
+              <input id="form-date" type="date" value={formDate} disabled={dateLocked} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl disabled:bg-slate-100 disabled:text-slate-500" />
+              <span className="text-xs text-slate-500">{thaiDateLong(formDate)}{dateLocked && <span className="ml-2"><i className="fa-solid fa-lock mr-1"></i>{ctx.isAdmin ? 'ส่ง INVS แล้ว แก้วันที่ไม่ได้' : 'วันที่ล็อกไว้ — แก้ได้เฉพาะห้องยา (ก่อนส่ง INVS)'}</span>}</span></label>
             <InternalSignersEditor value={signers} onChange={setSigners} />
             <p className="text-xs text-slate-500">เลขที่สร้างอัตโนมัติ = ลำดับใบของหน่วยงานในปีงบประมาณ / ปีงบ (พ.ศ.) แก้ได้ก่อนพิมพ์</p>
             <div className="flex justify-end gap-2">
@@ -1636,10 +1640,16 @@ ORDER BY d.name`;
             </table>
           </div>
           {req.note && <div className="mt-3 text-sm text-slate-600"><b>หมายเหตุ:</b> {req.note}</div>}
+          {req.status !== 'Cancelled' && <div id="req-print-box" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="text-sm text-slate-600">
+              <div><b>วันที่ในใบเบิก:</b> {thaiDateLong(safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at))}{(!ctx.isAdmin || req.invs_sub_po_no) && <i className="fa-solid fa-lock ml-2 text-slate-400" title="ล็อกแล้ว"></i>}</div>
+              <div className="text-xs text-slate-500">{req.printed_at ? `พิมพ์ล่าสุด ${formatAppDateTime(req.printed_at)}${req.printed_by_name ? ' โดย ' + req.printed_by_name : ''}` : 'ยังไม่เคยพิมพ์'}</div>
+            </div>
+            <button id="req-print-main" onClick={() => onPrint(req)} className="px-5 py-2.5 rounded-xl bg-slate-800 text-white font-bold"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบเบิก</button>
+          </div>}
           <div className="flex flex-wrap justify-end gap-2 mt-5">
             {canEdit && req.status === 'Draft' && <button id="req-draft-del" onClick={() => ctx.setConfirmDialog({ title: 'ลบใบรอส่งนี้?', message: 'ลบแล้วเลือกรอบเบิกและดึงยอดใช้ใหม่ได้', icon: 'fa-trash-can', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-500 hover:bg-red-600', confirmText: 'ลบใบรอส่ง', onConfirm: async () => { try { await cancelDraftReq(ctx, req.id); ctx.showToast('ลบใบรอส่งแล้ว'); await ctx.reload(); onClose(); } catch (e) { ctx.showToast(e.message, 'error'); } } })} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50"><i className="fa-solid fa-trash-can mr-2"></i>ลบใบรอส่ง / เริ่มใหม่</button>}
             {canEdit && req.status !== 'Draft' && <button onClick={cancelReq} className="px-4 py-2 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50"><i className="fa-solid fa-ban mr-2"></i>ยกเลิกใบ</button>}
-            <button onClick={() => onPrint(req)} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold"><i className="fa-solid fa-print mr-2"></i>พิมพ์</button>
             {canEdit && <button onClick={() => onEdit(req)} className="px-5 py-2 rounded-xl bg-teal-600 text-white font-bold"><i className="fa-solid fa-pen mr-2"></i>{req.status === 'Rejected' ? 'แก้ไขและส่งใหม่' : 'แก้ไขใบเบิก'}</button>}
           </div>
         </Modal>

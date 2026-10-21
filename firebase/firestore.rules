@@ -322,15 +322,16 @@ service cloud.firestore {
                     || (ownsHospital(resource.data.hospital_id)
                         && request.resource.data.hospital_id == resource.data.hospital_id
                         && request.resource.data.drug_id == resource.data.drug_id
-                        && request.resource.data.get('lot_no', '') == resource.data.get('lot_no', '')
-                        && request.resource.data.get('expiry', '') == resource.data.get('expiry', '')
                         && request.resource.data.get('source_type', '') == resource.data.get('source_type', '')
+                        // v6.9 แก้ Lot / EXP ให้ตรงของจริงได้ (โหมดตาราง) — เก็บค่าเดิมไว้ใน *_before
+                        && request.resource.data.get('lot_no', '') is string
+                        && request.resource.data.get('expiry', '') is string
                         && request.resource.data.remaining_qty is number
                         && request.resource.data.remaining_qty >= 0
                         && request.resource.data.active is bool
                         && request.resource.data.manual_adjusted_by_uid == request.auth.uid
                         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                          'remaining_qty', 'active', 'manual_adjusted_at',
+                          'remaining_qty', 'active', 'manual_adjusted_at', 'lot_no', 'expiry', 'lot_no_before', 'expiry_before',
                           'manual_adjusted_by_uid', 'manual_adjusted_by_name',
                           'manual_adjust_reason', 'updated_at'
                         ]));

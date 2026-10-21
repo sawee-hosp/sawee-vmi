@@ -21,6 +21,27 @@ const fiscalRound = (r) => {
   return String(m >= 10 ? m - 9 : m + 3).padStart(2, '0') + '/' + (m >= 10 ? y + 544 : y + 543);
 };
 
+const expKey = (l) => /^\d{8}$/.test(String(l.expiry || '')) ? String(l.expiry) : '99999999';
+function assumeAtTarget(lots, pars) {
+  const target = new Map(pars.map(p => [String(p.hospital_id) + '|' + String(p.drug_id), Number(p.par_qty) || 0]));
+  const groups = new Map();
+  lots.forEach(l => { const k = String(l.hospital_id) + '|' + String(l.drug_id); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(l); });
+  const out = [];
+  groups.forEach((list, k) => {
+    const t = target.get(k) || 0;
+    const lastCount = Math.max(0, ...list.map(l => tsMs(l.manual_adjusted_at)));
+    const lastReceive = Math.max(0, ...list.map(l => tsMs(l.created_at || l.source_at)));
+    const total = list.reduce((s, l) => s + (Number(l.remaining_qty) || 0), 0);
+    if (!t || (lastCount && lastCount >= lastReceive) || total <= t) { out.push(...list); return; }
+    let excess = total - t;
+    list.slice().sort((a, b) => expKey(a).localeCompare(expKey(b))).forEach(l => {
+      const q = Number(l.remaining_qty) || 0; const cut = Math.min(q, excess); excess -= cut;
+      out.push({ ...l, remaining_qty: q - cut });
+    });
+  });
+  return out;
+}
+
 async function runDigest({ dryRun }) {
   const state = (await fsGet('line_meta/state')) || {};
   const since = state.last_run_at || new Date(Date.now() - 24 * 3600000).toISOString();
@@ -45,8 +66,10 @@ async function runDigest({ dryRun }) {
   ];
 
   // ล็อตใกล้หมดอายุ (VMI ของ รพ.สต.)
-  const lots = (await fsQuery('vmi_virtual_lots', [['remaining_qty', 'GREATER_THAN', 0]]))
-    .map(l => ({ ...l, days: daysTo(l.expiry) })).filter(l => l.days !== null && l.days <= 180)
+  // v6.9 ใช้สมมติฐานเดียวกับหน้าคลังยา: ยาที่มีจริง = Target Stock ล็อต EXP ใกล้สุดถูกใช้ไปก่อน
+  const [rawLots, pars] = await Promise.all([fsQuery('vmi_virtual_lots', [['remaining_qty', 'GREATER_THAN', 0]]), fsQuery('config_par', [])]);
+  const lots = assumeAtTarget(rawLots, pars)
+    .map(l => ({ ...l, days: daysTo(l.expiry) })).filter(l => l.remaining_qty > 0 && l.days !== null && l.days <= 180)
     .sort((a, b) => a.days - b.days);
   const near30 = lots.filter(l => l.days <= 30), near180 = lots.filter(l => l.days > 30);
   const lotLine = (l, withHosp) => `• ${drugName.get(String(l.drug_id)) || l.drug_id} · Lot ${l.lot_no || '-'} · EXP ${expTh(l.expiry)} (${dayText(l.days)})${withHosp ? ' · ' + (hospName.get(String(l.hospital_id)) || l.hospital_id) : ''} · เหลือ ${Number(l.remaining_qty).toLocaleString('th-TH')}`;

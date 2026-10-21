@@ -1,5 +1,5 @@
 rules_version = '2';
-// Sawee Rxfill Firestore Rules v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
+// Sawee Rxfill Firestore Rules v6.9 (LINE แจ้งเตือน · เบิกยาด่วน · แก้ Lot/EXP) · v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -394,6 +394,23 @@ service cloud.firestore {
     }
 
     // ใบเบิกภายใน: ผู้ใช้สร้างเป็น Pending → admin ตรวจ/อนุมัติ/ส่ง INVS ตามลำดับคิว
+    // v6.9 ใบเบิกยาด่วน (ล่วงหน้า) ของหน่วยงาน — รวมยอดเข้าใบเบิกจริงของรอบที่เลือก
+    match /internal_urgent/{docId} {
+      allow read: if isAdmin() || ownsDept(resource.data.deptId);
+      allow create: if isAdmin()
+                    || (ownsDept(request.resource.data.deptId)
+                        && request.resource.data.status == 'Active'
+                        && request.resource.data.created_by_uid == request.auth.uid
+                        && request.resource.data.items is list);
+      allow update: if isAdmin()
+                    || (ownsDept(resource.data.deptId)
+                        && resource.data.status == 'Active'
+                        && request.resource.data.deptId == resource.data.deptId
+                        && request.resource.data.created_by_uid == resource.data.created_by_uid
+                        && request.resource.data.status in ['Active', 'Cancelled', 'Merged']);
+      allow delete: if isAdmin();
+    }
+
     match /internal_requisitions/{reqId} {
       allow read: if isAdmin() || ownsDept(resource.data.deptId);
 

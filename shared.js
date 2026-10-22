@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.7.1';
+const APP_VERSION = '6.9.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -465,7 +465,8 @@ const lockRequisitionItem = (rawItem) => {
 // ─── Requisition Value Analytics ──────────────────────────
 const getRequisitionItemValue = (item) => {
   if (isNonBillableInRequisition(item)) return 0;
-  return (toNonNegativeNumber(item?.dispenseQty) / safePackSize(item?.packSize)) * toNonNegativeNumber(item?.price);
+  // v6.9 รวมยอดเบิกฉุกเฉิน (ใบ ฉ) ในมูลค่า — คิดเงินแต่ไม่จ่ายยาเพิ่ม
+  return ((toNonNegativeNumber(item?.dispenseQty) + toNonNegativeNumber(item?.emergencyQty)) / safePackSize(item?.packSize)) * toNonNegativeNumber(item?.price);
 };
 
 const getRb301UsageQty = (item) => {

@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.8.0 · Bridge v2.10.1)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.9.0 · Bridge v2.10.2)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **แก้เฉพาะจุดที่ขอ / เฉพาะไฟล์ที่เกี่ยวข้อง** — อย่า refactor หรือเปลี่ยนสิ่งที่ไม่ได้ขอ
@@ -84,6 +84,13 @@
 - เบิกยาด่วน (internal.html `UrgentReqView`, collection `internal_urgent`): เลือกรอบที่ยังไม่ยืนยันจ่าย → รายการแบบตารางหน่วยงาน → พิมพ์ "ขอเบิกยา/เวชภัณฑ์ล่วงหน้า" · DeptReqView ของรอบนั้นรวมยอด (`urgentQty`, หมายเหตุ "รวมเบิกด่วน") แล้วปิดใบด่วนเป็น Merged
 
 - ใบเบิกพร้อมยอดคงเหลือคลัง (Bridge 2.10.1): ตอนส่ง INVS เก็บใน snapshot `stock_before/stock_after/stock_lots/alloc[{lot_no,expiry,qty}]` จาก `inv_md_c` คลังจ่าย (lot เรียง RECORD_NUMBER เหมือน lot ตั้งต้น) · app.html `buildInvsStockSheetHtml` ปุ่ม "พิมพ์ใบเบิกพร้อมยอดคงเหลือ" ในกล่อง INVS ของใบ รพ.สต. และคิวใบภายใน (ถามพิมพ์ทันทีหลังส่ง)
+
+## ใบเบิกยาฉุกเฉิน รพ.สต. (ใบ ฉ) v6.9.0
+- app.html `EmergencyReqView` (เมนู "เบิกยาฉุกเฉิน (ใบ ฉ)") collection `rpst_emergency` {hospitalId, items[{drugId,qty หน่วยย่อย,...}], reason, status Approved/Cancelled, merged_req_id}
+- ตรวจผ่านระบบ (`checkEmergencyItems`): มีเหตุผล · ยาอยู่ใน config_par ของ รพ.สต. · ไม่ใช่วัคซีน/ยกเลิก · ไม่เกิน Target Stock / Maximum → เขียว "สามารถรับยาได้เลย" · ไม่ผ่าน = แดง บันทึกไม่ได้
+- ใบพิมพ์ `buildEmergencyFormHtml` + หมายเหตุขั้นตอน (ส่งกระดาษ/PDF ทาง LINE ไม่ต้องเบิกซ้ำ ระบบรวมยอดเอง)
+- CreateReqView โหลดใบ ฉ ที่ยังไม่รวม (หรือรวมเข้าใบนี้) → `item.emergencyQty` แสดง "จ่ายใหม่ + ฉุกเฉิน(แดง)" แก้ไม่ได้ · หมายเหตุท้ายตาราง · บันทึกแล้วตั้ง merged_req_id
+- `getRequisitionItemValue` รวม emergencyQty (คิดเงิน) · Bridge 2.10.2 ส่ง INVS qty = dispenseQty + emergencyQty · sync_virtual_stock 1.2 ไม่บวก emergencyQty เข้า Lot ซ้ำ · dispenseQty (จ่ายจริง) ไม่รวมฉุกเฉิน
 
 ## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
 - หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)

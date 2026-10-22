@@ -28,7 +28,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.10.1';
+const BRIDGE_VERSION = '2.10.2';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -513,7 +513,8 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
     $seenDrug=[];
     foreach ($items as $idx=>$it) {
         if (!is_array($it)) continue;
-        $qty=finiteNumber($it['dispenseQty'] ?? $it['finalRequestedQty'] ?? 0);
+        // v2.10.2 รวมยอดเบิกฉุกเฉิน (ใบ ฉ) ที่รับยาไปแล้ว — ตัด INVS ด้วยใบเบิกหลักนี้
+        $qty=finiteNumber($it['dispenseQty'] ?? $it['finalRequestedQty'] ?? 0)+finiteNumber($it['emergencyQty'] ?? 0);
         if ($qty<=0) continue;
         $drugId=cleanText($it['drugId'] ?? '');
         if ($drugId==='') { $errors[]="รายการที่ ".($idx+1)." ไม่มี drugId"; continue; }

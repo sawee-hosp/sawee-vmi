@@ -15,7 +15,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const VSTOCK_VERSION = '1.1.0';
+const VSTOCK_VERSION = '1.2.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -328,8 +328,14 @@ try {
                 $confirmed=strtoupper(cleanV($req['invs_confirm_flag']??''))==='Y';
                 $snapshot=is_array($req['invs_dispense_snapshot']??null)?$req['invs_dispense_snapshot']:[];
                 if ($confirmed && $allReconciled && $snapshot) {
+                    // v1.2 ยอดเบิกฉุกเฉิน (ใบ ฉ) อยู่ที่ รพ.สต. แล้ว (รวมในยอดที่แจ้ง) → ไม่บวกเข้า Lot ซ้ำ
+                    $emLeft=[];
+                    foreach ($items as $it) { $d=cleanV($it['drugId']??''); $e=numV($it['emergencyQty']??0); if($d!=='' && $e>0) $emLeft[$d]=($emLeft[$d]??0)+$e; }
                     foreach ($snapshot as $idx=>$row) {
-                        $qty=numV($row['qty_rcv']??$row['QTY_RCV']??0); if($qty<=0) continue;
+                        $qty=numV($row['qty_rcv']??$row['QTY_RCV']??0);
+                        $emDrug=cleanV($row['drug_id']??$row['WORKING_CODE']??'');
+                        if ($qty>0 && !empty($emLeft[$emDrug])) { $cut=min($qty,$emLeft[$emDrug]); $qty-=$cut; $emLeft[$emDrug]-=$cut; }
+                        if($qty<=0) continue;
                         $alternate=is_array($row['alternate_receipts']??null)?array_values(array_filter($row['alternate_receipts'],fn($x)=>numV($x['qty_rcv']??0)>0)):[];
                         if ($alternate) {
                             // Multi-lot semantics have not been empirically verified yet. Do not risk double-counting.

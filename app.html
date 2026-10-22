@@ -230,11 +230,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.7.1"></script>
+  <script src="shared.js?v=6.9.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.7.1';
+      var need = '6.9.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -545,6 +545,176 @@
         `<div class="note">ยอดคงเหลือคลัง = ยอดในคลังจ่าย INVS (รวมทุก lot) ณ เวลาที่ส่ง หักจำนวนจ่ายในใบนี้ · Lot ที่ตัดคำนวณจาก lot เก่าก่อน (ลำดับเดียวกับ INVS) — ยืนยันจ่ายจริงใน INVS อาจต่างได้${hasStock ? '' : '<br><b>ใบนี้ส่งด้วย Bridge รุ่นเก่า จึงไม่มียอดคงเหลือ (แสดง -)</b>'}</div>` +
         '<div class="sigs"><div>ลงชื่อ ................................ ผู้จ่าย<br>(................................)</div><div>ลงชื่อ ................................ ผู้รับของ<br>(................................)</div></div>' +
         '</body></html>';
+    };
+
+    // ===== v6.9 ใบเบิกยาฉุกเฉิน รพ.สต. (ใบ ฉ) — เบิกล่วงหน้า ระบบรวมยอดเข้าใบเบิกหลักรอบถัดไปเอง (emergencyQty) =====
+    const EMERGENCY_PROCESS_NOTE = 'ขั้นตอน: พิมพ์ใบนี้นำมาส่งที่คลังยา รพ.สวี หรือส่งไฟล์ PDF ทาง LINE ล่วงหน้า · ไม่ต้องเบิกรายการนี้ซ้ำในใบเบิกหลัก ระบบจะรวมยอดเข้าใบเบิกหลักรอบถัดไปให้เอง (คิดมูลค่า แต่ไม่จ่ายยาเพิ่ม)';
+    const checkEmergencyItems = (ctx, hospId, items, reason) => {
+      const errors = [];
+      if (!safeText(reason)) errors.push('ยังไม่ระบุเหตุผลการเบิกฉุกเฉิน');
+      const valid = items.filter(it => toNonNegativeNumber(it.qty) > 0);
+      if (!valid.length) errors.push('ยังไม่มีรายการที่ใส่จำนวน');
+      valid.forEach(it => {
+        const drug = ctx.findDrug(it.drugId); const par = ctx.findPar(hospId, it.drugId);
+        const target = toNonNegativeNumber(par?.par_qty); const max = getMaximumQty(drug || it);
+        if (!drug) errors.push(`${it.name}: ไม่พบในฐานข้อมูลยา`);
+        else if (String(drug.type) === '6') errors.push(`${it.name}: วัคซีนเบิกผ่านแบบฟอร์ม ว.3/1`);
+        else if (isDrugDiscontinued(drug)) errors.push(`${it.name}: ยกเลิกการใช้แล้ว`);
+        else if (!par || target <= 0) errors.push(`${it.name}: ไม่อยู่ในรายการยาของ รพ.สต. (ไม่มี Target Stock)`);
+        else if (toNonNegativeNumber(it.qty) > target) errors.push(`${it.name}: ขอ ${formatQty(it.qty, it.packSize)} เกิน Target Stock ${formatQty(target, it.packSize)}`);
+        else if (max > 0 && toNonNegativeNumber(it.qty) > max) errors.push(`${it.name}: ขอเกินยอดสูงสุด ${formatQty(max, it.packSize)}`);
+      });
+      return { ok: errors.length === 0, errors, valid };
+    };
+    const emergencyItemValue = (it) => (toNonNegativeNumber(it.qty) / safePackSize(it.packSize)) * toNonNegativeNumber(it.price);
+    const buildEmergencyFormHtml = ({ doc, ctx }) => {
+      const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const money = (v) => toSafeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const items = (doc.items || []).slice().sort((a, b) => String(a.type || '1').localeCompare(String(b.type || '1')) || compareByLocation(safeText(ctx.findDrug(a.drugId)?.invs_location), a.name, safeText(ctx.findDrug(b.drugId)?.invs_location), b.name));
+      const total = items.reduce((s, it) => s + emergencyItemValue(it), 0);
+      const ok = doc.status === 'Approved';
+      const rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="name">${esc(it.name)}</td><td class="c">${esc(it.unit || '')}</td><td class="c">${safePackSize(it.packSize)}</td><td class="r b">${esc(formatQty(it.qty, it.packSize))}</td><td></td><td class="r">${money(it.price)}</td><td class="r">${money(emergencyItemValue(it))}</td><td class="c code">${esc(drugCodeLabel(it.drugId, ctx.findDrug(it.drugId)?.old_code))}</td></tr>`).join('');
+      const blanks = Array.from({ length: Math.max(0, 5 - items.length) }, () => '<tr class="blank"><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join('');
+      const d = doc.form_date || toYmd(new Date());
+      const title = `ใบเบิกยาฉุกเฉิน ${doc.hospital_name || ''} ${thaiDateLong(d)}`.replace(/[\\/:*?"<>|]+/g, '-');
+      return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+        '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800&display=block" rel="stylesheet"><style>' +
+        '@page{size:A4 portrait;margin:14mm 12mm 14mm 12mm;@top-right{content:"หน้า " counter(page) "/" counter(pages);font-family:Sarabun,Tahoma,sans-serif;font-size:9px;color:#555}}' +
+        "*{box-sizing:border-box}body{font-family:'Sarabun','Tahoma',sans-serif;font-size:13px;line-height:1.5;color:#111;margin:0}" +
+        'h1{text-align:center;font-size:21px;margin:0}.sub{text-align:center;font-size:14px;font-weight:700;margin-bottom:6px}.meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 18px;margin:8px 0}.meta b{font-weight:700}' +
+        '.status{margin:8px 0;padding:10px;text-align:center;font-size:26px;font-weight:800;border:3px solid;border-radius:10px}.ok{color:#15803d;border-color:#15803d;background:#f0fdf4}.ng{color:#dc2626;border-color:#dc2626;background:#fef2f2}' +
+        '.reason{border:1px solid #444;padding:6px 8px;margin:6px 0}table{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:6px}th,td{border:1px solid #444;padding:3px 5px}th{background:#eee;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+        '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.code{font-family:Consolas,monospace;font-size:10px;color:#444}.blank td{height:22px}.tot td{font-weight:700}' +
+        '.note{margin-top:10px;border:1px dashed #555;padding:6px 8px;font-size:11.5px}.sigs{display:grid;grid-template-columns:1fr 1fr;gap:18px 30px;margin-top:22px;text-align:center;page-break-inside:avoid}' +
+        '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}</style></head><body>' +
+        '<h1>ใบเบิกยาฉุกเฉิน (ใบ ฉ)</h1><div class="sub">ขอเบิกยา/เวชภัณฑ์ล่วงหน้า — คลังยา โรงพยาบาลสวี</div>' +
+        `<div class="meta"><div>หน่วยเบิก <b>${esc(doc.hospital_name || doc.hospitalId)}</b></div><div>เลขที่ <b>${esc(doc.doc_no || doc.id || '-')}</b></div><div>วันที่ <b>${esc(thaiDateLong(d))}</b></div></div>` +
+        (ok ? '<div class="status ok">✔ ผ่านระบบ — สามารถรับยาได้เลย</div>' : '<div class="status ng">✖ ไม่ผ่านระบบ — ไม่สามารถเบิกได้</div>') +
+        `<div class="reason"><b>เหตุผลที่เบิกฉุกเฉิน:</b> ${esc(doc.reason || '-')}</div>` +
+        '<table><thead><tr><th style="width:5%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:8%">หน่วย</th><th style="width:7%">บรรจุ</th><th style="width:10%">จำนวนเบิก</th><th style="width:9%">จำนวนจ่าย</th><th style="width:9%">ราคา/หน่วย</th><th style="width:10%">มูลค่า</th><th style="width:10%">รหัส</th></tr></thead><tbody>' +
+        rows + blanks + `<tr class="tot"><td colspan="7" class="r">รวม ${items.length} รายการ · มูลค่า (บาท)</td><td class="r">${money(total)}</td><td></td></tr></tbody></table>` +
+        `<div class="note"><b>หมายเหตุ</b> ${esc(EMERGENCY_PROCESS_NOTE)}</div>` +
+        `<div class="sigs"><div>ลงชื่อ ................................ ผู้เบิก<br>(${esc(doc.created_by_name || '................................')})<br>วันที่ ..............................</div><div>ลงชื่อ ................................ ผู้อนุมัติ<br>(................................)<br>วันที่ ..............................</div>` +
+        '<div>ลงชื่อ ................................ ผู้จ่าย<br>(................................)<br>วันที่ ..............................</div><div>ลงชื่อ ................................ ผู้รับของ<br>(................................)<br>วันที่ ..............................</div></div>' +
+        '</body></html>';
+    };
+
+    const EmergencyReqView = ({ ctx }) => {
+      const isAdmin = normalizeUserRole(ctx.currentUser?.role) === 'admin';
+      const [adminHospId, setAdminHospId] = useState('');
+      const hospId = isAdmin ? safeText(adminHospId) : safeText(ctx.currentUser?.hospital_id);
+      const hospName = (ctx.appDb.hospitals || []).find(h => String(h.hospital_id) === String(hospId))?.hospital_name || hospId;
+      const [docs, setDocs] = useState([]);
+      const [mode, setMode] = useState('list');
+      const [items, setItems] = useState([]);
+      const [reason, setReason] = useState('');
+      const [search, setSearch] = useState('');
+      const [saving, setSaving] = useState(false);
+      const load = async () => {
+        if (!hospId) { setDocs([]); return; }
+        try {
+          if (isAdmin) await ctx.refreshData(ctx.currentUser, { hospitalId: hospId });
+          const sn = await db.collection('rpst_emergency').where('hospitalId', '==', hospId).get();
+          setDocs(sn.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.form_date || '').localeCompare(String(a.form_date || '')) || String(b.id).localeCompare(String(a.id))));
+        } catch (e) { ctx.showToast('โหลดใบเบิกฉุกเฉินไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+      };
+      useEffect(() => { load(); setMode('list'); }, [hospId]);
+      const parDrugs = useMemo(() => (ctx.appDb.parLevels || []).filter(p => String(p.hospital_id) === String(hospId) && toNonNegativeNumber(p.par_qty) > 0)
+        .map(p => ctx.findDrug(p.drug_id)).filter(d => d && String(d.type) !== '6' && !isDrugDiscontinued(d)), [ctx.appDb.parLevels, hospId]);
+      const results = useMemo(() => {
+        const q = search.trim().toLowerCase(); if (!q) return [];
+        return parDrugs.filter(d => `${d.drug_id} ${d.drug_name} ${d.hosxp_code || ''}`.toLowerCase().includes(q) && !items.some(it => it.drugId === String(d.drug_id))).slice(0, 15);
+      }, [search, parDrugs, items]);
+      const unitOf = (d) => (ctx.appDb.units || []).find(u => String(u.unit_id) === String(d?.unit_id))?.unit_name || d?.unit_id || '';
+      const addDrug = (d) => { setItems(prev => [...prev, { drugId: String(d.drug_id), name: d.drug_name, unit: unitOf(d), packSize: safePackSize(d.pack_size), price: toNonNegativeNumber(d.price), type: String(d.type || '1'), qty: 0 }]); setSearch(''); };
+      const check = checkEmergencyItems(ctx, hospId, items, reason);
+      const total = check.valid.reduce((s, it) => s + emergencyItemValue(it), 0);
+      const doPrint = (doc) => printHtmlDocument(buildEmergencyFormHtml({ doc, ctx }));
+      const save = async () => {
+        if (!check.ok) return ctx.showToast('ไม่ผ่านระบบ — แก้ไขรายการตามที่แจ้งก่อน', 'error');
+        setSaving(true);
+        try {
+          const now = new Date();
+          const id = `EM-${hospId}-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+          const doc = {
+            id, doc_no: 'ฉ ' + id.slice(-15), hospitalId: hospId, hospital_name: safeText(hospName), status: 'Approved', form_date: toYmd(now), reason: safeText(reason),
+            items: check.valid.map(it => ({ drugId: it.drugId, name: safeText(it.name), unit: safeText(it.unit), packSize: safePackSize(it.packSize), price: toNonNegativeNumber(it.price), type: safeText(it.type || '1'), qty: toNonNegativeNumber(it.qty) })),
+            item_count: check.valid.length, total_value: Math.round(total * 100) / 100, merged_req_id: '',
+            created_by_uid: ctx.currentUser.uid, created_by_name: safeText(ctx.currentUser.name), created_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp()
+          };
+          await db.collection('rpst_emergency').doc(id).set(doc);
+          await writeAuditLog(ctx.currentUser, 'RPST_EMERGENCY_CREATE', 'rpst_emergency', id, { hospital_id: hospId, item_count: doc.item_count });
+          ctx.showToast('บันทึกใบเบิกฉุกเฉินแล้ว — สามารถรับยาได้เลย');
+          doPrint(doc);
+          setItems([]); setReason(''); setMode('list'); await load();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setSaving(false); }
+      };
+      const cancelDoc = (d) => ctx.setConfirmDialog({ title: 'ยกเลิกใบเบิกฉุกเฉินนี้?', message: 'ยอดในใบนี้จะไม่ถูกรวมเข้าใบเบิกหลัก', icon: 'fa-ban', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-500 hover:bg-red-600', confirmText: 'ยกเลิกใบ',
+        onConfirm: async () => { try { await db.collection('rpst_emergency').doc(d.id).update({ status: 'Cancelled', cancelled_at: firebase.firestore.FieldValue.serverTimestamp(), cancelled_by_uid: ctx.currentUser.uid, updated_at: firebase.firestore.FieldValue.serverTimestamp() }); ctx.showToast('ยกเลิกแล้ว'); await load(); } catch (e) { ctx.showToast(e.message, 'error'); } } });
+
+      return (
+        <div className="space-y-5 animate-fade-in" id="emergency-view">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-truck-medical text-red-600 mr-2"></i>ใบเบิกยาฉุกเฉิน (ใบ ฉ)</h2>
+              <div className="text-sm text-slate-500">{hospName || 'เลือก รพ.สต.'} · เบิกล่วงหน้าเมื่อจำเป็น ระบบรวมยอดเข้าใบเบิกหลักรอบถัดไปให้เอง</div>
+              {isAdmin && <select value={adminHospId} onChange={e => setAdminHospId(e.target.value)} className="mt-2 min-w-64 rounded-lg border-2 border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-bold"><option value="">— เลือก รพ.สต. —</option>{(ctx.appDb.hospitals || []).map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name}</option>)}</select>}
+            </div>
+            {hospId && mode === 'list' && <button id="em-new" onClick={() => { setItems([]); setReason(''); setMode('new'); }} className="px-5 py-3 rounded-xl bg-red-600 text-white font-bold shadow-lg"><i className="fa-solid fa-plus mr-2"></i>สร้างใบเบิกฉุกเฉิน</button>}
+          </div>
+
+          {hospId && mode === 'list' && <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">วันที่</th><th className="p-3 text-left">เลขที่</th><th className="p-3 text-left">เหตุผล</th><th className="p-3 text-right">รายการ</th><th className="p-3 text-right">มูลค่า</th><th className="p-3 text-left">สถานะ</th><th className="p-3"></th></tr></thead>
+              <tbody>
+                {!docs.length && <tr><td colSpan="7" className="p-10 text-center text-slate-400">ยังไม่มีใบเบิกฉุกเฉิน</td></tr>}
+                {docs.map(d => <tr key={d.id} className="border-t">
+                  <td className="p-3">{thaiDateLong(d.form_date)}</td><td className="p-3 font-mono text-xs">{d.doc_no || d.id}</td><td className="p-3 max-w-xs truncate">{d.reason}</td>
+                  <td className="p-3 text-right">{d.item_count}</td><td className="p-3 text-right">{toSafeNumber(d.total_value).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+                  <td className="p-3">{d.status === 'Cancelled' ? <span className="px-2 py-1 rounded-lg text-xs font-bold bg-slate-100 text-slate-500">ยกเลิก</span> : d.merged_req_id ? <span className="px-2 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800">รวมเข้าใบเบิกหลักแล้ว</span> : <span className="px-2 py-1 rounded-lg text-xs font-bold bg-amber-100 text-amber-800">รอรวมเข้าใบเบิกหลัก</span>}</td>
+                  <td className="p-3 text-right whitespace-nowrap space-x-2">{d.status !== 'Cancelled' && <button onClick={() => doPrint(d)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-bold"><i className="fa-solid fa-print mr-1"></i>พิมพ์ / PDF</button>}
+                    {d.status === 'Approved' && !d.merged_req_id && <button onClick={() => cancelDoc(d)} className="px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-bold">ยกเลิก</button>}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>}
+
+          {hospId && mode === 'new' && <div className="bg-white rounded-2xl border shadow-sm p-5 space-y-4" id="em-form">
+            <label className="block"><span className="text-sm font-bold text-slate-700">เหตุผลที่เบิกฉุกเฉิน <span className="text-red-600">*</span></span>
+              <textarea id="em-reason" value={reason} onChange={e => setReason(e.target.value)} rows="2" placeholder="เช่น ยาหมดก่อนรอบเบิก ผู้ป่วยเพิ่มจากการออกหน่วย" className="mt-1 w-full p-3 border rounded-xl" /></label>
+            <div className="relative">
+              <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+              <input id="em-search" value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหายาในรายการของ รพ.สต. (ชื่อ / รหัส)" className="w-full pl-11 pr-4 py-3 border rounded-xl" />
+              {results.length > 0 && <div className="absolute z-30 mt-1 w-full bg-white border rounded-xl shadow-xl max-h-72 overflow-y-auto">{results.map(d => <button key={d.drug_id} onClick={() => addDrug(d)} className="w-full text-left px-4 py-2 border-b hover:bg-red-50 flex gap-3"><span className="font-mono text-xs text-slate-400 w-16">{d.drug_id}</span><span className="flex-1">{d.drug_name}</span><span className="text-xs text-slate-400">Target {formatQty(ctx.findPar(hospId, d.drug_id)?.par_qty, d.pack_size)}</span></button>)}</div>}
+            </div>
+            <div className="overflow-x-auto border rounded-xl">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-2 text-left">ที่</th><th className="p-2 text-left">ชื่อยา/เวชภัณฑ์</th><th className="p-2">หน่วย</th><th className="p-2 text-right">บรรจุ</th><th className="p-2 text-right">Target Stock</th><th className="p-2">จำนวนเบิก ({'หน่วยย่อย'})</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">มูลค่า</th><th className="p-2">รหัส</th><th></th></tr></thead>
+                <tbody>
+                  {!items.length && <tr><td colSpan="10" className="p-8 text-center text-slate-400">ค้นหายาด้านบนเพื่อเพิ่มรายการ</td></tr>}
+                  {items.map((it, i) => <tr key={it.drugId} className="border-t">
+                    <td className="p-2 text-slate-400">{i + 1}</td><td className="p-2 font-semibold">{it.name}</td><td className="p-2 text-center">{it.unit}</td><td className="p-2 text-right">{it.packSize}</td>
+                    <td className="p-2 text-right text-slate-500">{formatQty(ctx.findPar(hospId, it.drugId)?.par_qty, it.packSize)}</td>
+                    <td className="p-2"><input type="number" min="0" value={it.qty || ''} onChange={e => setItems(prev => prev.map(x => x.drugId === it.drugId ? { ...x, qty: toNonNegativeNumber(e.target.value) } : x))} className="w-28 border rounded-lg px-2 py-1 text-right font-black" /> <span className="text-xs text-slate-400">{formatQty(it.qty, it.packSize)}</span></td>
+                    <td className="p-2 text-right">{toSafeNumber(it.price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td><td className="p-2 text-right">{emergencyItemValue(it).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="p-2 font-mono text-xs text-slate-500">{drugCodeLabel(it.drugId, ctx.findDrug(it.drugId)?.old_code)}</td>
+                    <td className="p-2"><button onClick={() => setItems(prev => prev.filter(x => x.drugId !== it.drugId))} className="text-red-500"><i className="fa-solid fa-xmark"></i></button></td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>
+            {check.ok ? <div id="em-status-ok" className="rounded-2xl border-4 border-green-600 bg-green-50 p-4 text-center text-3xl font-black text-green-700"><i className="fa-solid fa-circle-check mr-2"></i>ผ่านระบบ — สามารถรับยาได้เลย</div>
+              : <div id="em-status-ng" className="rounded-2xl border-4 border-red-600 bg-red-50 p-4 text-red-700"><div className="text-center text-3xl font-black"><i className="fa-solid fa-circle-xmark mr-2"></i>ไม่ผ่านระบบ — ไม่สามารถเบิกได้</div><ul className="mt-2 text-sm list-disc pl-6">{check.errors.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
+            <div className="text-xs text-slate-600 bg-slate-50 border rounded-xl p-3"><i className="fa-solid fa-circle-info mr-1"></i>{EMERGENCY_PROCESS_NOTE}</div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-600">{check.valid.length} รายการ · มูลค่า <b>{total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b> บาท</div>
+              <div className="flex gap-2"><button onClick={() => setMode('list')} className="px-4 py-2.5 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button>
+                <button id="em-save" onClick={save} disabled={saving || !check.ok} className="px-5 py-2.5 rounded-xl bg-red-600 text-white font-bold disabled:opacity-40"><i className={`fa-solid ${saving ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>บันทึกและพิมพ์ใบ ฉ</button></div>
+            </div>
+          </div>}
+        </div>
+      );
     };
 
     const LineConsoleView = ({ ctx }) => {
@@ -2257,6 +2427,17 @@ const CreateReqView = ({ ctx, round = null }) => {
         if (shouldDirty) markDirty();
       };
 
+      // v6.9 ยอดเบิกฉุกเฉิน (ใบ ฉ) ที่ยังไม่รวม/รวมเข้าใบนี้ — แก้/ลบไม่ได้ คิดมูลค่าแต่ไม่จ่ายเพิ่ม
+      const [emergencyDocs, setEmergencyDocs] = useState([]);
+      useEffect(() => {
+        if (!hospId) return;
+        db.collection('rpst_emergency').where('hospitalId', '==', String(hospId)).get()
+          .then(sn => setEmergencyDocs(sn.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.status === 'Approved' && (!d.merged_req_id || d.merged_req_id === ctx.editReqId))))
+          .catch(e => console.warn('[emergency]', e?.message || e));
+      }, [hospId]);
+      const emergencyByDrug = useMemo(() => { const m = new Map(); emergencyDocs.forEach(d => (d.items || []).forEach(it => m.set(String(it.drugId), (m.get(String(it.drugId)) || 0) + toNonNegativeNumber(it.qty)))); return m; }, [emergencyDocs]);
+      const emQtyOf = (id) => emergencyByDrug.get(String(id)) || 0;
+
       const scrollToDrugRow = (drugId) => {
         if (!drugId) return;
         setFocusDrugId(String(drugId));
@@ -2675,7 +2856,7 @@ const CreateReqView = ({ ctx, round = null }) => {
          const resolvedRequisitionNo = formatRequisitionNo(resolvedFiscalTerm, resolvedFiscalYear);
          try {
            const skipped = importData.items.filter(i => i.mappedDrugId === '').map(i => ({ rawName: safeText(i.rawName), usage: toNonNegativeNumber(i.usage) }));
-           const sanitizedItems = items.filter(item => toNonNegativeNumber(item.usage) > 0 || toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty) > 0).map(item => {
+           const sanitizedItems = items.filter(item => toNonNegativeNumber(item.usage) > 0 || toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty) > 0 || emQtyOf(item.drugId) > 0).map(item => {
               const currentDrug = ctx.findDrug(item.drugId);
               const currentPar = ctx.findPar(hospId, item.drugId);
               const currentDiscontinued = currentDrug ? isDrugDiscontinued(currentDrug) : !!item.isDiscontinued;
@@ -2703,6 +2884,8 @@ const CreateReqView = ({ ctx, round = null }) => {
               locked.submittedDispenseQty = locked.finalRequestedQty;
               locked.requestedExtraQty = locked.requestMore;
               locked.extraDispenseQtyAtSubmit = Math.max(0, lockedDelta);
+              const emq = emQtyOf(item.drugId);
+              if (emq > 0) locked.emergencyQty = emq; else delete locked.emergencyQty;
               return locked;
            }).filter(item => item.drugId);
 
@@ -2870,6 +3053,13 @@ const CreateReqView = ({ ctx, round = null }) => {
              ctx.showToast(uploadFailed ? 'ส่งข้อมูลสำเร็จ แต่ไฟล์ รบ.301 อัปโหลดไม่สำเร็จ' : (isAdmin ? 'อัปโหลดแทน รพ.สต. สำเร็จ (รอตรวจสอบ)' : 'ส่งข้อมูลสำเร็จ รอห้องยาจัดยา'), uploadFailed ? 'error' : 'success');
            }
 
+           // v6.9 ผูกใบ ฉ เข้ากับใบเบิกหลักนี้ (ไม่ถูกรวมซ้ำในใบอื่น)
+           const savedReqId = ctx.editReqId || buildRequisitionId(hospId, currentMonth, currentYear);
+           for (const d of emergencyDocs) {
+             if (d.merged_req_id) continue;
+             try { await db.collection('rpst_emergency').doc(d.id).update({ merged_req_id: savedReqId, merged_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() }); }
+             catch (e) { console.warn('[emergency merge]', e?.message || e); }
+           }
            if (savedReqForLocal && saveStatus === 'Pending') rxTaskDone(isAdmin ? 'adm_review' : 'rpst_calc');
            if (savedReqForLocal && ctx.setAppDb) {
              ctx.setAppDb(prev => {
@@ -3007,7 +3197,7 @@ const CreateReqView = ({ ctx, round = null }) => {
       const filteredItems = items.filter(item => {
         const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || String(item.drugId).includes(searchTerm.toLowerCase()) || String(ctx.findDrug(item.drugId)?.invs_keywords || '').toLowerCase().includes(searchTerm.toLowerCase());
         const matchType = filterType === 'all' ? true : filterType === item.type;
-        const inactive = toNonNegativeNumber(item.usage) === 0 && toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty) === 0 && !item.manualAdded;
+        const inactive = toNonNegativeNumber(item.usage) === 0 && toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty) === 0 && !item.manualAdded && !emQtyOf(item.drugId);
         const matchInactive = showInactive ? true : !inactive;
         return matchSearch && matchType && matchInactive;
       });
@@ -3204,11 +3394,11 @@ const CreateReqView = ({ ctx, round = null }) => {
                       const isDisabled = false;
                       const isDiscontinued = !!item.isDiscontinued || isDrugDiscontinued(drug);
                       const badge = getRequestBadge(item);
-                      const inactive = toNonNegativeNumber(item.usage) === 0 && toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty) === 0 && !item.manualAdded;
+                      const inactive = toNonNegativeNumber(item.usage) === 0 && toNonNegativeNumber(item.finalRequestedQty ?? item.dispenseQty) === 0 && !item.manualAdded && !emQtyOf(item.drugId);
                       const focused = String(focusDrugId||'') === String(item.drugId);
                       const rowClass = focused ? 'bg-yellow-100 ring-2 ring-inset ring-yellow-400' : isDiscontinued || isDisabled ? 'bg-slate-200 text-slate-500' : isVaccine ? 'bg-red-50/50' : inactive ? 'text-slate-400' : '';
                       const actualStockDisplay = item.actualStockTouched ? toNonNegativeNumber(item.actualStock) : Math.max(0,toSafeNumber(item.systemStock));
-                      const itemValue = getRequisitionItemValue({...item,isDiscontinued});
+                      const itemValue = getRequisitionItemValue({...item,isDiscontinued,emergencyQty:emQtyOf(item.drugId)});
                       const priceChange = getReqPriceChange(item);
                       const packChange = getReqPackChange(item);
                       const masterPriceSource = safeText(drug?.price_source);
@@ -3257,7 +3447,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                                 <button onClick={()=>handleFinalQtyCommit(item.drugId)} className="text-[9px] font-bold text-emerald-700">ตกลง</button>
                               </div>
                             ) : (
-                              <div className="flex items-center justify-center gap-1 whitespace-nowrap"><span>{formatQty(item.finalRequestedQty ?? item.dispenseQty,item.packSize)}</span><button onClick={()=>setEditingQtyDrugId(item.drugId)} className="no-print text-[9px] text-emerald-700 font-bold hover:underline"><i className="fa-solid fa-pen mr-0.5"></i>แก้ไข</button></div>
+                              <div className="flex items-center justify-center gap-1 whitespace-nowrap"><span>{formatQty(item.finalRequestedQty ?? item.dispenseQty,item.packSize)}</span>{emQtyOf(item.drugId)>0&&<span className="text-red-600 font-black" title="ยอดเบิกฉุกเฉิน (ใบ ฉ) แก้ไข/ลบไม่ได้">+ {formatQty(emQtyOf(item.drugId),item.packSize)}</span>}<button onClick={()=>setEditingQtyDrugId(item.drugId)} className="no-print text-[9px] text-emerald-700 font-bold hover:underline"><i className="fa-solid fa-pen mr-0.5"></i>แก้ไข</button></div>
                             )}
                             {item.maximumApplied && getMaximumQty(item)>0 && !isVaccine && !isDiscontinued && <div className="mt-0.5 text-[8px] leading-tight font-black text-amber-800">จ่ายตามยอดสูงสุด {formatQty(getMaximumQty(item),item.packSize)}</div>}
                           </td>
@@ -3271,6 +3461,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                   </tbody>
                 ))}
                 <tfoot>
+                  {emergencyByDrug.size>0 && <tr><td colSpan={showCalc?14:12} className="text-left text-[10px] px-2 py-1 border border-black" id="em-note-create">ตัวเลขหลังเครื่องหมาย <b className="text-red-600">+ (สีแดง)</b> คือยอดเบิกฉุกเฉิน (ใบ ฉ) ที่รับยาไปแล้ว — ระบบรวมคิดมูลค่าและส่งตัด INVS แต่ไม่จ่ายยาให้เพิ่ม แก้ไข/ลบไม่ได้</td></tr>}
                   <tr><td colSpan={showCalc?14:12} className="text-left text-[10px] px-2 py-1 border border-black">หมายเหตุ: ข้อมูลยา จำนวนเต็มคือจำนวนหน่วยเบิกหลัก และเลขในวงเล็บคือจำนวนที่แตกออกจากหน่วยเบิกหลักตามหน่วยที่ระบุในคอลัมน์ “หน่วย”</td></tr>
                 </tfoot>
               </table>
@@ -4593,7 +4784,7 @@ const ViewReqView = ({ ctx }) => {
       typeKeys.forEach(k => groupedItems[k] = []);
       
       // ปกติซ่อนรายการจำนวนจ่าย 0 แต่ Admin สามารถเปิดดู/แก้กลับได้ เพื่อป้องกันข้อมูลหายจากการพิมพ์ผิด
-      const isHiddenReqItem = (it) => !(it.dispenseQty > 0 || it.type === '6' || it.isDiscontinued || isDrugDiscontinued(ctx.findDrug(it.drugId)));
+      const isHiddenReqItem = (it) => !(it.dispenseQty > 0 || toNonNegativeNumber(it.emergencyQty) > 0 || it.type === '6' || it.isDiscontinued || isDrugDiscontinued(ctx.findDrug(it.drugId)));
       const hiddenItemCount = editableItems.filter(isHiddenReqItem).length;
       const itemsToDisplay = (isAdmin && showHiddenItems) ? editableItems : editableItems.filter(it => !isHiddenReqItem(it));
 
@@ -4888,12 +5079,12 @@ const ViewReqView = ({ ctx }) => {
                                            <button onClick={()=>{setEditingPreviewQtyDrugId(null);setEditingQtyDraft(prev=>{const next={...prev};delete next[String(it.drugId)];return next;});}} className="text-[9px] font-bold text-slate-400">ยกเลิก</button>
                                          </div>
                                        ) : (
-                                         <div className="flex items-center justify-center gap-1 whitespace-nowrap"><span>{formatQty(it.dispenseQty,it.packSize)}</span><button onClick={()=>{setEditingQtyDraft(prev=>({...prev,[String(it.drugId)]:it.dispenseQty}));setEditingPreviewQtyDrugId(it.drugId);}} className="text-[9px] text-emerald-700 font-bold hover:underline"><i className="fa-solid fa-pen mr-0.5"></i>แก้ไข</button></div>
+                                         <div className="flex items-center justify-center gap-1 whitespace-nowrap"><span>{formatQty(it.dispenseQty,it.packSize)}</span>{toNonNegativeNumber(it.emergencyQty)>0&&<span className="text-red-600 font-black" title="ยอดเบิกฉุกเฉิน (ใบ ฉ) แก้ไข/ลบไม่ได้"> + {formatQty(it.emergencyQty,it.packSize)}</span>}<button onClick={()=>{setEditingQtyDraft(prev=>({...prev,[String(it.drugId)]:it.dispenseQty}));setEditingPreviewQtyDrugId(it.drugId);}} className="text-[9px] text-emerald-700 font-bold hover:underline"><i className="fa-solid fa-pen mr-0.5"></i>แก้ไข</button></div>
                                        )
-                                     ) : <span>{formatQty(req.status === 'Completed' ? it.dispenseQty : lockRequisitionItem(it).dispenseQty, it.packSize)}</span>}
+                                     ) : <span>{formatQty(req.status === 'Completed' ? it.dispenseQty : lockRequisitionItem(it).dispenseQty, it.packSize)}{toNonNegativeNumber(it.emergencyQty)>0&&<span className="text-red-600 font-black" title="ยอดเบิกฉุกเฉิน (ใบ ฉ) แก้ไข/ลบไม่ได้"> + {formatQty(it.emergencyQty,it.packSize)}</span>}</span>}
                                      {it.maximumApplied && getMaximumQty(it)>0 && !isVaccine && !isDiscontinued && <div className="mt-0.5 text-[8px] leading-tight font-black text-amber-800">จ่ายตามยอดสูงสุด {formatQty(getMaximumQty(it),it.packSize)}</div>}
                                   </td>
-                                  <td className="text-center font-bold hidden print:table-cell"><div>{(isVaccine || isDisabled || isDiscontinued) ? '0' : formatQty(req.status === 'Completed' ? it.dispenseQty : lockRequisitionItem(it).dispenseQty, it.packSize)}</div>{it.maximumApplied && getMaximumQty(it)>0 && !isVaccine && !isDiscontinued && <div className="text-[7px] font-black text-amber-800">จ่ายตามยอดสูงสุด</div>}</td>
+                                  <td className="text-center font-bold hidden print:table-cell"><div>{(isVaccine || isDisabled || isDiscontinued) ? '0' : formatQty(req.status === 'Completed' ? it.dispenseQty : lockRequisitionItem(it).dispenseQty, it.packSize)}{toNonNegativeNumber(it.emergencyQty)>0&&<span className="text-red-600 font-black" title="ยอดเบิกฉุกเฉิน (ใบ ฉ) แก้ไข/ลบไม่ได้"> + {formatQty(it.emergencyQty,it.packSize)}</span>}</div>{it.maximumApplied && getMaximumQty(it)>0 && !isVaccine && !isDiscontinued && <div className="text-[7px] font-black text-amber-800">จ่ายตามยอดสูงสุด</div>}</td>
                                   <td className="text-right pr-1 text-slate-500">
                                      <span className="no-print">{isVaccine ? (isAdmin ? formatUnitPrice(it.price) : 'ไม่ร่วมระบบเบิก') : (isDisabled || isDiscontinued) ? (isAdmin ? formatUnitPrice(it.price) : '-') : formatUnitPrice(it.price)}</span>
                                      <span className="hidden print:inline">{isVaccine ? 'ไม่ร่วมระบบเบิก' : (isDisabled || isDiscontinued) ? '-' : formatUnitPrice(it.price)}</span>
@@ -4918,6 +5109,7 @@ const ViewReqView = ({ ctx }) => {
                    );
                 })}
                 <tfoot>
+                   {(req.items || []).some(x => toNonNegativeNumber(x.emergencyQty) > 0) && <tr><td colSpan={canEdit ? "13" : "12"} className="text-left px-2 py-1 border border-black text-[9pt] bg-white" id="em-note-view">ตัวเลขหลังเครื่องหมาย <b className="text-red-600">+ (สีแดง)</b> คือยอดเบิกฉุกเฉิน (ใบ ฉ) ที่รับยาไปแล้ว — ระบบรวมคิดมูลค่าและส่งตัด INVS แต่ไม่จ่ายยาให้เพิ่ม แก้ไข/ลบไม่ได้</td></tr>}
                    <tr>
                       <td colSpan={canEdit ? "13" : "12"} className="text-left px-2 py-2 border border-black text-[9pt] bg-white">
                          <span className="font-bold">หมายเหตุ:</span> ข้อมูลยา จำนวนเต็มคือจำนวนหน่วยเบิกหลัก และเลขในวงเล็บคือจำนวนที่แตกออกจากหน่วยเบิกหลักตามหน่วยที่ระบุในคอลัมน์ “หน่วย”
@@ -10092,6 +10284,7 @@ const AdminConfigView = ({ ctx }) => {
               {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('rpst_kpi')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='rpst_kpi'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-gauge w-6 text-center mr-2"></i> ตัวชี้วัด รพ.สต.</button>}
               <button onClick={() => requestView('drug_history')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='drug_history'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-chart-line w-6 text-center mr-2"></i> ประวัติการใช้ยา</button>
               {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('my_stock')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='my_stock'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> {normalizeUserRole(currentUser?.role)==='admin'?'คลังยา รพ.สต.':'ชั้นยาของฉัน'}</button>}
+              {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('emergency_req')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='emergency_req'?'bg-red-600 text-white shadow-lg shadow-red-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-truck-medical w-6 text-center mr-2"></i> เบิกยาฉุกเฉิน (ใบ ฉ)</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('internal_queue')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='internal_queue'?'bg-teal-600 text-white shadow-lg shadow-teal-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-list-ol w-6 text-center mr-2"></i> คิวใบเบิกภายใน รพ.{appDb.internalPendingCount ? <span className="ml-auto text-[11px] bg-amber-400 text-slate-900 rounded-full px-2 py-0.5">{appDb.internalPendingCount}</span> : null}</button>}
               {currentUser?.role === 'admin' && <a href="internal.html" className="w-full text-left p-4 rounded-xl font-bold transition flex items-center hover:bg-slate-800 text-slate-300"><i className="fa-solid fa-prescription-bottle-medical w-6 text-center mr-2"></i> เบิกยาห้องยา/หน่วยงาน</a>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('req_summary')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='req_summary'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-table-list w-6 text-center mr-2"></i> สรุปการเบิก</button>}
@@ -10120,6 +10313,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'create_req' && <CreateReqGate ctx={ctx} />}
               {currentView === 'view_req' && <ViewReqView ctx={ctx} />}
               {currentView === 'my_stock' && <MyStockView ctx={ctx} />}
+              {currentView === 'emergency_req' && <EmergencyReqView ctx={ctx} />}
               {currentView === 'invs_lots' && <InvsLotView ctx={ctx} />}
               {currentView === 'return_drug' && <ReturnDrugView ctx={ctx} />}
               {currentView === 'map_dashboard' && currentUser?.role === 'admin' && <MapDashboardView ctx={ctx} />}

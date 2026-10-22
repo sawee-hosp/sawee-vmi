@@ -312,6 +312,25 @@ service cloud.firestore {
 
     // Sawee VMI Virtual Stock: Firebase is the working stock ledger.
     // INVS remains read-only reference and is never modified by these client rules.
+    // v6.9 ใบเบิกยาฉุกเฉิน รพ.สต. (ใบ ฉ) — ผ่านการตรวจบนเว็บแล้วบันทึกเป็น Approved · ใบเบิกหลักผูกด้วย merged_req_id
+    match /rpst_emergency/{docId} {
+      allow read: if isAdmin() || ownsHospital(resource.data.hospitalId);
+      allow create: if isAdmin()
+                    || (ownsHospital(request.resource.data.hospitalId)
+                        && request.resource.data.status == 'Approved'
+                        && request.resource.data.created_by_uid == request.auth.uid
+                        && request.resource.data.get('merged_req_id', '') == ''
+                        && request.resource.data.items is list);
+      allow update: if isAdmin()
+                    || (ownsHospital(resource.data.hospitalId)
+                        && resource.data.status == 'Approved'
+                        && request.resource.data.hospitalId == resource.data.hospitalId
+                        && request.resource.data.items == resource.data.items
+                        && (request.resource.data.status == 'Approved' || request.resource.data.status == 'Cancelled')
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'merged_req_id', 'merged_at', 'cancelled_at', 'cancelled_by_uid', 'updated_at']));
+      allow delete: if isAdmin();
+    }
+
     match /vmi_virtual_lots/{docId} {
       allow read: if isAdmin() || ownsHospital(resource.data.hospital_id);
 

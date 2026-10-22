@@ -28,7 +28,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.10.0';
+const BRIDGE_VERSION = '2.10.2';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -385,6 +385,18 @@ function totalOnHand(mysqli $db,string $workingCode,string $stockId): array {
     $st->bind_param('ss',$workingCode,$stockId); $st->execute(); $r=$st->get_result()->fetch_assoc(); $st->close();
     return ['qty'=>finiteNumber($r['qty'] ?? 0),'lots'=>(int)($r['lots'] ?? 0)];
 }
+// v2.10.1 ทุก lot ที่มีของในคลังจ่าย เรียงแบบเดียวกับ lot ตั้งต้น (RECORD_NUMBER) — ใช้คำนวณ lot ที่จะถูกตัด + ยอดคงเหลือหลังจ่าย
+function lotsOnHand(mysqli $db,string $workingCode,string $stockId): array {
+    $st=$db->prepare("SELECT RECORD_NUMBER, LOT_NO, EXPIRED_DATE, QTY_ON_HAND FROM inv_md_c WHERE TRIM(WORKING_CODE)=TRIM(?) AND DEPT_ID=? AND COALESCE(QTY_ON_HAND,0)>0 ORDER BY RECORD_NUMBER ASC");
+    $st->bind_param('ss',$workingCode,$stockId); $st->execute(); $res=$st->get_result(); $out=[];
+    while ($r=$res->fetch_assoc()) $out[]=['lot_no'=>cleanText($r['LOT_NO'] ?? ''),'expiry'=>cleanText($r['EXPIRED_DATE'] ?? ''),'qty'=>finiteNumber($r['QTY_ON_HAND'] ?? 0)];
+    $st->close(); return $out;
+}
+function allocateLots(array $lots,float $qty): array {
+    $left=$qty; $alloc=[];
+    foreach ($lots as $l) { if ($left<=1e-9) break; $use=min($l['qty'],$left); if ($use<=0) continue; $alloc[]=['lot_no'=>$l['lot_no'],'expiry'=>$l['expiry'],'qty'=>$use,'lot_qty_before'=>$l['qty']]; $left-=$use; }
+    return $alloc;
+}
 function drugExists(mysqli $db,string $workingCode): ?array {
     $st=$db->prepare('SELECT WORKING_CODE, DRUG_NAME FROM drug_gn WHERE TRIM(WORKING_CODE)=TRIM(?) LIMIT 1');
     $st->bind_param('s',$workingCode); $st->execute(); $r=$st->get_result()->fetch_assoc(); $st->close(); return $r ?: null;
@@ -501,7 +513,8 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
     $seenDrug=[];
     foreach ($items as $idx=>$it) {
         if (!is_array($it)) continue;
-        $qty=finiteNumber($it['dispenseQty'] ?? $it['finalRequestedQty'] ?? 0);
+        // v2.10.2 รวมยอดเบิกฉุกเฉิน (ใบ ฉ) ที่รับยาไปแล้ว — ตัด INVS ด้วยใบเบิกหลักนี้
+        $qty=finiteNumber($it['dispenseQty'] ?? $it['finalRequestedQty'] ?? 0)+finiteNumber($it['emergencyQty'] ?? 0);
         if ($qty<=0) continue;
         $drugId=cleanText($it['drugId'] ?? '');
         if ($drugId==='') { $errors[]="รายการที่ ".($idx+1)." ไม่มี drugId"; continue; }
@@ -528,6 +541,8 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
             elseif (!empty($config['invs']['block_if_first_lot_short'])) $errors[]=$msg." และรวมทุก lot ในคลังมีแค่ {$all['qty']} (บล็อกการส่ง — ลดจำนวนจ่ายก่อน)";
             else $warnings[]=$msg." และรวมทุก lot ในคลังมีแค่ {$all['qty']} — INVS จะจ่ายได้ไม่ครบ";
         }
+        $allLots=lotsOnHand($db,$drugId,$stockId);
+        $stockBefore=array_sum(array_map(fn($l)=>$l['qty'],$allLots));
         $nlem=findNlem($db,$drugId,cleanText($lot['TRADE_CODE'] ?? ''),isset($lot['PACK_CODE'])?(int)$lot['PACK_CODE']:null);
         $lines[]=[
             'drug_id'=>$drugId,'drug_name'=>cleanText($dg['DRUG_NAME'] ?? ($it['name'] ?? '')),'qty'=>$qty,
@@ -536,7 +551,8 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
             'vendor_code'=>cleanText($lot['VENDOR_CODE'] ?? ''),'manufac_code'=>cleanText($lot['MANUFAC_CODE'] ?? ''),'trade_code'=>cleanText($lot['TRADE_CODE'] ?? $drugId),
             'pack_code'=>($lot['PACK_CODE']!==null && $lot['PACK_CODE']!=='')?(int)$lot['PACK_CODE']:null,'nlem'=>$nlem,
             'location'=>cleanText($lot['LOCATION'] ?? ''),'mod_sys'=>cleanText($lot['MOD_SYS'] ?? cfg($config,'invs','mod_sys','MED')),
-            'vmi_pack_size'=>$masterPack,'extra'=>!empty($it['_extra']),'extra_qty'=>finiteNumber($it['_extra_qty'] ?? 0)
+            'vmi_pack_size'=>$masterPack,'extra'=>!empty($it['_extra']),'extra_qty'=>finiteNumber($it['_extra_qty'] ?? 0),
+            'stock_before'=>$stockBefore,'stock_after'=>max(0.0,$stockBefore-$qty),'stock_lots'=>count($allLots),'alloc'=>allocateLots($allLots,$qty)
         ];
     }
     if (!$lines) $errors[]='ไม่มีรายการที่มีจำนวนจ่ายมากกว่า 0';
@@ -1181,7 +1197,8 @@ try {
     }
 
     $snapshot=array_map(fn($x)=>[
-        'drug_id'=>$x['drug_id'],'qty'=>$x['qty'],'invs_lot_record_number'=>(int)$x['lot_record'],'lot_no'=>$x['lot_no'],'expiry'=>$x['expiry'],'pack_ratio'=>$x['pack_ratio'],'cost'=>$x['cost'],'pack_cost'=>$x['pack_cost'],'value'=>$x['value']
+        'drug_id'=>$x['drug_id'],'qty'=>$x['qty'],'invs_lot_record_number'=>(int)$x['lot_record'],'lot_no'=>$x['lot_no'],'expiry'=>$x['expiry'],'pack_ratio'=>$x['pack_ratio'],'cost'=>$x['cost'],'pack_cost'=>$x['pack_cost'],'value'=>$x['value'],
+        'stock_before'=>$x['stock_before'],'stock_after'=>$x['stock_after'],'stock_lots'=>$x['stock_lots'],'alloc'=>$x['alloc'],'stock_at'=>gmdate('Y-m-d\TH:i:s\Z')
     ],$pre['items']);
     $firestoreWarning='';
     try {

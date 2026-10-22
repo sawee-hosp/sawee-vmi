@@ -28,7 +28,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.10.2';
+const BRIDGE_VERSION = '2.11.1';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -429,10 +429,15 @@ function generateSubPoNoAndInsertHeader(mysqli $db,array $h): string {
         if ($next>9999) throw new RuntimeException('เลขใบเบิกประจำวันเกิน 9999');
         $subPoNo=$prefix.str_pad((string)$next,4,'0',STR_PAD_LEFT);
 
+        // v2.11 R_S_STATUS='S' = เอกสารจ่ายผู้ป่วยจากคลังย่อย (INVS สร้างเองแบบ SEND_FLAG/CONFIRM_DATE/TIME ว่าง)
+        $rs=($h['r_s_status'] ?? 'R')==='S' ? 'S' : 'R';
+        if ($rs==='S') { $cDate=null; $cTime=null; }
+        $sendFlag=$rs==='S' ? null : 'N';
+        $uno=$rs==='S' ? '' : null;
         $sql="INSERT INTO sm_po (SUB_PO_NO,DEPT_ID,ACC_NO,TOTAL_ITEM,TOTAL_COST,TOTAL_VALUE,SYSDATE,OK,PROCESS,ERROR_ENTER,ERROR_PROCESS,STOCK_ID,USER_ID,SUB_PO_DATE,CONFIRM_FLAG,PRIOR_FLAG,R_S_STATUS,SEND_FLAG,PRINT_FLAG,MOD_SYS,REF_NO,SUB_PO_UNO,CONFIRM_DATE,CONFIRM_TIME,DIST_TYPE,REQ_INTER,CFM_INTER)
-              VALUES (?,?,NULL,?,?,?,NOW(),NULL,NULL,NULL,NULL,?,?,?,'N',NULL,'R','N',NULL,?,?,NULL,?,?,NULL,'N','N')";
+              VALUES (?,?,NULL,?,?,?,NOW(),NULL,NULL,NULL,NULL,?,?,?,'N',NULL,?,?,NULL,?,?,?,?,?,NULL,'N','N')";
         $st=$db->prepare($sql);
-        $st->bind_param('ssdddsssssss',$subPoNo,$h['dept_id'],$h['total_item'],$h['total_cost'],$h['total_value'],$h['stock_id'],$h['user_id'],$h['req_date'],$h['mod_sys'],$h['marker'],$cDate,$cTime);
+        $st->bind_param('ssdddssssssssss',$subPoNo,$h['dept_id'],$h['total_item'],$h['total_cost'],$h['total_value'],$h['stock_id'],$h['user_id'],$h['req_date'],$rs,$sendFlag,$h['mod_sys'],$h['marker'],$uno,$cDate,$cTime);
         $st->execute(); $st->close();
         $db->query('UNLOCK TABLES');
         return $subPoNo;
@@ -615,7 +620,7 @@ $raw=(string)file_get_contents('php://input');
 $body=json_decode($raw,true);
 if (!is_array($body)) respondError('JSON_INVALID','Request body ต้องเป็น JSON',400);
 $action=cleanText($body['action'] ?? '');
-if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
+if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
 
 // ----------------------------- list_depts (READ-ONLY) -----------------------------
 if ($action==='list_depts') {
@@ -973,6 +978,137 @@ if ($action==='invs_master') {
         respond(['ok'=>true,'action'=>'invs_master','rows'=>$rows,'units'=>$units,'bridge_version'=>BRIDGE_VERSION]);
     } catch (Throwable $e) {
         if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
+        respondError('BRIDGE_ERROR',$e->getMessage(),500);
+    }
+}
+
+// ----------------------------- v2.11 คลังย่อย รพ.สต. → INVS ("จ่ายผู้ป่วย") -----------------------------
+// เว็บส่ง "ยอดที่ควรเหลือจริง" รายยา (target_qty หน่วยย่อย) → Bridge อ่านล็อตคลังย่อยใน INVS (inv_md_c DEPT_ID = invs_dept_id ของ รพ.สต.)
+// ส่วนเกิน (INVS − target) = ยอดใช้ที่ยังไม่ได้ตัด → สร้างเอกสารจ่ายผู้ป่วย sm_po (R_S_STATUS='S', คลัง รพ.สต. → PT01) + sm_po_c รายล็อต (EXP ใกล้สุดก่อน)
+// CONFIRM_FLAG='N' เสมอ — INVS ตัดยอด/บัตรคลังเองเมื่อเภสัชกรกด "ยืนยัน" ในโปรแกรม INVS (Bridge ไม่แตะ inv_md_c/inv_md/card)
+function substockLots(mysqli $db,string $workingCode,string $stockId): array {
+    $st=$db->prepare("SELECT RECORD_NUMBER, WORKING_CODE, PACK_RATIO, QTY_ON_HAND, LOT_COST, LOT_VALUE, VENDOR_CODE, MANUFAC_CODE, TRADE_CODE, LOT_NO, EXPIRED_DATE, PACK_COST, PACK_CODE, MOD_SYS, LOCATION
+        FROM inv_md_c WHERE TRIM(WORKING_CODE)=TRIM(?) AND DEPT_ID=? AND COALESCE(QTY_ON_HAND,0)>0
+        ORDER BY (EXPIRED_DATE IS NULL OR TRIM(EXPIRED_DATE)=''), EXPIRED_DATE, RECORD_NUMBER");
+    $st->bind_param('ss',$workingCode,$stockId); $st->execute(); $rows=$st->get_result()->fetch_all(MYSQLI_ASSOC); $st->close(); return $rows;
+}
+function buildSubstockPlan(mysqli $db,array $config,string $stockId,array $targets): array {
+    $lines=[]; $drugs=[]; $warnings=[]; $errors=[]; $seen=[];
+    foreach ($targets as $t) {
+        if (!is_array($t)) continue;
+        $drugId=cleanText($t['drug_id'] ?? ''); if ($drugId==='' || isset($seen[$drugId])) continue; $seen[$drugId]=true;
+        $lots=substockLots($db,$drugId,$stockId);
+        $onHand=array_sum(array_map(fn($l)=>finiteNumber($l['QTY_ON_HAND'] ?? 0),$lots));
+        // v2.11.1 โหมดยอดใช้: ส่ง cut_qty (ยอดใช้ผู้ป่วยจาก รบ.301) มาตรง ๆ — ตัดได้ไม่เกินที่ INVS มี
+        $byUsage=array_key_exists('cut_qty',$t);
+        if ($byUsage) {
+            $want=max(0.0,finiteNumber($t['cut_qty'] ?? 0));
+            $cut=round(min($want,$onHand),4); $target=round($onHand-$cut,4);
+            if ($want-$onHand>0.0001) $warnings[]="{$drugId}: ยอดใช้ {$want} มากกว่าคลังย่อย INVS {$onHand} — ตัดได้ {$cut}";
+        } else {
+            $target=max(0.0,finiteNumber($t['target_qty'] ?? 0));
+            $cut=round($onHand-$target,4);
+        }
+        $row=['drug_id'=>$drugId,'name'=>cleanText($t['name'] ?? ''),'invs_on_hand'=>$onHand,'target_qty'=>$target,'cut_qty'=>max(0.0,$cut),'requested_cut'=>$byUsage?max(0.0,finiteNumber($t['cut_qty'] ?? 0)):null,'lots'=>[],'status'=>'ok'];
+        if ($byUsage && $onHand<=0.0001 && $row['requested_cut']>0) { $row['status']='invs_short'; }
+        elseif ($cut<-0.0001) { $row['status']='invs_short'; $row['cut_qty']=0; $warnings[]="{$drugId}: INVS มี {$onHand} น้อยกว่ายอดจริง {$target} — ตัดไม่ได้ (ต้องรับเข้าคลังย่อยใน INVS)"; }
+        elseif ($cut>0.0001) {
+            $left=$cut; $row['status']='cut';
+            foreach ($lots as $l) {
+                if ($left<=0.0001) break;
+                $q=finiteNumber($l['QTY_ON_HAND'] ?? 0); $use=round(min($q,$left),4); if ($use<=0) continue; $left=round($left-$use,4);
+                $pack=max(1.0,finiteNumber($l['PACK_RATIO'] ?? 1,1)); $packCost=finiteNumber($l['PACK_COST'] ?? 0);
+                $unitLotCost=$q>0 ? finiteNumber($l['LOT_COST'] ?? 0)/$q : 0.0; // เหมือน INVS: COST = จำนวน × LOT_COST/QTY_ON_HAND
+                $line=[
+                    'drug_id'=>$drugId,'qty'=>$use,'pack_ratio'=>$pack,'cost'=>round($use*$unitLotCost,4),'value'=>round($use*$packCost/$pack,2),
+                    'buy_unit_cost'=>round($unitLotCost,6),'pack_cost'=>$packCost,'vendor_code'=>cleanText($l['VENDOR_CODE'] ?? ''),'manufac_code'=>cleanText($l['MANUFAC_CODE'] ?? ''),
+                    'trade_code'=>cleanText($l['TRADE_CODE'] ?? $drugId),'expiry'=>cleanText($l['EXPIRED_DATE'] ?? ''),'lot_no'=>cleanText($l['LOT_NO'] ?? ''),
+                    'location'=>cleanText($l['LOCATION'] ?? ''),'mod_sys'=>cleanText($l['MOD_SYS'] ?? cfg($config,'invs','mod_sys','MED')),
+                    'pack_code'=>($l['PACK_CODE']!==null && $l['PACK_CODE']!=='')?(int)$l['PACK_CODE']:null,'lot_record'=>(int)$l['RECORD_NUMBER'],'lot_qty'=>$q
+                ];
+                $line['nlem']=findNlem($db,$drugId,$line['trade_code'],$line['pack_code']);
+                $lines[]=$line; $row['lots'][]=['lot_no'=>$line['lot_no'],'expiry'=>$line['expiry'],'qty'=>$use,'lot_qty'=>$q];
+            }
+            if ($left>0.0001) $errors[]="{$drugId}: คำนวณล็อตไม่ครบ (ขาด {$left})";
+        }
+        $drugs[]=$row;
+    }
+    // ยาที่มีในคลังย่อย INVS แต่เว็บไม่ได้ส่งมา (ไม่ได้ติดตามในระบบ) — แสดงเฉย ๆ ไม่ตัด
+    $untracked=[];
+    $st=$db->prepare("SELECT TRIM(WORKING_CODE) wc, SUM(QTY_ON_HAND) q FROM inv_md_c WHERE DEPT_ID=? AND COALESCE(QTY_ON_HAND,0)>0 GROUP BY TRIM(WORKING_CODE) ORDER BY wc");
+    $st->bind_param('s',$stockId); $st->execute(); $res=$st->get_result();
+    while ($r=$res->fetch_assoc()) if (!isset($seen[cleanText($r['wc'])])) $untracked[]=['drug_id'=>cleanText($r['wc']),'invs_on_hand'=>finiteNumber($r['q'] ?? 0)];
+    $st->close();
+    return ['lines'=>$lines,'drugs'=>$drugs,'untracked'=>$untracked,'warnings'=>$warnings,'errors'=>$errors,
+        'item_count'=>count($lines),'total_cost'=>round(array_sum(array_column($lines,'cost')),4),'total_value'=>round(array_sum(array_column($lines,'value')),2)];
+}
+function insertSubstockDetails(mysqli $db,array $config,string $subPoNo,array $lines,string $reqDate): void {
+    $userId=cleanText(cfg($config,'invs','user_id',''));
+    $clientIp=cleanText(cfg($config,'invs','client_ip','127.0.0.1')) ?: '127.0.0.1';
+    $sql="INSERT INTO sm_po_c (SUB_PO_NO,WORKING_CODE,QTY_ORDER,QTY_RCV,PACK_RATIO,COST,VALUE,VENDOR_CODE,MANUFAC_CODE,TRADE_CODE,EXPIRED_DATE,LOCATION,USER_ID,CONFIRM_FLAG,BUY_UNIT_COST,LOT_NO,PACK_COST,MOD_SYS,REQ_DATE,PACK_CODE,NLEM,CLIENT_IP,LAST_UPD,APP_VERSION)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,NULLIF(?,''),?,'N',?,?,?,?,?,?,?,?,NOW(),?)";
+    $st=$db->prepare($sql);
+    foreach ($lines as $x) {
+        $working=$x['drug_id']; $qty=(float)$x['qty']; $pack=(float)$x['pack_ratio']; $cost=(float)$x['cost']; $value=(float)$x['value'];
+        $vendor=$x['vendor_code']; $manufac=$x['manufac_code']; $trade=$x['trade_code']; $exp=$x['expiry']; $location=$x['location']; $buy=(float)$x['buy_unit_cost']; $lot=$x['lot_no']; $packCost=(float)$x['pack_cost'];
+        $mod=$x['mod_sys'] ?: cleanText(cfg($config,'invs','mod_sys','MED')); $packCode=$x['pack_code']; $nlem=$x['nlem']; $appVersion='SVMI-SUB';
+        $st->bind_param('ssdddddssssssdsdssiiss',$subPoNo,$working,$qty,$qty,$pack,$cost,$value,$vendor,$manufac,$trade,$exp,$location,$userId,$buy,$lot,$packCost,$mod,$reqDate,$packCode,$nlem,$clientIp,$appVersion);
+        $st->execute();
+    }
+    $st->close();
+}
+if ($action==='substock_preflight' || $action==='substock_send') {
+    $admin=requireAdmin($config,$body);
+    $project=(string)cfg($config,'firebase','project_id','sawee-rxfill');
+    $hospitalId=cleanText($body['hospital_id'] ?? ''); $batchId=preg_replace('/[^A-Za-z0-9_-]/','',cleanText($body['batch_id'] ?? ''));
+    $targets=is_array($body['targets'] ?? null) ? $body['targets'] : [];
+    if ($hospitalId==='' || !$targets) respondError('BAD_REQUEST','ต้องมี hospital_id และ targets',400);
+    if ($action==='substock_send' && $batchId==='') respondError('BAD_REQUEST','ต้องมี batch_id',400);
+    try {
+        $hospital=getFirestoreDoc($project,'master_hospitals',$hospitalId,$admin['access_token']);
+        if (!$hospital) throw new RuntimeException("ไม่พบ master_hospitals/{$hospitalId}");
+        $stockId=cleanText($hospital['invs_dept_id'] ?? '');
+        if ($stockId==='') throw new RuntimeException('รพ.สต. นี้ยังไม่ได้ตั้ง INVS Dept ID');
+        $patientDept=cleanText(cfg($config,'invs','patient_dept_id','PT01')) ?: 'PT01';
+        $db=connectDb($config);
+        $stock=validateDept($db,$stockId); validateDept($db,$patientDept);
+        $reqDate=pickRequestDate($body['request_date'] ?? '');
+        $marker=$batchId!=='' ? makeMarker('SUBSTOCK:'.$batchId) : '';
+        $existing=$marker!=='' ? getExistingByMarker($db,$marker) : null;
+        if ($existing) {
+            $details=loadExistingDetails($db,(string)$existing['SUB_PO_NO']); $db->close();
+            respond(['ok'=>true,'already_sent'=>true,'sub_po_no'=>(string)$existing['SUB_PO_NO'],'items'=>$details,'marker'=>$marker,'stock_id'=>$stockId,'patient_dept_id'=>$patientDept,'warnings'=>['ชุดนี้สร้างเอกสารใน INVS แล้ว ระบบจะไม่สร้างซ้ำ'],'errors'=>[],'bridge_version'=>BRIDGE_VERSION]);
+        }
+        $plan=buildSubstockPlan($db,$config,$stockId,$targets);
+        $base=['action'=>$action,'stock_id'=>$stockId,'stock_name'=>cleanText($stock['DEPT_NAME'] ?? ''),'patient_dept_id'=>$patientDept,'request_date'=>$reqDate,'marker'=>$marker,
+            'live_send_enabled'=>!empty($config['bridge']['allow_live_send']),'bridge_version'=>BRIDGE_VERSION];
+        $out=array_merge($base,$plan,['ok'=>!$plan['errors']]);
+        unset($out['lines']);
+        if ($action==='substock_preflight') { $db->close(); logBridge($config,'INFO','SUBSTOCK_PREFLIGHT',['hospital_id'=>$hospitalId,'admin_uid'=>$admin['uid'],'lines'=>count($plan['lines'])]); respond($out); }
+        if (!$plan['lines']) { $db->close(); respondError('NOTHING_TO_CUT','ไม่มียอดที่ต้องตัดออกจากคลังย่อย',409,$out); }
+        if ($plan['errors']) { $db->close(); respondError('PREFLIGHT_FAILED','ตรวจไม่ผ่าน',409,$out); }
+        if (empty($config['bridge']['allow_live_send'])) { $db->close(); respondError('LIVE_DISABLED','config.php ยังตั้ง allow_live_send=false',409,$out); }
+
+        $subPoNo='';
+        try {
+            logBridge($config,'INFO','SUBSTOCK_SEND_START',['hospital_id'=>$hospitalId,'batch_id'=>$batchId,'marker'=>$marker,'lines'=>count($plan['lines'])]);
+            $subPoNo=generateSubPoNoAndInsertHeader($db,[
+                'dept_id'=>$patientDept,'stock_id'=>$stockId,'total_item'=>count($plan['lines']),'total_cost'=>$plan['total_cost'],'total_value'=>$plan['total_value'],
+                'user_id'=>cleanText(cfg($config,'invs','user_id','')),'req_date'=>$reqDate,'mod_sys'=>cleanText(cfg($config,'invs','mod_sys','MED')) ?: 'MED','marker'=>$marker,'r_s_status'=>'S'
+            ]);
+            insertSubstockDetails($db,$config,$subPoNo,$plan['lines'],$reqDate);
+            $st=$db->prepare('SELECT COUNT(*) c FROM sm_po_c WHERE SUB_PO_NO=?'); $st->bind_param('s',$subPoNo); $st->execute(); $c=(int)($st->get_result()->fetch_assoc()['c'] ?? 0); $st->close();
+            if ($c!==count($plan['lines'])) throw new RuntimeException("ตรวจย้อนกลับไม่ผ่าน: detail {$c}/".count($plan['lines']));
+        } catch (Throwable $writeErr) {
+            if ($subPoNo!=='') { try { cleanupOwnPartial($db,$subPoNo,$marker); } catch (Throwable $cleanupErr) { logBridge($config,'ERROR','CLEANUP_FAILED',['sub_po_no'=>$subPoNo,'error'=>$cleanupErr->getMessage()]); } }
+            throw $writeErr;
+        }
+        $db->close();
+        logBridge($config,'INFO','SUBSTOCK_SEND_SUCCESS',['hospital_id'=>$hospitalId,'batch_id'=>$batchId,'sub_po_no'=>$subPoNo,'admin_uid'=>$admin['uid'],'lines'=>count($plan['lines']),'total_value'=>$plan['total_value']]);
+        respond(array_merge($out,['ok'=>true,'already_sent'=>false,'sub_po_no'=>$subPoNo]));
+    } catch (Throwable $e) {
+        if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
+        logBridge($config,'ERROR','SUBSTOCK_FAILED',['hospital_id'=>$hospitalId,'error'=>$e->getMessage()]);
         respondError('BRIDGE_ERROR',$e->getMessage(),500);
     }
 }

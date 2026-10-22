@@ -331,6 +331,21 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // v6.10 ประวัติการตัดคลังย่อย รพ.สต. ใน INVS (เอกสารจ่ายผู้ป่วย) — แอดมินเท่านั้น
+    match /invs_substock_posts/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // v6.10 ประวัติการตรวจนับคลัง รพ.สต. (ผลนับจากกระดาษ) — รพ.สต. บันทึกของตัวเองได้ แก้/ลบเฉพาะแอดมิน
+    match /vmi_stock_counts/{docId} {
+      allow read: if isAdmin() || ownsHospital(resource.data.hospital_id);
+      allow create: if isAdmin()
+                    || (ownsHospital(request.resource.data.hospital_id)
+                        && request.resource.data.counted_by_uid == request.auth.uid
+                        && request.resource.data.items is list);
+      allow update, delete: if isAdmin();
+    }
+
     match /vmi_virtual_lots/{docId} {
       allow read: if isAdmin() || ownsHospital(resource.data.hospital_id);
 

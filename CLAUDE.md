@@ -1,6 +1,7 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.9.0 · Bridge v2.10.2)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.10.0 · Bridge v2.11.1)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
+**ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
 **แก้เฉพาะจุดที่ขอ / เฉพาะไฟล์ที่เกี่ยวข้อง** — อย่า refactor หรือเปลี่ยนสิ่งที่ไม่ได้ขอ
 
 ## โครงสร้าง
@@ -87,10 +88,32 @@
 
 ## ใบเบิกยาฉุกเฉิน รพ.สต. (ใบ ฉ) v6.9.0
 - app.html `EmergencyReqView` (เมนู "เบิกยาฉุกเฉิน (ใบ ฉ)") collection `rpst_emergency` {hospitalId, items[{drugId,qty หน่วยย่อย,...}], reason, status Approved/Cancelled, merged_req_id}
-- ตรวจผ่านระบบ (`checkEmergencyItems`): มีเหตุผล · ยาอยู่ใน config_par ของ รพ.สต. · ไม่ใช่วัคซีน/ยกเลิก · ไม่เกิน Target Stock / Maximum → เขียว "สามารถรับยาได้เลย" · ไม่ผ่าน = แดง บันทึกไม่ได้
+- ตรวจผ่านระบบ (`checkEmergencyItems`): ไม่ผ่าน (แดง บันทึกไม่ได้) = ไม่มีเหตุผล / ยาไม่อยู่ใน config_par ของ รพ.สต. / ยกเลิกใช้ · เกิน Target/Maximum = ข้อสังเกตสีเหลือง ยังผ่าน (`over_target`, `warnings` แสดงในใบพิมพ์) · วัคซีนเบิกได้แต่ไม่รวมเข้าใบเบิกหลัก (ห้องยาจัดการเอง)
 - ใบพิมพ์ `buildEmergencyFormHtml` + หมายเหตุขั้นตอน (ส่งกระดาษ/PDF ทาง LINE ไม่ต้องเบิกซ้ำ ระบบรวมยอดเอง)
 - CreateReqView โหลดใบ ฉ ที่ยังไม่รวม (หรือรวมเข้าใบนี้) → `item.emergencyQty` แสดง "จ่ายใหม่ + ฉุกเฉิน(แดง)" แก้ไม่ได้ · หมายเหตุท้ายตาราง · บันทึกแล้วตั้ง merged_req_id
 - `getRequisitionItemValue` รวม emergencyQty (คิดเงิน) · Bridge 2.10.2 ส่ง INVS qty = dispenseQty + emergencyQty · sync_virtual_stock 1.2 ไม่บวก emergencyQty เข้า Lot ซ้ำ · dispenseQty (จ่ายจริง) ไม่รวมฉุกเฉิน
+
+## Phase คลังย่อย รพ.สต. → INVS (เริ่ม)
+- ขั้นที่ 1: `cli/invs_diff.php` + `tools/INVS_DIFF.bat` (อ่านอย่างเดียว · SET SESSION TRANSACTION READ ONLY) snap ก่อน/หลังทำรายการด้วยมือใน INVS → รายงานตารางที่เปลี่ยน แถวใหม่ และค่าที่เปลี่ยนของยาที่ทดสอบ → `cache/invs_diff/report_before_after.txt`
+- ยังไม่เขียนคลังย่อย INVS จนกว่าจะรู้รูปแบบจากรายงานและผู้ใช้อนุมัติขยายกฎ (ปัจจุบันเขียนได้เฉพาะ sm_po/sm_po_c)
+- ผลทดสอบ 1 (23 ต.ค. 69 ยา 02110 คลัง 13): ตัดจ่ายคลังย่อยใน INVS = สร้าง `sm_po` STOCK_ID=คลังย่อย (13), DEPT_ID='PT01', R_S_STATUS='S', CONFIRM_FLAG='N' + `sm_po_c` แยกบรรทัดตาม lot (FEFO ตาม EXP) · `inv_md_c` ยังไม่เปลี่ยนจนกว่ายืนยัน · `rs_con` (RS_DATE/RS_CON) เปลี่ยน = ตัวนับเลขเอกสารของ INVS (Bridge ปัจจุบันไม่ได้ใช้) · inv_md.COUNT_ON_HAND null→10 (รอผู้ใช้ยืนยันที่มา)
+- ผลทดสอบ 2 (ยืนยันเอกสารเดิม): INVS "ย้าย" ล็อตจากคลัง 13 ไปคลังสมมติ PT01 — inv_md_c ลบแถว DEPT 13 แล้วสร้างแถว DEPT PT01 · inv_md 13 → 0, PT01 สร้างใหม่ · `card` บันทึกคู่ S (ออกจาก 13) / I (เข้า PT01) ต่อ lot พร้อม REMAIN_QTY · sm_po_c บรรทัดเดิม CANCEL_DISP 'Changed By' + บรรทัดใหม่จำนวนมาก (QTY_ORDER เพิ่มเท่าตัว)
+  - ⚠ ผลผิดคาด: ตัดไป 5,600 แทน 5,590 (lot 26123035 ขอ 990 ถูกปัดเป็น 1,000 = เต็มแพ็ค PACK_RATIO 1000) → คลัง 13 เหลือ 0 แทน 10 · ต้องแก้ใน INVS
+  - ช่วงเดียวกัน `dispensed` +1,873 แถว (นำเข้าจาก HIS: MED_CODE=รหัส HOSxP, DISP_QTY หน่วยย่อย, DISP_DEPT, hn/vn, PROCESS_FLAG N) และ `accr_disp` เปลี่ยน — อาจเป็นช่องทางนำเข้ายอดใช้รายหน่วยที่เหมาะกว่า (รอตรวจ)
+  - ผู้ใช้ยืนยัน: ยอดเพี้ยนเกิดจากแท็บ "ป้อนข้อมูลคงเหลือเอง" (ถามให้รวมรายการ) ไม่ใช่ INVS จ่ายเศษไม่ได้ · ไม่ต้องกลับรายการทดสอบ (จะ reset คลังย่อยตามจริงอยู่แล้ว)
+- **ขั้นที่ 2 (Bridge 2.11.0):** action `substock_preflight` / `substock_send` {hospital_id, targets[{drug_id,target_qty}], batch_id}
+  - อ่าน inv_md_c คลังย่อย (DEPT_ID = master_hospitals.invs_dept_id) เรียง EXP → ตัด = INVS − ยอดจริง (ถ้า INVS น้อยกว่า = invs_short ไม่ตัด) · ยาที่ INVS มีแต่เว็บไม่ส่งมา = untracked (ไม่ตัด)
+  - สร้าง sm_po R_S_STATUS='S' DEPT_ID=`invs.patient_dept_id` (ค่าเริ่มต้น PT01) STOCK_ID=คลังย่อย SEND_FLAG/CONFIRM_DATE ว่าง SUB_PO_UNO='' + sm_po_c รายล็อต (COST = qty×LOT_COST/QTY_ON_HAND, VALUE = qty×PACK_COST/PACK_RATIO, BUY_UNIT_COST = LOT_COST/QTY_ON_HAND — ตรงกับเอกสารที่ INVS สร้างเอง) CONFIRM_FLAG='N' · REF_NO marker กันซ้ำ · ยังอยู่ในกฎ sm_po/sm_po_c
+  - เภสัชกรกดยืนยันในเมนู "จ่ายผู้ป่วย" ของ INVS → INVS ย้ายล็อตไป PT01 + ลงบัตรคลังเอง
+- app.html แอดมิน เมนู "คลังย่อย รพ.สต. → INVS" (`SubstockSyncView`): ยอดจริง = `effectiveRemainingByDrug` (สมมติฐานเดียวกับคลังยาของฉัน) แก้ได้ → ตรวจกับ INVS → เลือก → สร้างเอกสาร · ประวัติ `invs_substock_posts` (rules แอดมิน)
+
+## v6.10 ตรวจนับ / ยอดใช้จริง / ตัดคลังย่อยตามยอดใช้
+- ยอดใช้จริงผู้ป่วย = `getRb301UsageQty(item)` (importedUsageQty จาก รบ.301 ก่อนปรับแก้ ถ้าไม่มีใช้ usage) เก็บแยกจาก dispenseQty (ยอดเบิก/จ่าย)
+- Bridge 2.11.1: targets รับ `cut_qty` (ตัดตามยอดใช้ ตัดได้ไม่เกินที่ INVS มี + เตือน) แทน `target_qty`
+- SubstockSyncView 2 โหมด: **ตัดตามยอดใช้ (รบ.301)** เลือกใบเบิก → batch_id `USE-{reqId}` (1 ใบ = 1 เอกสาร กันซ้ำ) · **ปรับให้เท่ายอดจริง** (หลังตรวจนับ) · ประวัติเก็บ mode/req_id/req_round
+- MyStockView แท็บ "ตรวจนับ": พิมพ์ใบตรวจนับ `buildStockCountFormHtml` (shared.js, A4 แนวนอน: รหัส(old_code) ยอดระบบ Lot/EXP เร็วสุด ★≤180 วัน จำนวน Lot ช่องนับได้/ส่วนต่าง/หมายเหตุ มูลค่า + ตัวอักษร ผู้ตรวจนับ/ผู้ตรวจสอบ/ผู้บันทึก) → คีย์ผล → ปรับล็อต FEFO (ขาด=หักล็อตหมดอายุก่อน, เกิน=เพิ่มล็อตใหม่สุด, ไม่มีล็อต=no_lot) event MANUAL_ADJUST source STOCK_COUNT → `vmi_stock_counts` (rules: รพ.สต.สร้างของตัวเอง) · พิมพ์ผลนับย้อนหลังได้
+- รายละเอียดยา: "ประวัติการใช้จริง" 12 รอบล่าสุด (ยอดใช้ รบ.301 vs ยอดเบิก + ฉุกเฉิน)
+- ใบคืนยา: หัว หน่วยบริการ/เรื่อง/เรียน หัวหน้ากลุ่มงานเภสัชกรรมฯ · intro จำนวน+มูลค่า · รหัส old_code (`withOldCodes`) · มูลค่าตัวอักษร `bahtText` · "จึงเรียนมาเพื่อโปรดพิจารณา"
 
 ## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
 - หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)

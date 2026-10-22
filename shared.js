@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.9.0';
+const APP_VERSION = '6.10.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1258,7 +1258,7 @@ const buildReturnFormHtml = (doc) => {
       '<td class="c">' + esc(it.lotNo || '-') + '</td><td class="c">' + expTh(it.expiryDate) + '</td>' +
       '<td class="c b">' + formatQty(toNonNegativeNumber(it.returnQty), pack) + '</td>' +
       '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td><td class="r b">' + money(value) + '</td>' +
-      '<td class="c">' + esc(RETURN_REASONS[it.reason] || it.reason || '') + '</td><td class="c code">' + esc(it.drugId) + '</td></tr>';
+      '<td class="c">' + esc(RETURN_REASONS[it.reason] || it.reason || '') + '</td><td class="c code">' + esc(drugCodeLabel(it.drugId, it.oldCode)) + '</td></tr>';
   }).join('') + new Array(3).fill('<tr class="blankrow">' + new Array(11).fill('<td></td>').join('') + '</tr>').join('');
   const now = new Date();
   const printedAt = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + pad2(now.getHours()) + ':' + pad2(now.getMinutes());
@@ -1283,15 +1283,122 @@ const buildReturnFormHtml = (doc) => {
     '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:22px;text-align:center;page-break-inside:avoid}.nw{white-space:nowrap}' +
     '</style></head><body>' +
     '<h1>ใบส่งคืนยา/เวชภัณฑ์</h1>' +
-    '<div class="meta"><div>เลขที่ <b>' + esc(doc.doc_no || doc.id) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +
-    '<div class="to">เรียน ผู้อำนวยการโรงพยาบาลสวี</div>' +
-    '<div class="intro">ด้วย<b>' + esc(doc.hospital_name) + '</b> ขอส่งคืนยา/เวชภัณฑ์ ให้คลังยา โรงพยาบาลสวี ดังรายการต่อไปนี้</div>' +
+    '<div class="meta"><div>หน่วยบริการ <b>' + esc(doc.hospital_name) + '</b></div><div>เลขที่ <b>' + esc(doc.doc_no || doc.id) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +
+    '<div class="to"><b>เรื่อง</b> ขอส่งคืนยา/เวชภัณฑ์</div>' +
+    '<div class="to"><b>เรียน</b> หัวหน้ากลุ่มงานเภสัชกรรมและคุ้มครองผู้บริโภค โรงพยาบาลสวี</div>' +
+    '<div class="intro">ด้วย<b>' + esc(doc.hospital_name) + '</b> ขอส่งคืนยา/เวชภัณฑ์ให้คลังยา โรงพยาบาลสวี จำนวน <b>' + items.length + '</b> รายการ มูลค่ารวม <b>' + money(total) + '</b> บาท ดังรายการต่อไปนี้</div>' +
     '<table class="items"><thead><tr><th style="width:4%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">หน่วย</th><th style="width:5%">บรรจุ</th>' +
     '<th style="width:10%">Lot</th><th style="width:9%">วันหมดอายุ</th><th style="width:8%">จำนวน<br>คืน</th><th style="width:7%">ราคา/<br>หน่วย</th>' +
     '<th style="width:9%">มูลค่า<br>(บาท)</th><th style="width:10%">เหตุผล</th><th style="width:6%">รหัส</th></tr></thead><tbody>' + rows +
     (doc.note ? '<tr><td colspan="11"><b>หมายเหตุ:</b> ' + esc(doc.note) + '</td></tr>' : '') + '</tbody></table>' +
-    '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + items.length + ' รายการ</td></tr><tr><th>รวมมูลค่าส่งคืนทั้งสิ้น:</th><td class="big">' + money(total) + ' บาท</td></tr></table>' +
+    '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + items.length + ' รายการ</td></tr><tr><th>รวมมูลค่าส่งคืนทั้งสิ้น:</th><td class="big">' + money(total) + ' บาท</td></tr><tr><th>(ตัวอักษร)</th><td class="rt">' + bahtText(total) + '</td></tr></table>' +
+    '<div class="to" style="margin-top:8px">จึงเรียนมาเพื่อโปรดพิจารณา</div>' +
     '<div class="sigs">' + sign('ผู้ส่งคืน', doc.created_by, doc.created_by_position) + sign('ผู้ตรวจสอบ', '', '') + sign('ผู้รับคืน', '', '') + sign('หัวหน้าคลังยา', '', '') + '</div>' +
+    '</body></html>';
+};
+
+// ─── v6.10 จำนวนเงินเป็นตัวอักษร (บาทถ้วน/สตางค์) สำหรับแบบฟอร์มทางการ ───
+const bahtText = (amount) => {
+  const nums = ['', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
+  const units = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
+  const readInt = function (s) {
+    s = String(s).replace(/^0+/, ''); if (!s) return '';
+    if (s.length > 6) { const low = readInt(s.slice(-6)); return readInt(s.slice(0, s.length - 6)) + 'ล้าน' + (low === 'หนึ่ง' ? 'เอ็ด' : low); }
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+      const d = Number(s[i]), pos = s.length - i - 1;
+      if (!d) continue;
+      if (pos === 0 && d === 1 && s.length > 1) out += 'เอ็ด';
+      else if (pos === 1 && d === 2) out += 'ยี่';
+      else if (pos === 1 && d === 1) out += '';
+      else out += nums[d];
+      out += units[pos];
+    }
+    return out;
+  };
+  const v = Math.round(toNonNegativeNumber(amount) * 100);
+  const baht = Math.floor(v / 100), satang = v % 100;
+  if (!baht && !satang) return 'ศูนย์บาทถ้วน';
+  return (baht ? readInt(String(baht)) + 'บาท' : '') + (satang ? readInt(String(satang)) + 'สตางค์' : 'ถ้วน');
+};
+
+// ─── v6.10 ใบตรวจนับยา/เวชภัณฑ์คงคลัง รพ.สต. (theme เดียวกับใบเบิก) ───
+// opts: { hospitalName, rows:[{drugId,name,unit,packSize,price,type,location,oldCode,systemQty,lotCount,earliestLot,earliestExp,counted?}], drugTypes, countDate?, docNo?, filled? }
+const buildStockCountFormHtml = (opts) => {
+  const esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  const money = function (v) { return toNonNegativeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  const types = opts.drugTypes || DEFAULT_DRUG_TYPES;
+  const filled = !!opts.filled;
+  const parts = thaiDateParts(opts.countDate || toYmd(new Date()));
+  const expTh = function (raw) { const v = String(raw || '').replace(/-/g, ''); if (!/^\d{8}$/.test(v)) return '-'; return v.slice(6, 8) + '/' + v.slice(4, 6) + '/' + String(Number(v.slice(0, 4)) + 543).slice(2); };
+  const groups = {};
+  (opts.rows || []).forEach(function (r) { const k = safeText(r.type, '1') || '1'; (groups[k] = groups[k] || []).push(r); });
+  const typeKeys = Object.keys(groups).sort(function (a, b) { return Number(a) - Number(b); });
+  let n = 0, totalSys = 0, totalCount = 0, near = 0;
+  const body = typeKeys.map(function (k) {
+    const list = groups[k].slice().sort(function (a, b) { return compareByLocation(a.location, a.name, b.location, b.name); });
+    const dots = locationDotFlags(list, function (r) { return r.location; });
+    const rows = list.map(function (r, li) {
+      n++;
+      const pack = safePackSize(r.packSize);
+      const sysVal = (toNonNegativeNumber(r.systemQty) / pack) * toNonNegativeNumber(r.price);
+      totalSys += sysVal;
+      const days = daysToExpiry(r.earliestExp);
+      const warn = days !== null && days <= 180;
+      if (warn) near++;
+      const hasCount = filled && r.counted !== undefined && r.counted !== null && r.counted !== '';
+      const counted = hasCount ? toNonNegativeNumber(r.counted) : null;
+      if (hasCount) totalCount += (counted / pack) * toNonNegativeNumber(r.price);
+      const diff = hasCount ? counted - toNonNegativeNumber(r.systemQty) : null;
+      const c = (dots[li].top ? 'ldt ' : '') + (dots[li].bottom ? 'ldb' : '');
+      return '<tr' + (c ? ' class="' + c.trim() + '"' : '') + '><td class="c">' + n + '</td><td class="name">' + esc(r.name) + '</td>' +
+        '<td class="c code">' + esc(drugCodeLabel(r.drugId, r.oldCode)) + '</td><td class="c">' + esc(r.unit) + '</td><td class="c">' + pack + '</td>' +
+        '<td class="r b sys">' + esc(formatQty(toNonNegativeNumber(r.systemQty), pack)) + '</td>' +
+        '<td class="c lot">' + esc(r.earliestLot || '-') + '</td><td class="c' + (warn ? ' warn' : '') + '">' + (warn ? '★ ' : '') + expTh(r.earliestExp) + '</td>' +
+        '<td class="c">' + (toNonNegativeNumber(r.lotCount) || '-') + '</td>' +
+        '<td class="r cnt b">' + (hasCount ? esc(formatQty(counted, pack)) : '') + '</td>' +
+        '<td class="r' + (diff ? (diff < 0 ? ' neg' : ' pos') : '') + '">' + (hasCount ? (diff > 0 ? '+' : '') + esc(formatQty(Math.abs(diff), pack)).replace(/^/, diff < 0 ? '−' : '') : '') + '</td>' +
+        '<td class="r">' + money(sysVal) + '</td><td></td></tr>';
+    }).join('');
+    return '<tr class="grp"><td colspan="13">' + esc(types[k] || ('หมวด ' + k)) + ' (' + list.length + ' รายการ)</td></tr>' + rows;
+  }).join('') + new Array(5).fill('<tr class="blankrow">' + new Array(13).fill('<td></td>').join('') + '</tr>').join('');
+  const now = new Date();
+  const printedAt = now.getDate() + '/' + (now.getMonth() + 1) + '/' + (now.getFullYear() + 543) + ' ' + pad2(now.getHours()) + ':' + pad2(now.getMinutes());
+  const sign = function (label, name) {
+    return '<div class="sig"><div class="nw">ลงชื่อ ................................ ' + label + '</div><div>(' + (name ? esc(name) : '................................') + ')</div>' +
+      '<div>ตำแหน่ง ................................</div><div>วันที่ ........./........./.........</div></div>';
+  };
+  const title = (safeText(opts.hospitalName) + ' ใบตรวจนับคงคลัง ' + parts.month + ' ' + parts.year).replace(/[\\/:*?"<>|]+/g, '-');
+  return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
+    '<style>@page{size:A4 landscape;margin:12mm 10mm;' +
+    '@top-right{content:"หน้า " counter(page) "/" counter(pages);font-family:Sarabun,Tahoma,sans-serif;font-size:9px;color:#555}' +
+    '@bottom-right{content:"พิมพ์เมื่อ: ' + printedAt + '";font-family:Sarabun,Tahoma,sans-serif;font-size:9px;color:#666}}' +
+    "*{box-sizing:border-box}body{font-family:'Sarabun','Tahoma',sans-serif;font-size:12.5px;line-height:1.45;color:#111;margin:0}" +
+    'h1{text-align:center;font-size:19px;font-weight:700;margin:0 0 4px}.sub{text-align:center;font-size:13px;margin-bottom:6px}.meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 18px}.meta b{display:inline-block;min-width:3.5em;text-align:center;border-bottom:1px dotted #555;font-weight:700}' +
+    'table{width:100%;border-collapse:collapse}.items{font-size:10.5px;margin-top:6px}.items th,.items td{border:1px solid #444;padding:3px 4px;vertical-align:middle}' +
+    '.items th{background:#eee;font-weight:700;text-align:center;line-height:1.25}.items tr{page-break-inside:avoid}.items thead{display:table-header-group}' +
+    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}' +
+    ".code{font-family:Consolas,'Courier New',monospace;font-size:9.5px;color:#555}.lot{font-family:Consolas,monospace;font-size:9.5px}" +
+    '.grp td{background:#f2f2f2;font-weight:700}.blankrow td{height:22px}.sys{color:#1d4ed8}.cnt{background:#f1f1f1}.warn{color:#b91c1c;font-weight:700}.neg{color:#b91c1c;font-weight:700}.pos{color:#15803d;font-weight:700}' +
+    '.items td.cnt,.items th.cnt,.grp td{-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+    '.items tr.ldt td{border-top:0.1pt dotted #444}.items tr.ldb td{border-bottom:0.1pt dotted #444}' +
+    '.totals{margin-top:8px;font-size:12px}.totals td,.totals th{border:1px solid #444;padding:4px 8px}.totals th{background:#eee;text-align:left;width:40%}.totals .rt{text-align:right;font-weight:700}' +
+    '.note{font-size:10.5px;margin-top:6px;color:#333}.sigs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px 24px;margin-top:20px;text-align:center;page-break-inside:avoid}.nw{white-space:nowrap}' +
+    '</style></head><body>' +
+    '<h1>ใบตรวจนับยา/เวชภัณฑ์คงคลัง</h1>' +
+    '<div class="sub">หน่วยบริการ <b>' + esc(opts.hospitalName) + '</b> · คลังยาเสมือน (Sawee Rxfill VMI)</div>' +
+    '<div class="meta"><div>เลขที่ <b>' + esc(opts.docNo || '..........') + '</b></div><div>วันที่ตรวจนับ <b>' + (filled ? esc(parts.day) : '....') + '</b> เดือน <b>' + (filled ? esc(parts.month) : '................') + '</b> ปี <b>' + (filled ? esc(parts.year) : '........') + '</b></div>' +
+    '<div>ยอดในระบบ ณ วันที่พิมพ์ ' + printedAt + '</div></div>' +
+    '<table class="items"><thead><tr><th style="width:3%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">รหัส</th><th style="width:5%">หน่วย</th><th style="width:4%">บรรจุ</th>' +
+    '<th style="width:8%">ยอดคงเหลือ<br>ในระบบ</th><th style="width:9%">Lot<br>ใช้ก่อน</th><th style="width:7%">EXP<br>เร็วสุด</th><th style="width:4%">จำนวน<br>Lot</th>' +
+    '<th class="cnt" style="width:9%">ตรวจนับได้<br>(จำนวนจริง)</th><th style="width:7%">ส่วนต่าง</th><th style="width:8%">มูลค่าในระบบ<br>(บาท)</th><th style="width:12%">หมายเหตุ / Lot-EXP ที่พบจริง</th></tr></thead><tbody>' +
+    body + '</tbody></table>' +
+    '<table class="totals"><tr><th>จำนวนรายการที่ตรวจนับ</th><td class="rt">' + n + ' รายการ' + (near ? ' (★ หมดอายุภายใน 180 วัน ' + near + ' รายการ)' : '') + '</td></tr>' +
+    '<tr><th>มูลค่าคงคลังตามระบบ</th><td class="rt">' + money(totalSys) + ' บาท (' + bahtText(totalSys) + ')</td></tr>' +
+    (filled ? '<tr><th>มูลค่าคงคลังตามที่ตรวจนับ</th><td class="rt">' + money(totalCount) + ' บาท (' + bahtText(totalCount) + ')</td></tr>' : '') + '</table>' +
+    '<div class="note">วิธีกรอก: นับยาจริงบนชั้นแต่ละรายการ กรอกในช่อง "ตรวจนับได้" เป็นหน่วยเดียวกับยอดในระบบ (จำนวนเต็มคือหน่วยบรรจุ เลขในวงเล็บคือหน่วยย่อย) · หาก Lot/EXP จริงไม่ตรง ให้เขียนในช่องหมายเหตุ · ★ = Lot ที่หมดอายุภายใน 180 วัน ให้ตรวจสอบเป็นพิเศษ · นำผลมาบันทึกในเว็บ เมนู คลังยาของฉัน → ตรวจนับ</div>' +
+    '<div class="sigs">' + sign('ผู้ตรวจนับ', '') + sign('ผู้ตรวจสอบ', '') + sign('ผู้บันทึกข้อมูล', '') + '</div>' +
     '</body></html>';
 };
 

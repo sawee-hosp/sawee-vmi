@@ -17,8 +17,9 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
   check('ng without items', await p.isVisible('#em-status-ng'));
   await p.fill('#em-search','Para'); await p.waitForTimeout(200); await p.click('#emergency-view button:has-text("Paracetamol")');
   await p.fill('#em-form tbody input[type=number]','5000'); await p.fill('#em-reason','ยาหมดก่อนรอบ'); await p.waitForTimeout(200);
-  check('ng over target', await p.isVisible('#em-status-ng') && (await p.innerText('#em-status-ng')).includes('เกิน Target'));
-  check('save disabled', await p.isDisabled('#em-save'));
+  check('over target = warning but ok', await p.isVisible('#em-status-ok') && (await p.innerText('#em-warn')).includes('เกิน Target'));
+  await p.fill('#em-reason',''); await p.waitForTimeout(100);
+  check('no reason -> disabled', await p.isDisabled('#em-save')); await p.fill('#em-reason','ยาหมดก่อนรอบ');
   await p.fill('#em-form tbody input[type=number]','1000'); await p.waitForTimeout(200);
   check('ok green', await p.isVisible('#em-status-ok'));
   await p.click('#em-save'); await p.waitForTimeout(1200);

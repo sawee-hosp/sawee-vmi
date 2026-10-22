@@ -95,6 +95,8 @@
 ## Phase คลังย่อย รพ.สต. → INVS (เริ่ม)
 - ขั้นที่ 1: `cli/invs_diff.php` + `tools/INVS_DIFF.bat` (อ่านอย่างเดียว · SET SESSION TRANSACTION READ ONLY) snap ก่อน/หลังทำรายการด้วยมือใน INVS → รายงานตารางที่เปลี่ยน แถวใหม่ และค่าที่เปลี่ยนของยาที่ทดสอบ → `cache/invs_diff/report_before_after.txt`
 - ยังไม่เขียนคลังย่อย INVS จนกว่าจะรู้รูปแบบจากรายงานและผู้ใช้อนุมัติขยายกฎ (ปัจจุบันเขียนได้เฉพาะ sm_po/sm_po_c)
+- ผลทดสอบ 1 (23 ต.ค. 69 ยา 02110 คลัง 13): ตัดจ่ายคลังย่อยใน INVS = สร้าง `sm_po` STOCK_ID=คลังย่อย (13), DEPT_ID='PT01', R_S_STATUS='S', CONFIRM_FLAG='N' + `sm_po_c` แยกบรรทัดตาม lot (FEFO ตาม EXP) · `inv_md_c` ยังไม่เปลี่ยนจนกว่ายืนยัน · `rs_con` (RS_DATE/RS_CON) เปลี่ยน = ตัวนับเลขเอกสารของ INVS (Bridge ปัจจุบันไม่ได้ใช้) · inv_md.COUNT_ON_HAND null→10 (รอผู้ใช้ยืนยันที่มา)
+- ทดสอบ 2 ที่ต้องทำ: snap รอบ "ยืนยันจ่าย" เอกสารนั้น เพื่อดูการตัด inv_md_c/inv_md และบัตรคลัง
 
 ## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
 - หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)

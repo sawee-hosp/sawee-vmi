@@ -331,6 +331,11 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // v6.10 ประวัติการตัดคลังย่อย รพ.สต. ใน INVS (เอกสารจ่ายผู้ป่วย) — แอดมินเท่านั้น
+    match /invs_substock_posts/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     match /vmi_virtual_lots/{docId} {
       allow read: if isAdmin() || ownsHospital(resource.data.hospital_id);
 

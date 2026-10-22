@@ -723,6 +723,146 @@
       );
     };
 
+    // ===== v6.10 คลังย่อย รพ.สต. → INVS: ยอดจริงบนเว็บ (Target Stock/ตรวจนับ) เทียบคลังย่อยใน INVS แล้วตัดส่วนเกินเป็นเอกสาร "จ่ายผู้ป่วย" =====
+    // ยอดจริงต่อยา = สมมติฐานเดียวกับคลังยาของฉัน (effectiveLots): ล็อตทั้งหมด หักให้เหลือ Target Stock แบบ FEFO เว้นแต่ตรวจนับหลังรับล็อตล่าสุด
+    const effectiveRemainingByDrug = (virtualLots, parLevels, hospId) => {
+      const tsMs = v => v?.toMillis ? v.toMillis() : v?.seconds ? Number(v.seconds) * 1000 : (Date.parse(v || '') || 0);
+      const parMap = new Map((parLevels || []).filter(p => String(p.hospital_id) === String(hospId)).map(p => [String(p.drug_id), toNonNegativeNumber(p.par_qty)]));
+      const byDrug = new Map();
+      (virtualLots || []).forEach(l => { const k = String(l.drug_id || ''); if (!byDrug.has(k)) byDrug.set(k, []); byDrug.get(k).push(l); });
+      const out = new Map();
+      byDrug.forEach((lots, drugId) => {
+        const target = parMap.get(drugId) || 0;
+        const lastCount = Math.max(0, ...lots.map(l => tsMs(l.manual_adjusted_at)));
+        const lastReceive = Math.max(0, ...lots.map(l => tsMs(l.created_at || l.source_at)));
+        const total = lots.reduce((s, l) => s + toNonNegativeNumber(l.remaining_qty), 0);
+        out.set(drugId, (!target || (lastCount && lastCount >= lastReceive) || total <= target) ? total : target);
+      });
+      parMap.forEach((v, k) => { if (!out.has(k)) out.set(k, 0); });
+      return out;
+    };
+
+    const SubstockSyncView = ({ ctx }) => {
+      const hospitals = (ctx.appDb.hospitals || []).filter(h => safeText(h.invs_dept_id));
+      const [hospId, setHospId] = useState('');
+      const [lots, setLots] = useState([]);
+      const [loading, setLoading] = useState(false);
+      const [targets, setTargets] = useState({}); // drugId -> ยอดจริงที่แก้เอง
+      const [pre, setPre] = useState(null);
+      const [sel, setSel] = useState({});
+      const [busy, setBusy] = useState('');
+      const [history, setHistory] = useState([]);
+      const [result, setResult] = useState(null);
+      const hosp = hospitals.find(h => String(h.hospital_id) === String(hospId));
+      const load = async () => {
+        if (!hospId) return;
+        setLoading(true); setPre(null); setResult(null); setTargets({}); setSel({});
+        try {
+          const [sn] = await Promise.all([db.collection('vmi_virtual_lots').where('hospital_id', '==', hospId).get(), ctx.refreshData(ctx.currentUser, { hospitalId: hospId })]);
+          setLots(sn.docs.map(d => ({ id: d.id, ...d.data() })));
+          const hs = await db.collection('invs_substock_posts').where('hospital_id', '==', hospId).get().catch(() => null);
+          setHistory(hs ? hs.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.id).localeCompare(String(a.id))) : []);
+        } catch (e) { ctx.showToast('โหลดข้อมูลไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setLoading(false); }
+      };
+      useEffect(() => { load(); }, [hospId]);
+      const rows = useMemo(() => {
+        if (!hospId) return [];
+        const rem = effectiveRemainingByDrug(lots, ctx.appDb.parLevels, hospId);
+        return [...rem.entries()].map(([drugId, webQty]) => {
+          const d = ctx.findDrug(drugId) || {};
+          const unit = (ctx.appDb.units || []).find(u => String(u.unit_id) === String(d.unit_id))?.unit_name || d.unit_id || '';
+          return { drugId, name: d.drug_name || drugId, unit, packSize: safePackSize(d.pack_size), type: String(d.type || '1'), loc: safeText(d.invs_location), webQty };
+        }).filter(r => r.type !== '6').sort((a, b) => a.type.localeCompare(b.type) || compareByLocation(a.loc, a.name, b.loc, b.name));
+      }, [lots, ctx.appDb.parLevels, hospId]);
+      const targetOf = (r) => targets[r.drugId] !== undefined ? toNonNegativeNumber(targets[r.drugId]) : r.webQty;
+      const preByDrug = useMemo(() => new Map((pre?.drugs || []).map(x => [String(x.drug_id), x])), [pre]);
+      const check = async () => {
+        setBusy('pre'); setResult(null);
+        try {
+          const data = await callInvsBridge('substock_preflight', '', { hospital_id: hospId, targets: rows.map(r => ({ drug_id: r.drugId, name: r.name, target_qty: targetOf(r) })) });
+          setPre(data);
+          const s = {}; (data.drugs || []).forEach(x => { if (x.status === 'cut') s[x.drug_id] = true; }); setSel(s);
+        } catch (e) { ctx.showToast('ตรวจกับ INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const chosen = rows.filter(r => sel[r.drugId] && preByDrug.get(r.drugId)?.status === 'cut');
+      const chosenValue = chosen.reduce((s, r) => s + (preByDrug.get(r.drugId)?.lots || []).reduce((a, l) => a + l.qty, 0) / r.packSize * toNonNegativeNumber(ctx.findDrug(r.drugId)?.price), 0);
+      const send = () => ctx.setConfirmDialog({
+        title: 'สร้างเอกสาร "จ่ายผู้ป่วย" ใน INVS?', icon: 'fa-database', iconColor: 'text-cyan-600', confirmBtnClass: 'bg-cyan-700 hover:bg-cyan-800', confirmText: 'สร้างเอกสาร',
+        message: `${hosp?.hospital_name || hospId}: ตัดส่วนเกิน ${chosen.length} รายการ ออกจากคลังย่อย ${pre?.stock_id} → ${pre?.patient_dept_id} (ยังไม่ยืนยัน) — หลังสร้างแล้วให้เภสัชกรเปิดเอกสารในเมนู "จ่ายผู้ป่วย" ของ INVS แล้วกดยืนยัน`,
+        onConfirm: async () => {
+          setBusy('send');
+          try {
+            const batchId = `${hospId}-${Date.now()}`;
+            const data = await callInvsBridge('substock_send', '', { hospital_id: hospId, batch_id: batchId, targets: chosen.map(r => ({ drug_id: r.drugId, name: r.name, target_qty: targetOf(r) })) });
+            const items = (data.drugs || []).filter(x => x.status === 'cut').map(x => ({ drug_id: x.drug_id, invs_on_hand: x.invs_on_hand, target_qty: x.target_qty, cut_qty: x.cut_qty, lots: x.lots || [] }));
+            await db.collection('invs_substock_posts').doc(batchId).set({ id: batchId, hospital_id: hospId, hospital_name: safeText(hosp?.hospital_name), stock_id: safeText(data.stock_id), patient_dept_id: safeText(data.patient_dept_id),
+              sub_po_no: safeText(data.sub_po_no), already_sent: !!data.already_sent, items, item_count: items.length, line_count: Number(data.item_count) || 0, total_value: toNonNegativeNumber(data.total_value),
+              status: 'SENT', created_by_uid: ctx.currentUser.uid, created_by_name: safeText(ctx.currentUser.name), created_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+            await writeAuditLog(ctx.currentUser, 'INVS_SUBSTOCK_SEND', 'invs_substock_posts', batchId, { hospital_id: hospId, sub_po_no: data.sub_po_no, items: items.length });
+            setResult(data); setPre(null); setSel({});
+            ctx.showToast(`สร้างเอกสารจ่ายผู้ป่วยใน INVS แล้ว เลข ${data.sub_po_no}`);
+            const hs = await db.collection('invs_substock_posts').where('hospital_id', '==', hospId).get().catch(() => null);
+            if (hs) setHistory(hs.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.id).localeCompare(String(a.id))));
+          } catch (e) { ctx.showToast('สร้างเอกสารไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+          finally { setBusy(''); }
+        }
+      });
+      const fq = (q, r) => formatQty(q, r.packSize);
+      const expTh = (v) => /^\d{8}$/.test(String(v || '')) ? `${v.slice(6, 8)}/${v.slice(4, 6)}/${Number(v.slice(0, 4)) + 543}` : (v || '-');
+      return (
+        <div className="space-y-5 animate-fade-in" id="substock-view">
+          <div>
+            <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-warehouse text-cyan-600 mr-2"></i>คลังย่อย รพ.สต. → INVS</h2>
+            <p className="text-sm text-slate-500 mt-1">เทียบยอดจริงบนเว็บกับคลังย่อยของ รพ.สต. ใน INVS แล้วตัดส่วนเกิน (= ยอดที่ใช้ไปแล้ว) เป็นเอกสาร "จ่ายผู้ป่วย" · เอกสารยังไม่ยืนยัน — INVS ตัดยอดและลงบัตรคลังเมื่อเภสัชกรกด "ยืนยัน" ในโปรแกรม INVS</p>
+            <select id="substock-hosp" value={hospId} onChange={e => setHospId(e.target.value)} className="mt-3 min-w-72 rounded-lg border-2 border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-bold">
+              <option value="">— เลือก รพ.สต. —</option>{hospitals.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.hospital_name} [คลัง {h.invs_dept_id}]</option>)}
+            </select>
+          </div>
+
+          {result && <div className="rounded-2xl border-2 border-emerald-500 bg-emerald-50 p-4 text-emerald-900" id="substock-result">
+            <div className="text-xl font-black"><i className="fa-solid fa-circle-check mr-2"></i>สร้างเอกสารแล้ว เลข {result.sub_po_no}{result.already_sent ? ' (มีอยู่แล้ว ไม่สร้างซ้ำ)' : ''}</div>
+            <div className="text-sm mt-1">ขั้นต่อไป: เปิด INVS → เมนู "จ่ายผู้ป่วย" → จากคลัง {result.stock_id} ไป {result.patient_dept_id} → ค้นเลขที่เบิก {result.sub_po_no} → ตรวจรายการ แล้วกด <b>ยืนยัน</b> (อย่าใช้แท็บ "ป้อนข้อมูลคงเหลือเอง" กับเอกสารนี้)</div>
+          </div>}
+
+          {hospId && <div className="bg-white rounded-2xl border p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-600">{loading ? 'กำลังโหลด...' : `${rows.length} รายการ · ยอดจริงคำนวณจากคลังยาของฉัน แก้ได้ถ้าตรวจนับแล้วไม่ตรง`}</div>
+              <div className="flex gap-2">
+                <button id="substock-check" onClick={check} disabled={!!busy || loading || !rows.length} className="px-4 py-2 rounded-xl bg-white border-2 border-cyan-600 text-cyan-700 font-bold disabled:opacity-40"><i className={`fa-solid ${busy === 'pre' ? 'fa-spinner fa-spin' : 'fa-magnifying-glass'} mr-2`}></i>ตรวจกับ INVS</button>
+                <button id="substock-send" onClick={send} disabled={!!busy || !pre || !chosen.length} className="px-4 py-2 rounded-xl bg-cyan-700 text-white font-bold disabled:opacity-40"><i className={`fa-solid ${busy === 'send' ? 'fa-spinner fa-spin' : 'fa-file-export'} mr-2`}></i>สร้างเอกสารจ่ายผู้ป่วย ({chosen.length})</button>
+              </div>
+            </div>
+            {pre && <div className="text-xs text-slate-600">คลัง INVS {pre.stock_id} {pre.stock_name} → {pre.patient_dept_id} · เลือก {chosen.length} รายการ มูลค่าประมาณ {chosenValue.toLocaleString('th-TH', { maximumFractionDigits: 2 })} บาท{(pre.warnings || []).length ? ` · ${pre.warnings.length} ข้อสังเกต` : ''}{!pre.live_send_enabled ? ' · ⚠ Bridge ยังปิด allow_live_send' : ''}</div>}
+            <div className="overflow-x-auto border rounded-xl">
+              <table className="w-full text-sm" id="substock-table">
+                <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-2"></th><th className="p-2 text-left">ยา</th><th className="p-2 text-right">ยอดจริง (เว็บ)</th><th className="p-2 text-right">คลังย่อย INVS</th><th className="p-2 text-right">ตัดออก (จ่ายผู้ป่วย)</th><th className="p-2 text-left">Lot · EXP ที่ตัด</th></tr></thead>
+                <tbody>{rows.map(r => { const p = preByDrug.get(r.drugId); const can = p?.status === 'cut'; return (
+                  <tr key={r.drugId} className={`border-t ${p?.status === 'invs_short' ? 'bg-amber-50' : ''}`}>
+                    <td className="p-2 text-center"><input type="checkbox" disabled={!can} checked={!!sel[r.drugId] && can} onChange={e => setSel(s => ({ ...s, [r.drugId]: e.target.checked }))} /></td>
+                    <td className="p-2"><div className="font-bold">{r.name}</div><div className="text-[10px] text-slate-400 font-mono">{r.drugId} · {r.unit}</div></td>
+                    <td className="p-2 text-right"><input type="number" min="0" value={targets[r.drugId] !== undefined ? targets[r.drugId] : r.webQty} onChange={e => { setTargets(t => ({ ...t, [r.drugId]: e.target.value })); setPre(null); }} className="w-24 border rounded-lg px-2 py-1 text-right font-black" /><div className="text-[10px] text-slate-400">{fq(targetOf(r), r)}</div></td>
+                    <td className="p-2 text-right">{p ? fq(p.invs_on_hand, r) : '-'}</td>
+                    <td className={`p-2 text-right font-black ${can ? 'text-red-600' : 'text-slate-400'}`}>{p ? (p.status === 'invs_short' ? 'INVS น้อยกว่า' : fq(p.cut_qty, r)) : '-'}</td>
+                    <td className="p-2 text-xs font-mono">{(p?.lots || []).map((l, i) => <div key={i}>{l.lot_no} · {expTh(l.expiry)} · {Number(l.qty).toLocaleString('th-TH')}</div>)}</td>
+                  </tr>); })}
+                  {!rows.length && !loading && <tr><td colSpan="6" className="p-8 text-center text-slate-400">ไม่มีรายการยาของ รพ.สต. นี้</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            {(pre?.untracked || []).length > 0 && <div className="text-xs text-slate-600 bg-slate-50 border rounded-xl p-3"><b>มีในคลังย่อย INVS แต่ไม่ได้ติดตามบนเว็บ ({pre.untracked.length}):</b> {pre.untracked.map(u => `${ctx.findDrug(u.drug_id)?.drug_name || u.drug_id} (${Number(u.invs_on_hand).toLocaleString('th-TH')})`).join(' · ')} — ไม่ถูกตัด</div>}
+          </div>}
+
+          {hospId && history.length > 0 && <div className="bg-white rounded-2xl border p-4">
+            <div className="font-bold mb-2">ประวัติการสร้างเอกสาร</div>
+            <table className="w-full text-sm"><thead className="text-xs text-slate-500"><tr><th className="p-1 text-left">เวลา</th><th className="p-1 text-left">เลข INVS</th><th className="p-1 text-right">รายการ</th><th className="p-1 text-right">มูลค่า</th><th className="p-1 text-left">โดย</th></tr></thead>
+              <tbody>{history.map(h => <tr key={h.id} className="border-t"><td className="p-1">{formatAppDateTime(h.created_at)}</td><td className="p-1 font-mono">{h.sub_po_no}</td><td className="p-1 text-right">{h.item_count}</td><td className="p-1 text-right">{toNonNegativeNumber(h.total_value).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td><td className="p-1">{h.created_by_name}</td></tr>)}</tbody></table>
+          </div>}
+        </div>
+      );
+    };
+
     const LineConsoleView = ({ ctx }) => {
       const [status, setStatus] = useState(null);
       const [logs, setLogs] = useState([]);
@@ -10295,6 +10435,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentUser?.role === 'admin' && <a href="internal.html" className="w-full text-left p-4 rounded-xl font-bold transition flex items-center hover:bg-slate-800 text-slate-300"><i className="fa-solid fa-prescription-bottle-medical w-6 text-center mr-2"></i> เบิกยาห้องยา/หน่วยงาน</a>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('req_summary')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='req_summary'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-table-list w-6 text-center mr-2"></i> สรุปการเบิก</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('map_dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='map_dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-map-location-dot w-6 text-center mr-2"></i> VMI Map Dashboard</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('substock_sync')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='substock_sync'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-warehouse w-6 text-center mr-2"></i> คลังย่อย รพ.สต. → INVS</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('line_console')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='line_console'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-brands fa-line w-6 text-center mr-2"></i> LINE Console</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
               
@@ -10325,6 +10466,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'map_dashboard' && currentUser?.role === 'admin' && <MapDashboardView ctx={ctx} />}
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'line_console' && currentUser?.role === 'admin' && <LineConsoleView ctx={ctx} />}
+              {currentView === 'substock_sync' && currentUser?.role === 'admin' && <SubstockSyncView ctx={ctx} />}
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}
               {currentView === 'req_summary' && currentUser?.role === 'admin' && <ReqSummaryView ctx={ctx} />}

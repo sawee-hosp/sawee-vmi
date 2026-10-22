@@ -92,6 +92,10 @@
 - CreateReqView โหลดใบ ฉ ที่ยังไม่รวม (หรือรวมเข้าใบนี้) → `item.emergencyQty` แสดง "จ่ายใหม่ + ฉุกเฉิน(แดง)" แก้ไม่ได้ · หมายเหตุท้ายตาราง · บันทึกแล้วตั้ง merged_req_id
 - `getRequisitionItemValue` รวม emergencyQty (คิดเงิน) · Bridge 2.10.2 ส่ง INVS qty = dispenseQty + emergencyQty · sync_virtual_stock 1.2 ไม่บวก emergencyQty เข้า Lot ซ้ำ · dispenseQty (จ่ายจริง) ไม่รวมฉุกเฉิน
 
+## Phase คลังย่อย รพ.สต. → INVS (เริ่ม)
+- ขั้นที่ 1: `cli/invs_diff.php` + `tools/INVS_DIFF.bat` (อ่านอย่างเดียว · SET SESSION TRANSACTION READ ONLY) snap ก่อน/หลังทำรายการด้วยมือใน INVS → รายงานตารางที่เปลี่ยน แถวใหม่ และค่าที่เปลี่ยนของยาที่ทดสอบ → `cache/invs_diff/report_before_after.txt`
+- ยังไม่เขียนคลังย่อย INVS จนกว่าจะรู้รูปแบบจากรายงานและผู้ใช้อนุมัติขยายกฎ (ปัจจุบันเขียนได้เฉพาะ sm_po/sm_po_c)
+
 ## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
 - หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)
 

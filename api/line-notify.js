@@ -30,8 +30,10 @@ async function notifyDispensed(reqId, admin) {
     `จำนวน ${itemCount} รายการ · มูลค่า ${thb(value)} บาท`,
     ``,
     `ใบสรุปการจ่าย (Lot / วันหมดอายุ / จำนวน):`,
-    sheetUrl('requisitions', reqId)
-  ].filter((x, i) => x !== '' || i === 4).join('\n');
+    sheetUrl('requisitions', reqId),
+    ``,
+    `ก่อนรับยา แนะนำตรวจนับคลังยา: เว็บ → คลังยาของฉัน → แท็บ "ตรวจนับ"`
+  ].filter((x, i) => x !== '' || i === 4 || i === 7).join('\n');
   const quota = await quotaStatus();
   let sent = 0, skipped = 0;
   for (const u of staff) {

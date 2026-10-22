@@ -891,6 +891,69 @@
       );
     };
 
+    // ===== v6.11 ส่งใบ รบ.301 = ตัดคลังพร้อมกัน =====
+    // ตัดยอดใช้ผู้ป่วย (getRb301UsageQty) ออกจากคลังเสมือนทันทีที่ส่งใบเบิก (FEFO) — ตัดเฉพาะส่วนที่ยังไม่เคยตัดของใบนี้ (แก้ใบแล้วส่งใหม่ไม่ตัดซ้ำ)
+    // ไม่ประทับ manual_adjusted_at (ไม่ใช่การตรวจนับ) · ตอนจัดยาเสร็จ engine กระทบยอดกับยอดคงเหลือที่แจ้งอีกครั้งตามเดิม
+    const applyUsageCutToVirtualStock = async (ctx, hospId, reqId, items, roundLabel) => {
+      const want = new Map();
+      (items || []).forEach(it => { if (String(it.type) === '6') return; const q = getRb301UsageQty(it); if (q > 0) want.set(String(it.drugId), (want.get(String(it.drugId)) || 0) + q); });
+      if (!want.size) return { drugs: 0, qty: 0 };
+      const [evSnap, lotSnap] = await Promise.all([
+        db.collection('vmi_stock_events').where('hospital_id', '==', String(hospId)).where('source_requisition_id', '==', String(reqId)).get().catch(() => null),
+        db.collection('vmi_virtual_lots').where('hospital_id', '==', String(hospId)).get()
+      ]);
+      const done = new Map();
+      (evSnap ? evSnap.docs : []).forEach(d => { const e = d.data(); if (e.source === 'RB301_USAGE') done.set(String(e.drug_id), (done.get(String(e.drug_id)) || 0) - toSafeNumber(e.qty_delta)); });
+      const lotsBy = new Map();
+      lotSnap.docs.forEach(d => { const l = { id: d.id, ...d.data() }; const k = String(l.drug_id); if (!lotsBy.has(k)) lotsBy.set(k, []); lotsBy.get(k).push(l); });
+      const expKey = l => /^\d{8}$/.test(String(l.expiry || '')) ? String(l.expiry) : '99999999';
+      let drugs = 0, qty = 0;
+      for (const [drugId, q] of want) {
+        let left = q - (done.get(drugId) || 0);
+        if (left <= 1e-9) continue;
+        const plan = [];
+        (lotsBy.get(drugId) || []).filter(l => toNonNegativeNumber(l.remaining_qty) > 0).sort((a, b) => expKey(a).localeCompare(expKey(b))).forEach(l => {
+          if (left <= 1e-9) return; const use = Math.min(toNonNegativeNumber(l.remaining_qty), left); plan.push({ id: l.id, use }); left -= use;
+        });
+        if (!plan.length) continue;
+        try {
+          let cut = 0;
+          await db.runTransaction(async tx => {
+            cut = 0;
+            const snaps = await Promise.all(plan.map(p => tx.get(db.collection('vmi_virtual_lots').doc(p.id))));
+            snaps.forEach((snap, i) => {
+              const cur = snap.data() || {}; const oldQty = toNonNegativeNumber(cur.remaining_qty); const use = Math.min(oldQty, plan[i].use);
+              if (use <= 0) return;
+              const newQty = oldQty - use; cut += use;
+              tx.update(snap.ref, { remaining_qty: newQty, active: newQty > 0, manual_adjusted_by_uid: ctx.currentUser.uid, manual_adjusted_by_name: ctx.currentUser.name,
+                manual_adjust_reason: 'ตัดยอดใช้ รบ.301 ' + roundLabel, updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+              tx.set(db.collection('vmi_stock_events').doc(), { hospital_id: String(hospId), drug_id: drugId, lot_doc_id: plan[i].id, lot_no: safeText(cur.lot_no), expiry: safeText(cur.expiry),
+                event_type: 'MANUAL_ADJUST', qty_delta: -use, before_qty: oldQty, after_qty: newQty, reason: 'ตัดยอดใช้ผู้ป่วย รบ.301 รอบ ' + roundLabel,
+                actor_uid: ctx.currentUser.uid, actor_name: ctx.currentUser.name, source: 'RB301_USAGE', source_requisition_id: String(reqId),
+                created_at: firebase.firestore.FieldValue.serverTimestamp(), schema_version: APP_SCHEMA_VERSION });
+            });
+          });
+          if (cut > 0) { drugs++; qty += cut; }
+        } catch (e) { console.warn('[usage cut]', drugId, e?.message || e); }
+      }
+      return { drugs, qty };
+    };
+    // ส่ง INVS แล้ว → ตัดยอดใช้ผู้ป่วยของใบนี้ออกจากคลังย่อย รพ.สต. ใน INVS (เอกสารจ่ายผู้ป่วย 1 ใบต่อใบเบิก กันซ้ำด้วย USE-{reqId})
+    const postUsageToSubstock = async (ctx, req) => {
+      const hosp = ctx.findHospital(req.hospitalId);
+      if (!safeText(hosp?.invs_dept_id)) return { skipped: 'ยังไม่ตั้ง INVS Dept ID' };
+      const targets = (req.items || []).filter(it => String(it.type) !== '6' && getRb301UsageQty(it) > 0).map(it => ({ drug_id: String(it.drugId), name: safeText(it.name), cut_qty: getRb301UsageQty(it) }));
+      if (!targets.length) return { skipped: 'ไม่มียอดใช้ รบ.301' };
+      const batchId = `USE-${req.id}`;
+      const data = await callInvsBridge('substock_send', '', { hospital_id: String(req.hospitalId), batch_id: batchId, targets });
+      const items = (data.drugs || []).filter(x => x.status === 'cut').map(x => ({ drug_id: x.drug_id, invs_on_hand: x.invs_on_hand, target_qty: x.target_qty, cut_qty: x.cut_qty, lots: x.lots || [] }));
+      await db.collection('invs_substock_posts').doc(batchId).set({ id: batchId, hospital_id: String(req.hospitalId), hospital_name: safeText(hosp?.hospital_name), stock_id: safeText(data.stock_id), patient_dept_id: safeText(data.patient_dept_id),
+        sub_po_no: safeText(data.sub_po_no), already_sent: !!data.already_sent, items, item_count: items.length, line_count: Number(data.item_count) || 0, total_value: toNonNegativeNumber(data.total_value),
+        mode: 'usage', req_id: req.id, req_round: formatBillRound(req, ctx.appDb.requisitions), auto: true, status: 'SENT', created_by_uid: ctx.currentUser.uid, created_by_name: safeText(ctx.currentUser.name),
+        created_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return data;
+    };
+
     const LineConsoleView = ({ ctx }) => {
       const [status, setStatus] = useState(null);
       const [logs, setLogs] = useState([]);
@@ -1828,7 +1891,7 @@ const ReturnDrugView = ({ ctx }) => {
       const [adminHospId, setAdminHospId] = useState('');
       const hospId = isAdmin ? safeText(adminHospId) : safeText(ctx.currentUser?.hospital_id);
       const [searchTerm, setSearchTerm] = useState('');
-      const [stockTab, setStockTab] = useState('current');
+      const [stockTab, setStockTab] = useState(() => { try { const t = localStorage.getItem('rxfill_stock_tab'); if (t) { localStorage.removeItem('rxfill_stock_tab'); return t; } } catch (e) { /* storage blocked */ } return 'current'; });
       const [virtualLots, setVirtualLots] = useState([]);
       const [stockMeta, setStockMeta] = useState(null);
       const [stockEvents, setStockEvents] = useState([]);
@@ -3355,6 +3418,12 @@ const CreateReqView = ({ ctx, round = null }) => {
              try { await db.collection('rpst_emergency').doc(d.id).update({ merged_req_id: savedReqId, merged_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() }); }
              catch (e) { console.warn('[emergency merge]', e?.message || e); }
            }
+           // v6.11 ส่งใบ รบ.301 = ตัดยอดใช้ผู้ป่วยออกจากคลังยาของฉันพร้อมกัน แล้วชวนตรวจนับก่อนรับยา
+           let usageCut = null;
+           if (saveStatus === 'Pending') {
+             try { usageCut = await applyUsageCutToVirtualStock(ctx, hospId, savedReqId, sanitizedItems, resolvedRequisitionNo); }
+             catch (e) { console.warn('[usage cut]', e?.message || e); }
+           }
            if (savedReqForLocal && saveStatus === 'Pending') rxTaskDone(isAdmin ? 'adm_review' : 'rpst_calc');
            if (savedReqForLocal && ctx.setAppDb) {
              ctx.setAppDb(prev => {
@@ -3364,6 +3433,13 @@ const CreateReqView = ({ ctx, round = null }) => {
            }
            if (uploadedThisSave) setExcelFile(null);
            clearDirty();
+           if (saveStatus === 'Pending' && !isAdmin && navigateAfter) {
+             setTimeout(() => ctx.setConfirmDialog({
+               title: 'ส่งใบเบิกแล้ว — ตรวจนับคลังก่อนรับยา', icon: 'fa-clipboard-check', iconColor: 'text-emerald-600', confirmBtnClass: 'bg-emerald-600 hover:bg-emerald-700', confirmText: 'ไปหน้าตรวจนับ',
+               message: `${usageCut && usageCut.drugs ? `ระบบตัดยอดใช้ผู้ป่วยจาก รบ.301 ออกจากคลังยาของฉันแล้ว ${usageCut.drugs} รายการ\n` : ''}ก่อนรับยารอบนี้ แนะนำพิมพ์ใบตรวจนับแล้วนับยาบนชั้นจริง เพื่อให้ยอดในคลังตรงกับของจริง`,
+               onConfirm: () => { try { localStorage.setItem('rxfill_stock_tab', 'count'); } catch (e) { /* storage blocked */ } ctx.setCurrentView('my_stock'); }
+             }), 300);
+           }
            if (navigateAfter) {
              ctx.setEditReqId(null);
              ctx.setTargetUploadHosp(null);
@@ -4091,6 +4167,7 @@ const ViewReqView = ({ ctx }) => {
       const [invsPreflight, setInvsPreflight] = useState(null);
       const [isInvsBusy, setIsInvsBusy] = useState(false);
       const [approveAfterInvs, setApproveAfterInvs] = useState(false);
+      const [postUsageInvs, setPostUsageInvs] = useState(true); // v6.11 ส่ง INVS แล้วตัดยอดใช้ รบ.301 ออกจากคลังย่อย รพ.สต. ด้วย
       // v6.6.3 รายการส่ง INVS เพิ่ม (ไม่ผ่าน VMI/เครดิต) เช่น น้ำเกลือที่ต้องคิดราคาในใบนี้ — INVS ไม่ให้เพิ่มรายการในใบที่มาจากเว็บ
       const [extraCode, setExtraCode] = useState('');
       const [extraQty, setExtraQty] = useState('');
@@ -4724,6 +4801,9 @@ const ViewReqView = ({ ctx }) => {
           setInvsPreflight(data);
           ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
           if (!data.already_sent) notifyLineDispensed(req.id); // v6.9 แจ้ง จนท.รพ.สต. ทาง LINE (ไม่รอผล)
+          if (postUsageInvs) postUsageToSubstock(ctx, req)
+            .then(r => { if (r?.sub_po_no) ctx.showToast(`ตัดยอดใช้ รบ.301 ออกจากคลังย่อย INVS แล้ว (จ่ายผู้ป่วย ${r.sub_po_no}) — อย่าลืมกดยืนยันใน INVS`); })
+            .catch(e => ctx.showToast('ตัดคลังย่อย INVS ตามยอดใช้ไม่สำเร็จ: ' + (e?.message || e) + ' — ทำซ้ำได้ที่เมนู คลังย่อย รพ.สต. → INVS', 'error'));
           await ctx.refreshData();
           setShowInvsModal(false);
           if (approveAfterInvs) { setApproveAfterInvs(false); setIsInvsBusy(false); await handleApprove(); return; }
@@ -5481,6 +5561,7 @@ const ViewReqView = ({ ctx }) => {
                   <span className="text-xs text-slate-500">ค่าเริ่มต้น = วันจันทร์แรกของเดือนรอบเบิก ถ้าตรงวันหยุดใช้วันทำการถัดไปในสัปดาห์นั้น · วันหยุดพิเศษ/จันทรคติ แก้ได้ที่นี่</span>
                 </div>}
                 {!invsPreflight.live_send_enabled && !invsPreflight.already_sent && <div className="bg-slate-900 text-white rounded-xl p-3 text-xs"><b>Dry-run mode:</b> Bridge ยังตั้ง <code>allow_live_send=false</code> จึงยังไม่มีการ INSERT ลง INVS เมื่อผลตรวจถูกต้องแล้วค่อยเปิด LIVE ใน config.php</div>}
+                {!invsPreflight.already_sent && <label className="flex items-start gap-2 text-sm text-slate-700 mb-3 cursor-pointer"><input id="invs-post-usage" type="checkbox" checked={postUsageInvs} onChange={e=>setPostUsageInvs(e.target.checked)} className="mt-1 w-4 h-4" /><span>ตัดยอดใช้ผู้ป่วย (รบ.301) ของใบนี้ออกจากคลังย่อย รพ.สต. ใน INVS ด้วย<span className="block text-xs text-slate-500">สร้างเอกสาร "จ่ายผู้ป่วย" (คลัง รพ.สต. → PT01) ให้อัตโนมัติ — กดยืนยันใน INVS พร้อมใบเบิก</span></span></label>}
                 <div className="flex justify-end gap-2">
                   <button onClick={()=>{ setShowInvsModal(false); setApproveAfterInvs(false); }} disabled={isInvsBusy} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold">ปิด</button>
                   {approveAfterInvs && invsPreflight.already_sent && <button id="invs-approve-only" disabled={isInvsBusy || isApproving} onClick={async ()=>{ setShowInvsModal(false); setApproveAfterInvs(false); await ctx.refreshData(); await handleApprove(); }} className="px-4 py-2 rounded-xl bg-gradient-main text-white font-bold disabled:opacity-50"><i className="fa-solid fa-check-double mr-2"></i>ยืนยันจัดยา (มีใน INVS แล้ว)</button>}
@@ -10097,6 +10178,146 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+    // ===== v6.11 แดชบอร์ดสถานะตรวจนับ รพ.สต. (แอดมิน) — ใครยังไม่นับเดือนนี้ / ส่วนต่างสูง =====
+    const COUNT_HIGH_VALUE = 1000; // บาท — มูลค่าส่วนต่างรวม (ค่าสัมบูรณ์) ที่ถือว่าสูง
+    const COUNT_HIGH_PCT = 20;     // % รายการที่นับไม่ตรงระบบ
+    const countDiffValue = (c) => (c.items || []).reduce((s, x) => s + Math.abs(toSafeNumber(x.diff)) / safePackSize(x.pack_size) * toNonNegativeNumber(x.price), 0);
+    const StockCountStatusView = ({ ctx }) => {
+      const [counts, setCounts] = useState(null);
+      const load = async () => {
+        try { const sn = await db.collection('vmi_stock_counts').get(); setCounts(sn.docs.map(d => ({ id: d.id, ...d.data() }))); }
+        catch (e) { ctx.showToast('โหลดผลตรวจนับไม่สำเร็จ: ' + (e?.message || e), 'error'); setCounts([]); }
+      };
+      useEffect(() => { load(); }, []);
+      const ym = toYmd(new Date()).slice(0, 7);
+      const rows = useMemo(() => (ctx.appDb.hospitals || []).map(h => {
+        const mine = (counts || []).filter(c => String(c.hospital_id) === String(h.hospital_id)).sort((a, b) => String(b.count_date || '').localeCompare(String(a.count_date || '')) || String(b.id).localeCompare(String(a.id)));
+        const last = mine[0] || null;
+        const items = last ? (last.items || []).length : 0;
+        const diffItems = last ? (last.items || []).filter(x => Math.abs(toSafeNumber(x.diff)) > 1e-9).length : 0;
+        const diffValue = last ? countDiffValue(last) : 0;
+        const pct = items ? diffItems / items * 100 : 0;
+        return { h, last, countedThisMonth: !!last && String(last.count_date || '').startsWith(ym), items, diffItems, diffValue, pct, high: !!last && (diffValue >= COUNT_HIGH_VALUE || pct >= COUNT_HIGH_PCT), times: mine.length };
+      }).sort((a, b) => (a.countedThisMonth ? 1 : 0) - (b.countedThisMonth ? 1 : 0) || (b.high ? 1 : 0) - (a.high ? 1 : 0) || b.diffValue - a.diffValue), [counts, ctx.appDb.hospitals]);
+      const printResult = (c) => printHtmlDocument(buildStockCountFormHtml({
+        hospitalName: c.hospital_name, drugTypes: ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES, filled: true, countDate: c.count_date, docNo: c.id,
+        rows: (c.items || []).map(x => ({ drugId: x.drug_id, name: x.name, unit: x.unit, packSize: x.pack_size, price: x.price, type: x.type, location: x.location, oldCode: x.old_code, systemQty: x.system_qty, lotCount: x.lot_count, earliestLot: x.earliest_lot, earliestExp: x.earliest_exp, counted: x.counted }))
+      }));
+      const notCounted = rows.filter(r => !r.countedThisMonth).length;
+      const highCount = rows.filter(r => r.high).length;
+      return (
+        <div className="space-y-5 animate-fade-in" id="count-status-view">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div><h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-clipboard-check text-emerald-600 mr-2"></i>สถานะตรวจนับคลัง รพ.สต.</h2>
+              <p className="text-sm text-slate-500 mt-1">ผลตรวจนับล่าสุดของแต่ละแห่ง · ส่วนต่างสูง = มูลค่าส่วนต่าง ≥ {COUNT_HIGH_VALUE.toLocaleString('th-TH')} บาท หรือรายการไม่ตรง ≥ {COUNT_HIGH_PCT}% · LINE เตือนนับอัตโนมัติวันที่ 1–7 ของเดือน (ถึงแห่งที่ยังไม่นับ)</p></div>
+            <button onClick={load} className="px-4 py-2 rounded-xl border bg-white font-bold text-sm"><i className="fa-solid fa-rotate mr-1"></i>รีเฟรช</button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="rounded-2xl border bg-white p-4"><div className="text-xs font-bold text-slate-500">รพ.สต. ทั้งหมด</div><div className="text-3xl font-black text-slate-800">{rows.length}</div></div>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="text-xs font-bold text-amber-700">ยังไม่นับเดือนนี้</div><div className="text-3xl font-black text-amber-700" id="count-not-yet">{counts ? notCounted : '…'}</div></div>
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-4"><div className="text-xs font-bold text-red-700">ส่วนต่างสูง (ครั้งล่าสุด)</div><div className="text-3xl font-black text-red-700">{counts ? highCount : '…'}</div></div>
+          </div>
+          <div className="bg-white rounded-2xl border overflow-x-auto">
+            <table className="w-full text-sm" id="count-status-table">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">รพ.สต.</th><th className="p-3 text-left">นับล่าสุด</th><th className="p-3 text-center">เดือนนี้</th><th className="p-3 text-right">รายการที่นับ</th><th className="p-3 text-right">ไม่ตรงระบบ</th><th className="p-3 text-right">มูลค่าส่วนต่าง</th><th className="p-3 text-left">ผล</th><th className="p-3"></th></tr></thead>
+              <tbody>
+                {!counts && <tr><td colSpan="8" className="p-8 text-center text-slate-400">กำลังโหลด...</td></tr>}
+                {counts && rows.map(r => <tr key={r.h.hospital_id} className={`border-t ${r.high ? 'bg-red-50/60' : !r.countedThisMonth ? 'bg-amber-50/40' : ''}`}>
+                  <td className="p-3 font-bold">{r.h.hospital_name}</td>
+                  <td className="p-3">{r.last ? `${thaiDateLong(r.last.count_date)} · ${r.last.counted_by_name || ''}` : <span className="text-slate-400">ยังไม่เคยนับ</span>}</td>
+                  <td className="p-3 text-center">{r.countedThisMonth ? <i className="fa-solid fa-circle-check text-emerald-600"></i> : <i className="fa-solid fa-circle-xmark text-amber-500"></i>}</td>
+                  <td className="p-3 text-right">{r.items || '-'}</td>
+                  <td className="p-3 text-right">{r.last ? `${r.diffItems} (${Math.round(r.pct)}%)` : '-'}</td>
+                  <td className="p-3 text-right font-bold">{r.last ? r.diffValue.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}</td>
+                  <td className="p-3">{!r.last ? '' : r.high ? <span className="px-2 py-1 rounded-lg bg-red-100 text-red-700 text-xs font-bold">ส่วนต่างสูง</span> : <span className="px-2 py-1 rounded-lg bg-emerald-100 text-emerald-700 text-xs font-bold">ปกติ</span>}</td>
+                  <td className="p-3 text-right">{r.last && <button onClick={() => printResult(r.last)} className="text-xs font-bold text-blue-700 hover:underline"><i className="fa-solid fa-print mr-1"></i>ผลนับ</button>}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    };
+
+    // ===== v6.11 จับคู่ยา NCDs (icode HOSxP จาก Sawee Refer) กับยาในคลัง INVS ทีเดียวทุก รพ.สต. (แอดมิน) =====
+    // จับคู่ = เพิ่ม icode เข้า master_drugs.hosxp_code (ใช้ร่วมทุก รพ.สต. และหน้าใบเบิก) — รพ.สต. ไม่ต้องจับคู่เอง
+    const NcdsMappingView = ({ ctx }) => {
+      const [rows, setRows] = useState(null);
+      const [err, setErr] = useState('');
+      const [q, setQ] = useState({});
+      const [busy, setBusy] = useState('');
+      const load = async () => {
+        setErr(''); setRows(null);
+        try {
+          const docs = [];
+          try { const rdb = await getReferDb(); const sn = await rdb.collection('ncds_demand').limit(2000).get(); sn.docs.forEach(d => docs.push({ id: d.id, ...d.data() })); }
+          catch (e) { setErr(referErrorText(e)); }
+          try { const sn = await db.collection('ncds_demand_inbox').get(); sn.docs.forEach(d => { if (!docs.some(x => x.id === d.id)) docs.push({ id: d.id, ...d.data() }); }); } catch (e) { /* ทางสำรอง */ }
+          const from = toYmd(new Date(Date.now() - 120 * 86400000));
+          const idx = buildHosxpIndex(ctx.appDb.drugs);
+          const m = new Map();
+          docs.filter(r => String(r.round_date || '') >= from).forEach(r => (r.items || []).forEach(it => {
+            const icode = safeText(it.icode); if (!icode || idx.get(icode)) return;
+            const cur = m.get(icode) || { icode, name: safeText(it.name), form: safeText(it.form), hcodes: new Set(), qty: 0, patients: 0, last: '' };
+            cur.hcodes.add(safeText(r.hcode_name || r.hcode)); cur.qty += toNonNegativeNumber(it.qty_needed); cur.patients += toNonNegativeNumber(it.patients);
+            if (String(r.round_date) > cur.last) cur.last = String(r.round_date);
+            m.set(icode, cur);
+          }));
+          const norm = (x) => normalizeForMatch(String(x || '').replace(/\b(tab|cap|tablet|capsule|mg|ml)\b/gi, ''));
+          setRows([...m.values()].map(x => {
+            const n = norm(x.name).slice(0, 8);
+            const suggest = n ? ctx.appDb.drugs.find(d => !isDrugDiscontinued(d) && norm(d.drug_name).startsWith(n)) : null;
+            return { ...x, hcodes: [...x.hcodes], suggest };
+          }).sort((a, b) => b.hcodes.length - a.hcodes.length || b.patients - a.patients));
+        } catch (e) { setErr(e?.message || String(e)); setRows([]); }
+      };
+      useEffect(() => { load(); }, []);
+      const mapTo = async (icode, d) => {
+        setBusy(icode);
+        try {
+          const codes = String(d.hosxp_code || '').split(/[,;\s]+/).filter(Boolean);
+          if (!codes.includes(String(icode))) codes.push(String(icode));
+          await db.collection('master_drugs').doc(String(d.drug_id)).update({ hosxp_code: codes.join(','), hosxp_mapped_at: firebase.firestore.FieldValue.serverTimestamp(), hosxp_mapped_by: safeText(ctx.currentUser.name) });
+          await writeAuditLog(ctx.currentUser, 'HOSXP_CODE_MAP', 'master_drugs', d.drug_id, { icode, source: 'ncds_mapping_view' });
+          ctx.showToast(`จับคู่ ${icode} → ${d.drug_name} แล้ว (ใช้ได้ทุก รพ.สต.)`);
+          setRows(prev => (prev || []).filter(x => x.icode !== icode));
+          ctx.refreshData();
+        } catch (e) { ctx.showToast('จับคู่ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const hitsOf = (icode) => { const n = normalizeForMatch(q[icode] || ''); if (!n) return []; return ctx.appDb.drugs.filter(d => !isDrugDiscontinued(d) && (normalizeForMatch(d.drug_name).includes(n) || String(d.drug_id).includes(String(q[icode]).trim()))).slice(0, 6); };
+      return (
+        <div className="space-y-5 animate-fade-in" id="ncds-mapping-view">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div><h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-link text-violet-600 mr-2"></i>จับคู่ยา NCDs กับคลัง INVS</h2>
+              <p className="text-sm text-slate-500 mt-1">รายการยาจาก Sawee Refer (นัด NCDs 120 วันล่าสุด/ที่จะถึง) ทุก รพ.สต. ที่ยังไม่รู้ว่าตรงกับยาตัวไหนในคลัง — จับคู่ครั้งเดียวใช้ได้ทุก รพ.สต. และในหน้าใบเบิก</p></div>
+            <button onClick={load} className="px-4 py-2 rounded-xl border bg-white font-bold text-sm"><i className="fa-solid fa-rotate mr-1"></i>รีเฟรช</button>
+          </div>
+          {err && <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">{err}</div>}
+          <div className="bg-white rounded-2xl border overflow-x-auto">
+            <table className="w-full text-sm" id="ncds-map-table">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">ยาจาก HOSxP (icode)</th><th className="p-3 text-left">รพ.สต. ที่ใช้</th><th className="p-3 text-right">ผู้ป่วย / จำนวน</th><th className="p-3 text-left w-96">จับคู่กับยาในคลัง</th></tr></thead>
+              <tbody>
+                {!rows && <tr><td colSpan="4" className="p-8 text-center text-slate-400">กำลังโหลดจาก Sawee Refer...</td></tr>}
+                {rows && !rows.length && <tr><td colSpan="4" className="p-8 text-center text-emerald-700 font-bold"><i className="fa-solid fa-circle-check mr-2"></i>จับคู่ครบทุกรายการแล้ว</td></tr>}
+                {(rows || []).map(x => <tr key={x.icode} className="border-t align-top">
+                  <td className="p-3"><div className="font-bold">{x.name}</div><div className="text-[11px] text-slate-400 font-mono">icode {x.icode}{x.form ? ` · ${x.form}` : ''} · ล่าสุด {ncdsThaiDate(x.last)}</div></td>
+                  <td className="p-3 text-xs">{x.hcodes.length} แห่ง<div className="text-slate-400">{x.hcodes.slice(0, 4).join(', ')}{x.hcodes.length > 4 ? ' …' : ''}</div></td>
+                  <td className="p-3 text-right">{x.patients.toLocaleString('th-TH')} / {x.qty.toLocaleString('th-TH')}</td>
+                  <td className="p-3">
+                    {x.suggest && <button disabled={busy === x.icode} onClick={() => mapTo(x.icode, x.suggest)} className="mb-1 w-full text-left px-2 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-xs hover:bg-emerald-100"><i className="fa-solid fa-wand-magic-sparkles mr-1 text-emerald-600"></i>คำแนะนำ: <b>{x.suggest.drug_name}</b> <span className="font-mono text-slate-400">{x.suggest.drug_id}</span> — กดเพื่อจับคู่</button>}
+                    <div className="relative"><input value={q[x.icode] || ''} onChange={e => setQ(s => ({ ...s, [x.icode]: e.target.value }))} placeholder="ค้นหายาในคลัง (ชื่อ/รหัส)" className="w-full px-2 py-1.5 border rounded-lg text-xs" />
+                      {hitsOf(x.icode).length > 0 && <div className="absolute z-20 mt-1 w-full bg-white border rounded-lg shadow-lg">{hitsOf(x.icode).map(d => <button key={d.drug_id} type="button" disabled={busy === x.icode} onClick={() => mapTo(x.icode, d)} className="block w-full text-left px-2 py-1.5 text-xs hover:bg-emerald-50 border-b last:border-0"><span className="font-mono text-slate-400 mr-2">{d.drug_id}</span>{d.drug_name}</button>)}</div>}
+                    </div>
+                  </td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    };
+
     const NcdsMapCell = ({ ctx, icode, onMapped }) => {
       const [q, setQ] = useState('');
       const hits = useMemo(() => {
@@ -10584,6 +10805,8 @@ const AdminConfigView = ({ ctx }) => {
               {currentUser?.role === 'admin' && <a href="internal.html" className="w-full text-left p-4 rounded-xl font-bold transition flex items-center hover:bg-slate-800 text-slate-300"><i className="fa-solid fa-prescription-bottle-medical w-6 text-center mr-2"></i> เบิกยาห้องยา/หน่วยงาน</a>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('req_summary')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='req_summary'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-table-list w-6 text-center mr-2"></i> สรุปการเบิก</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('map_dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='map_dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-map-location-dot w-6 text-center mr-2"></i> VMI Map Dashboard</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('count_status')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='count_status'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-clipboard-check w-6 text-center mr-2"></i> สถานะตรวจนับ รพ.สต.</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('ncds_mapping')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='ncds_mapping'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-link w-6 text-center mr-2"></i> จับคู่ยา NCDs</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('substock_sync')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='substock_sync'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-warehouse w-6 text-center mr-2"></i> คลังย่อย รพ.สต. → INVS</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('line_console')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='line_console'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-brands fa-line w-6 text-center mr-2"></i> LINE Console</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
@@ -10616,6 +10839,8 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'line_console' && currentUser?.role === 'admin' && <LineConsoleView ctx={ctx} />}
               {currentView === 'substock_sync' && currentUser?.role === 'admin' && <SubstockSyncView ctx={ctx} />}
+              {currentView === 'count_status' && currentUser?.role === 'admin' && <StockCountStatusView ctx={ctx} />}
+              {currentView === 'ncds_mapping' && currentUser?.role === 'admin' && <NcdsMappingView ctx={ctx} />}
               {currentView === 'profile_edit' && <ProfileEditView ctx={ctx} />}
               {currentView === 'summary_report' && <SummaryReportView ctx={ctx} />}
               {currentView === 'req_summary' && currentUser?.role === 'admin' && <ReqSummaryView ctx={ctx} />}

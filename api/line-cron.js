@@ -111,6 +111,25 @@ async function runDigest({ dryRun }) {
     for (const u of staff) { const r = await pushText(u.line_user_id, text, { audience: 'staff', type: 'staff_expiry', uid: u.id, name: u.name }); r.ok ? out.sent++ : out.skipped++; }
   }
 
+  // ----- รอบตรวจนับประจำเดือน: วันที่ 1–7 ส่งครั้งเดียวต่อเดือน ถึง จนท.รพ.สต. ที่ยังไม่ได้บันทึกผลตรวจนับเดือนนี้ -----
+  const ict = new Date(Date.now() + 7 * 3600000);
+  const ym = ict.getUTCFullYear() + '-' + String(ict.getUTCMonth() + 1).padStart(2, '0');
+  out.countReminder = null;
+  if (ict.getUTCDate() <= 7 && state.count_reminder_month !== ym) {
+    const counts = await fsQuery('vmi_stock_counts', [['count_date', 'GREATER_THAN_OR_EQUAL', ym + '-01']]).catch(() => []);
+    const counted = new Set(counts.map(c => String(c.hospital_id)));
+    const byH = new Map();
+    linked.filter(u => !isAdminRole(u.role) && u.hospital_id && !counted.has(String(u.hospital_id))).forEach(u => { const k = String(u.hospital_id); if (!byH.has(k)) byH.set(k, []); byH.get(k).push(u); });
+    out.countReminder = { hospitals: byH.size, items: [] };
+    for (const [hid, staff] of byH) {
+      const text = `ถึงรอบตรวจนับคลังยาประจำเดือน — ${hospName.get(hid) || hid}\nกรุณาตรวจนับยาบนชั้นก่อนรับยารอบถัดไป\n1) เข้าเว็บ → คลังยาของฉัน → แท็บ "ตรวจนับ" → พิมพ์ใบตรวจนับ\n2) นับของจริง แล้วคีย์ยอดที่นับได้ → บันทึกผลตรวจนับ\n${SITE()}/app.html`;
+      out.countReminder.items.push({ hospital: hospName.get(hid) || hid, to: staff.map(u => u.name || u.id), text });
+      if (dryRun) continue;
+      for (const u of staff) { const r = await pushText(u.line_user_id, text, { audience: 'staff', type: 'count_reminder', uid: u.id, name: u.name }); r.ok ? out.sent++ : out.skipped++; }
+    }
+    if (!dryRun) await fsSet('line_meta/state', { count_reminder_month: ym }, true);
+  }
+
   if (!dryRun) {
     await fsSet('line_meta/expiry_levels', { levels: next, updated_at: nowTs() }, false);
     await fsSet('line_meta/state', { last_run_at: new Date().toISOString(), last_result: { sent: out.sent, skipped: out.skipped, newReqs: newReqs.length, near30: near30.length, near180: near180.length }, updated_at: nowTs() }, true);

@@ -1,6 +1,7 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.9.0 · Bridge v2.11.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.10.0 · Bridge v2.11.1)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
+**ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
 **แก้เฉพาะจุดที่ขอ / เฉพาะไฟล์ที่เกี่ยวข้อง** — อย่า refactor หรือเปลี่ยนสิ่งที่ไม่ได้ขอ
 
 ## โครงสร้าง
@@ -105,6 +106,14 @@
   - สร้าง sm_po R_S_STATUS='S' DEPT_ID=`invs.patient_dept_id` (ค่าเริ่มต้น PT01) STOCK_ID=คลังย่อย SEND_FLAG/CONFIRM_DATE ว่าง SUB_PO_UNO='' + sm_po_c รายล็อต (COST = qty×LOT_COST/QTY_ON_HAND, VALUE = qty×PACK_COST/PACK_RATIO, BUY_UNIT_COST = LOT_COST/QTY_ON_HAND — ตรงกับเอกสารที่ INVS สร้างเอง) CONFIRM_FLAG='N' · REF_NO marker กันซ้ำ · ยังอยู่ในกฎ sm_po/sm_po_c
   - เภสัชกรกดยืนยันในเมนู "จ่ายผู้ป่วย" ของ INVS → INVS ย้ายล็อตไป PT01 + ลงบัตรคลังเอง
 - app.html แอดมิน เมนู "คลังย่อย รพ.สต. → INVS" (`SubstockSyncView`): ยอดจริง = `effectiveRemainingByDrug` (สมมติฐานเดียวกับคลังยาของฉัน) แก้ได้ → ตรวจกับ INVS → เลือก → สร้างเอกสาร · ประวัติ `invs_substock_posts` (rules แอดมิน)
+
+## v6.10 ตรวจนับ / ยอดใช้จริง / ตัดคลังย่อยตามยอดใช้
+- ยอดใช้จริงผู้ป่วย = `getRb301UsageQty(item)` (importedUsageQty จาก รบ.301 ก่อนปรับแก้ ถ้าไม่มีใช้ usage) เก็บแยกจาก dispenseQty (ยอดเบิก/จ่าย)
+- Bridge 2.11.1: targets รับ `cut_qty` (ตัดตามยอดใช้ ตัดได้ไม่เกินที่ INVS มี + เตือน) แทน `target_qty`
+- SubstockSyncView 2 โหมด: **ตัดตามยอดใช้ (รบ.301)** เลือกใบเบิก → batch_id `USE-{reqId}` (1 ใบ = 1 เอกสาร กันซ้ำ) · **ปรับให้เท่ายอดจริง** (หลังตรวจนับ) · ประวัติเก็บ mode/req_id/req_round
+- MyStockView แท็บ "ตรวจนับ": พิมพ์ใบตรวจนับ `buildStockCountFormHtml` (shared.js, A4 แนวนอน: รหัส(old_code) ยอดระบบ Lot/EXP เร็วสุด ★≤180 วัน จำนวน Lot ช่องนับได้/ส่วนต่าง/หมายเหตุ มูลค่า + ตัวอักษร ผู้ตรวจนับ/ผู้ตรวจสอบ/ผู้บันทึก) → คีย์ผล → ปรับล็อต FEFO (ขาด=หักล็อตหมดอายุก่อน, เกิน=เพิ่มล็อตใหม่สุด, ไม่มีล็อต=no_lot) event MANUAL_ADJUST source STOCK_COUNT → `vmi_stock_counts` (rules: รพ.สต.สร้างของตัวเอง) · พิมพ์ผลนับย้อนหลังได้
+- รายละเอียดยา: "ประวัติการใช้จริง" 12 รอบล่าสุด (ยอดใช้ รบ.301 vs ยอดเบิก + ฉุกเฉิน)
+- ใบคืนยา: หัว หน่วยบริการ/เรื่อง/เรียน หัวหน้ากลุ่มงานเภสัชกรรมฯ · intro จำนวน+มูลค่า · รหัส old_code (`withOldCodes`) · มูลค่าตัวอักษร `bahtText` · "จึงเรียนมาเพื่อโปรดพิจารณา"
 
 ## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
 - หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)

@@ -28,7 +28,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.11.0';
+const BRIDGE_VERSION = '2.11.1';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -997,12 +997,21 @@ function buildSubstockPlan(mysqli $db,array $config,string $stockId,array $targe
     foreach ($targets as $t) {
         if (!is_array($t)) continue;
         $drugId=cleanText($t['drug_id'] ?? ''); if ($drugId==='' || isset($seen[$drugId])) continue; $seen[$drugId]=true;
-        $target=max(0.0,finiteNumber($t['target_qty'] ?? 0));
         $lots=substockLots($db,$drugId,$stockId);
         $onHand=array_sum(array_map(fn($l)=>finiteNumber($l['QTY_ON_HAND'] ?? 0),$lots));
-        $cut=round($onHand-$target,4);
-        $row=['drug_id'=>$drugId,'name'=>cleanText($t['name'] ?? ''),'invs_on_hand'=>$onHand,'target_qty'=>$target,'cut_qty'=>max(0.0,$cut),'lots'=>[],'status'=>'ok'];
-        if ($cut<-0.0001) { $row['status']='invs_short'; $row['cut_qty']=0; $warnings[]="{$drugId}: INVS มี {$onHand} น้อยกว่ายอดจริง {$target} — ตัดไม่ได้ (ต้องรับเข้าคลังย่อยใน INVS)"; }
+        // v2.11.1 โหมดยอดใช้: ส่ง cut_qty (ยอดใช้ผู้ป่วยจาก รบ.301) มาตรง ๆ — ตัดได้ไม่เกินที่ INVS มี
+        $byUsage=array_key_exists('cut_qty',$t);
+        if ($byUsage) {
+            $want=max(0.0,finiteNumber($t['cut_qty'] ?? 0));
+            $cut=round(min($want,$onHand),4); $target=round($onHand-$cut,4);
+            if ($want-$onHand>0.0001) $warnings[]="{$drugId}: ยอดใช้ {$want} มากกว่าคลังย่อย INVS {$onHand} — ตัดได้ {$cut}";
+        } else {
+            $target=max(0.0,finiteNumber($t['target_qty'] ?? 0));
+            $cut=round($onHand-$target,4);
+        }
+        $row=['drug_id'=>$drugId,'name'=>cleanText($t['name'] ?? ''),'invs_on_hand'=>$onHand,'target_qty'=>$target,'cut_qty'=>max(0.0,$cut),'requested_cut'=>$byUsage?max(0.0,finiteNumber($t['cut_qty'] ?? 0)):null,'lots'=>[],'status'=>'ok'];
+        if ($byUsage && $onHand<=0.0001 && $row['requested_cut']>0) { $row['status']='invs_short'; }
+        elseif ($cut<-0.0001) { $row['status']='invs_short'; $row['cut_qty']=0; $warnings[]="{$drugId}: INVS มี {$onHand} น้อยกว่ายอดจริง {$target} — ตัดไม่ได้ (ต้องรับเข้าคลังย่อยใน INVS)"; }
         elseif ($cut>0.0001) {
             $left=$cut; $row['status']='cut';
             foreach ($lots as $l) {

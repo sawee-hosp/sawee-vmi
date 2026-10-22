@@ -87,7 +87,7 @@
 
 ## ใบเบิกยาฉุกเฉิน รพ.สต. (ใบ ฉ) v6.9.0
 - app.html `EmergencyReqView` (เมนู "เบิกยาฉุกเฉิน (ใบ ฉ)") collection `rpst_emergency` {hospitalId, items[{drugId,qty หน่วยย่อย,...}], reason, status Approved/Cancelled, merged_req_id}
-- ตรวจผ่านระบบ (`checkEmergencyItems`): มีเหตุผล · ยาอยู่ใน config_par ของ รพ.สต. · ไม่ใช่วัคซีน/ยกเลิก · ไม่เกิน Target Stock / Maximum → เขียว "สามารถรับยาได้เลย" · ไม่ผ่าน = แดง บันทึกไม่ได้
+- ตรวจผ่านระบบ (`checkEmergencyItems`): ไม่ผ่าน (แดง บันทึกไม่ได้) = ไม่มีเหตุผล / ยาไม่อยู่ใน config_par ของ รพ.สต. / ยกเลิกใช้ · เกิน Target/Maximum = ข้อสังเกตสีเหลือง ยังผ่าน (`over_target`, `warnings` แสดงในใบพิมพ์) · วัคซีนเบิกได้แต่ไม่รวมเข้าใบเบิกหลัก (ห้องยาจัดการเอง)
 - ใบพิมพ์ `buildEmergencyFormHtml` + หมายเหตุขั้นตอน (ส่งกระดาษ/PDF ทาง LINE ไม่ต้องเบิกซ้ำ ระบบรวมยอดเอง)
 - CreateReqView โหลดใบ ฉ ที่ยังไม่รวม (หรือรวมเข้าใบนี้) → `item.emergencyQty` แสดง "จ่ายใหม่ + ฉุกเฉิน(แดง)" แก้ไม่ได้ · หมายเหตุท้ายตาราง · บันทึกแล้วตั้ง merged_req_id
 - `getRequisitionItemValue` รวม emergencyQty (คิดเงิน) · Bridge 2.10.2 ส่ง INVS qty = dispenseQty + emergencyQty · sync_virtual_stock 1.2 ไม่บวก emergencyQty เข้า Lot ซ้ำ · dispenseQty (จ่ายจริง) ไม่รวมฉุกเฉิน

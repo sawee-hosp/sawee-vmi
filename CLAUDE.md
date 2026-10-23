@@ -115,6 +115,12 @@
 - รายละเอียดยา: "ประวัติการใช้จริง" 12 รอบล่าสุด (ยอดใช้ รบ.301 vs ยอดเบิก + ฉุกเฉิน)
 - ใบคืนยา: หัว หน่วยบริการ/เรื่อง/เรียน หัวหน้ากลุ่มงานเภสัชกรรมฯ · intro จำนวน+มูลค่า · รหัส old_code (`withOldCodes`) · มูลค่าตัวอักษร `bahtText` · "จึงเรียนมาเพื่อโปรดพิจารณา"
 
+## v6.11 ลดภาระ รพ.สต. / ติดตามการนับ
+- ส่งใบเบิก (Pending) = `applyUsageCutToVirtualStock` ตัดยอดใช้ รบ.301 ออกจาก vmi_virtual_lots ทันที (FEFO, event MANUAL_ADJUST source RB301_USAGE + source_requisition_id ใช้กันตัดซ้ำ/ตัดเฉพาะส่วนต่างเมื่อแก้ใบ, ไม่ประทับ manual_adjusted_at) → dialog ชวน "ไปหน้าตรวจนับ" (localStorage `rxfill_stock_tab`)
+- แอดมินส่ง INVS: checkbox `postUsageInvs` (ค่าเริ่มต้นเปิด) → `postUsageToSubstock` สร้างเอกสารจ่ายผู้ป่วยตามยอดใช้ อัตโนมัติ (batch `USE-{reqId}` บันทึก invs_substock_posts auto:true)
+- LINE: cron วันที่ 1–7 ส่งเตือนตรวจนับครั้งเดียว/เดือน (`line_meta/state.count_reminder_month`) ถึง จนท. รพ.สต. ที่ยังไม่มี vmi_stock_counts เดือนนี้ · ข้อความจัดยาเสร็จชวนตรวจนับ
+- แอดมิน: "สถานะตรวจนับ รพ.สต." (`StockCountStatusView` ส่วนต่างสูง ≥1,000 บาท หรือ ≥20% รายการ) · "จับคู่ยา NCDs" (`NcdsMappingView` icode ที่ยังไม่ match ทุก รพ.สต. → master_drugs.hosxp_code + คำแนะนำชื่อใกล้เคียง)
+
 ## Sync รายการยาจาก INVS (Bridge 2.10.0 action `invs_master`, อ่านอย่างเดียว)
 - หน้าจัดการฐานข้อมูล ปุ่ม "Sync รายการยาจาก INVS" → `InvsMasterSyncModal` แสดงยาที่ราคา/บรรจุ/หน่วยเปลี่ยน + ยาใหม่ ให้ติ๊กเลือกก่อนบันทึก (เก็บค่าเดิมใน `*_previous`)
 

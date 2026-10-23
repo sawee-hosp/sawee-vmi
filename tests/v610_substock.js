@@ -16,7 +16,7 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
     r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,action:body.action,stock_id:'13',stock_name:'รพ.สต.ทุ่งระยะ',patient_dept_id:'PT01',live_send_enabled:true,drugs,untracked:[{drug_id:'999',invs_on_hand:5}],warnings:[],errors:[],item_count:1,total_value:10,sub_po_no:body.action==='substock_send'?'6910230099':undefined})});});
   await p.goto('file://'+path.join(DIR,'t_app.html')); await p.waitForTimeout(1800);
   await p.click('text=คลังย่อย รพ.สต. → INVS'); await p.waitForTimeout(300);
-  await p.selectOption('#substock-hosp','H1'); await p.waitForTimeout(800);
+  await p.selectOption('#substock-hosp','H1'); await p.waitForTimeout(800); await p.click('text=ปรับให้เท่ายอดจริง'); await p.waitForTimeout(300);
   const v=await p.inputValue('#substock-table tbody input[type=number]');
   check('web target = Target Stock 3000', v==='3000', v);
   await p.click('#substock-check'); await p.waitForTimeout(500);

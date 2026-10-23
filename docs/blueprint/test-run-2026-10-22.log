@@ -1,0 +1,252 @@
+== check_jsx
+/home/user/sawee-vmi/app.html block 1 OK
+/home/user/sawee-vmi/internal.html block 1 OK
+EXIT 0
+== depttest
+node:fs:440
+    return binding.readFileUtf8(path, stringToFlags(options.flag));
+                   ^
+
+Error: ENOENT: no such file or directory, open '/tmp/depts.json'
+    at Object.readFileSync (node:fs:440:20)
+    at Object.<anonymous> (/tmp/claude-0/-home-user-sawee-vmi/8306db7d-d996-59f9-aac9-28f438a2efd0/scratchpad/run/depttest.js:3:26)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49 {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/tmp/depts.json'
+}
+
+Node.js v22.22.0
+EXIT 1
+== line_webhook_test
+node:internal/errors:540
+      throw error;
+      ^
+
+TypeError [ERR_INVALID_ARG_TYPE]: The "id" argument must be of type string. Received undefined
+    at Module.require (node:internal/modules/cjs/loader:1456:3)
+    at require (node:internal/modules/helpers:147:16)
+    at Object.<anonymous> (/tmp/claude-0/-home-user-sawee-vmi/8306db7d-d996-59f9-aac9-28f438a2efd0/scratchpad/run/line_webhook_test.js:20:9)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5) {
+  code: 'ERR_INVALID_ARG_TYPE'
+}
+
+Node.js v22.22.0
+EXIT 1
+== v64
+PASS estimate: headers like RPST — ["ที่","ชื่อยา/เวชภัณฑ์","หน่วย","บรรจุ","ยอดใช้","ยอดเหลือ","Target Stock","จำนวนจ่าย","ราคา/หน่วย","มูลค่า (บาท)","คงเหลือ","รหัส"]
+PASS estimate: values filled (usage, คงเหลือ, target, จ่าย) — [[2,"Paracetamol 500 mg tab","เม็ด",1000,3000,0,3000,3000,250,750,"","D001"],[1,"Amoxicillin 500 mg cap","เม็ด",500,500,500,500,0,400,0,"","D002"]]
+PASS estimate: blank option leaves จ่าย/มูลค่า empty — [2,"Paracetamol 500 mg tab","เม็ด",1000,3000,0,3000,"",250,"","","D001"]
+PASS draft: saved once as Draft, no stock change — ["Draft"]
+PASS draft: stock untouched — 1000
+PASS estimate: round toggle off keeps raw target
+PASS print: real form header + new columns
+PASS print: still only Draft (not sent) — Draft
+PASS draft → send: same doc becomes Pending + stock updated — {"r":[["Pending",true]],"bal":500}
+PASS pharmacy: no errors
+PASS kpi: aggregates — รพ.สต. / ใบเบิกมีการใช้รายการ · บาทขอเบิกขอเพิ่มขอลด% ปรับใช้แต่เครดิต=0มูลค่าอนุมัติรพ.สต.ทุ่งระยะ1 ใบ2700.0021,000.001300.001100.00100%2/2เครดิต 0 ทั้งใบ1,000.00กันยายน 2569จัดยาแล้ว2700.0021,000.001300.001100.00100%2/2เครดิต 0 ทั้งใบ1,000.00รวมทุก รพ.สต.2700.0021,000.001300.001100.00100%2/2เครดิต 0 ทั้งใบ1,000.00
+PASS admin: no errors
+PASS ncds: outreach button in NCD category — ปรับค่าผู้ป่วยออกหน่วย รอบวันที่ 27 ต.ค. 69
+PASS ncds: usage shows +ออกหน่วย & ขอเพิ่ม — 1Metformin 500 mg tabขอเพิ่มเม็ด10000+ออกหน่วย 1(941)(500)0?1(941)แก้ไข300582.30D010
+PASS ncds: cancel button shown
+PASS rpst: order ยอดใช้→คงเหลือ→Target, price normal — ที่:4% ชื่อยา/เวชภัณฑ์⇅:25% หน่วย:6% บรรจุ:5% ยอดใช้:7% ยอดเหลือ:7% Target Stock:7% จำนวนจ่าย:7% ราคา/หน่วย:7% มูลค่า (บาท):8% คงเหลือ:7% รหัส⇅:6%
+PASS hospital: no errors
+EXIT 0
+== v66
+PASS hide: type 5/6 hidden by default
+PASS hide: untick shows type 5
+PASS sort loc: 7 → 12 → none — ["Amox cap","Zinc tab","Aspirin"]
+PASS signers: saved with draft — [{"role":"ผู้เบิก","name":"ภก","position":"เภสัชกร"},{"role":"ผู้สั่งจ่าย","name":"นพ. ผอ","position":"ผู้อำนวยการ"},{"role":"ผู้รับของ","name":"","position":""},{"role":"ผู้จ่าย","name":"","position":""}]
+PASS hide: draft has no type 5/6 — ["D001","D002","D003"]
+PASS no errors
+EXIT 0
+== v663
+PASS form: dotted within same prefix — ยาN1:ldb ยาN2:ldt ยาN3:- ยาA1:ldb ยาA2:ldt ยาB1:-
+PASS view: dotted borders — N1:solid/dotted N2:dotted/solid N3:solid/solid A1:solid/dotted A2:dotted/solid B1:solid/solid
+PASS extra item saved — [{"drugId":"23223","qty":400,"name":"","added_by":"แอดมิน","added_at":"2026-10-22T21:54:15.806Z"}]
+PASS extra item listed
+PASS no errors
+EXIT 0
+== v664
+PASS dashboard columns — รหัสเอกสาร|วันเวลาที่ส่ง|ผู้ทำรายการ|รพ.สต.|รอบบิล|สถานะ|เอกสาร
+PASS dashboard newest first — REQ-NEW,REQ-OLD
+PASS only combined INVS button on pending
+PASS sign names saved — ["จนท.ใหม่","นางสาว ผอ.","","","",""]
+PASS sign name printed in footer
+PASS app no errors
+PASS manual pick shows 1/2569 — เลขที่ 1/2569เริ่มกรอกใบเบิก
+ยังไม่มีรอบเบิกในระบบ
+
+แอดมินยังไม่ได้กำหนดรอบเบิกของปีงบนี้
+PASS opens dept form with 1/2569 banner — Sawee Rxfill เบิกยาภายใน รพ. · v6.10.0 ทำรายการแทนหน่วย ER สร้างใบเบิกใบเบิกของฉันเบิกยาด่วนกลับหน้าแอดมิน แอดมิน แอดมิน · ER ออกจากระบบ ER ใบเบิกยาหน่วยงาน สร้างใบเบิกใหม่ ER · คีย์จำนวนที่ต้องการได้
+PASS internal no errors
+EXIT 0
+== v665
+PASS dept form title = filename — ER ตุลาคม 2569
+PASS dept form columns — ที่|รายการ|หน่วย|บรรจุ|จำนวนเบิก|จำนวนจ่าย|ราคา/หน่วย|มูลค่า(บาท)|คงเหลือ|รหัส
+PASS dispense blank, value from request — 1|ยา A|เม็ด|100|3||2|6.00||A
+PASS exact code first — 131Gammaชื่อพ้อง: กัมมา · GAM · แกมม่าเม็ด · แพ็ค 100 || 13101Alphaเม็ด · แพ็ค 100 || 01311Betaเม็ด · แพ็ค 100
+PASS synonyms shown — 131Gammaชื่อพ้อง: กัมมา · GAM · แกมม่าเม็ด · แพ็ค 100
+PASS image shown
+PASS no errors
+EXIT 0
+== v670
+PASS lots listed with expiry badge
+PASS filter ≤30 shows Para
+PASS actual 600 → return 200 from nearest lot — 200,
+PASS lot L1 cut 200, L2 untouched — 100/500
+PASS credit updated 600 — 600
+PASS return doc has lot + manual rows — [["D1","A100",200,false],["D2","X9",30,true]]
+PASS form html official
+PASS no errors
+EXIT 0
+== v680
+PASS prompt shown for unlinked hospital user
+PASS link code created — 260199
+PASS prompt closed
+PASS not shown again in same session
+PASS no errors
+PASS linked user: no prompt
+EXIT 0
+== v690
+PASS console renders — LINE Console
+รีเฟรชส่งทดสอบหาตัวเองดูตัวอย่างสรุปส่งสรุปตอนนี้
+โควตาข้อความเดือนนี้
+เปิดจากไฟล์ ไม่มี API
+สรุปแจ้งเตือนล่าสุด
+-
+ผูก LINE แล้ว (1)
+ผู้ใช้	หน่วย	ชื่อ LINE	
+แอดมินadmin	-	Ad	ยกเลิก
+ยังไม่ผูก (รพ.สต./แอดมิน) (1)
+จนท · รพ.สต.ทุ่งระยะ
+ประวัติการส่งล่าสุด (50)
+เวลา	ประเภท	ถึง	ผล	ข้อความ
+20/
+PASS logs listed
+PASS no errors
+EXIT 0
+== v69_urgent
+PASS round offered — — เลือกรอบ —|รอบที่ 3 · 2 พฤศจิกายน 2569
+PASS urgent saved — [{"drugId":"D1","name":"Syringe Disposable 5 ml","unit":"ชิ้น","packSize":100,"price":100,"type":"2","requestQty":1000,"requestMode":"pack"}]
+PASS listed
+PASS merge banner
+FAIL item merged with note
+PASS urgent merged — Merged
+PASS req qty includes urgent
+PASS print box
+PASS date locked for requester
+PASS no errors
+EXIT 0
+== v69_stock
+FAIL table shows only remaining lots (trimmed to target 100)
+PASS FEFO trim: MID 50 NEW 50 — ["50","50"]
+PASS bill shown — ทั้งหมดหมดอายุแล้วอายุ ≤ 180 วัน|เรียง:ตามหมวด/ตำแหน่งวันหมดอายุใกล้สุดก่อน2 แถว
+รายการยา	Lot	วันหมดอายุ	คงเหลือ	รับเมื่อ / บิล	
+
+Paracetamol
+D1 · TAB
+		EXP อีก 71 วัน	
+ระบบหักแล้ว 10
+	
+1/2/69
+INVS SPO2
+	
+
+Paracetamol
+D1 · TAB
+		EXP อีก 436 วัน		
+1/3/69
+INVS SPO3
+	
+ยอดคงเหลือคำนวณโดยสมมติว่ามียาจริงเท่ากับ Target Stock และใช้ Lot ที่หมดอายุก่อนไปก่อน หากของจริงไม่ตรง แก้ Lot / วันหมดอายุ / คงเหลือ
+PASS expired filter empty
+PASS save persisted edited + sibling assumed — ["0:h1","50:h1","40:h1"]
+PASS no errors
+EXIT 0
+== v69_emergency
+PASS ng without items
+PASS over target = warning but ok
+PASS no reason -> disabled
+PASS ok green
+PASS saved
+PASS print form green + note — ใบเบิกยาฉุกเฉิน (ใบ ฉ)
+ขอเบิกยา/เวชภัณฑ์ล่วงหน้า — คลังยา โรงพยาบาลสวี
+หน่วยเบิก รพ.สต.ทุ่งระยะ
+เลขที่ ฉ 20261022-215516
+วันที่ 22 ตุลาคม 2569
+✔ ผ่านระบบ — สามารถรับยาได้เลย
+เหตุผลที่เบิกฉุกเฉิน: ยาหม
+PASS red plus shown
+PASS note shown
+PASS no errors
+EXIT 0
+== v69_invs_stock
+button true
+true true true
+errors none
+EXIT 0
+== v610_count
+PASS count table shows system 3000 — ยา	ยอดในระบบ	Lot ใช้ก่อน · EXP	Lot	นับได้ (หน่วยย่อย)	ส่วนต่าง
+
+Paracetamol 500
+D1(013) · TAB
+	3	OLD · 01/12/2026 EXP อีก 40 วัน	2		
+PASS sheet has columns
+PASS FEFO adjust OLD 1500 NEW 1000 — [1500,1000]
+PASS count doc saved
+PASS history visible
+PASS usage history uses rb301 1400 — ประวัติการใช้จริง (ยอดใช้ผู้ป่วยจาก รบ.301)
+เฉลี่ย 1,400 TAB/เดือน
+รอบบิล	ยอดใช้จริง	ยอดเบิก/จ่าย	สถานะใบ
+01/2570	
+1(400)
+	2	Completed
+ยอดใช้จริง = ยอดจาก รบ.301 ที่นำเข้า (ก่อนปรับแก้) เก็บแยกจากยอดเบิก/จ่ายในใบเบิก
+PASS no errors
+EXIT 0
+== v610_substock
+PASS web target = Target Stock 3000 — 3000
+PASS preflight sent targets
+PASS cut shown — 	ยา	ยอดจริง (เว็บ)	คลังย่อย INVS	ตัดออก (จ่ายผู้ป่วย)	Lot · EXP ที่ตัด
+	
+Paracetamol 500
+02110 · TAB
+	
+3
+	5(600)	2(600)	
+25123042 · 28/07/2572 · 1,000
+PASS send ok
+PASS history saved
+PASS no errors
+EXIT 0
+== v611_count_status
+PASS status table — รพ.สต.	นับล่าสุด	เดือนนี้	รายการที่นับ	ไม่ตรงระบบ	มูลค่าส่วนต่าง	ผล	
+รพ.สต.ครน	ยังไม่เคยนับ		-	-	-		
+รพ.สต.ทุ่งระยะ	2 ตุลาคม 2569 · จนท		1	1 (100%)	520.00	ส่วนต่างสูง	ผลนับ
+PASS not counted = 1
+PASS ncds view renders
+PASS no errors
+EXIT 0
+
+== line_webhook_test (node tests/line_webhook_test.js $PWD/api/line-webhook.js)
+PASS bad signature rejected
+PASS expired code
+PASS linked — {"name":{"stringValue":"จนท"},"role":{"stringValue":"hospital"},"line_user_id":{"stringValue":"Lx"},"line_display_name":
+PASS success reply
+PASS unfollow clears
+PASS GET info — {"ok":true,"botId":"@abc123","addFriendUrl":"https://line.me/R/ti/p/%40abc123","linkTtlMinutes":10}

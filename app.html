@@ -2723,7 +2723,8 @@ const CreateReqView = ({ ctx, round = null }) => {
         if (!ctx.appDb || !ctx.appDb.parLevels) return [];
         
         let existingReqItems = [];
-        if (ctx.editReqId) {
+        let savedNewId = null;
+if (ctx.editReqId) {
            const reqToEdit = ctx.findReq(ctx.editReqId);
            if (reqToEdit) existingReqItems = reqToEdit.items || [];
         }
@@ -3346,9 +3347,11 @@ const CreateReqView = ({ ctx, round = null }) => {
 
              // สำคัญ: ห้าม tx.get(document ที่ยังไม่มี) เพราะ Rules แบบ owner ใช้ resource.data และจะ deny เอกสารที่ยังไม่เกิด
              // ใช้ query ที่ constrain hospitalId ของผู้ใช้แทน ซึ่งสอดคล้องกับ Firestore Rules
-             let duplicateReq = null;
+let duplicateReq = null;
+let ownDocIds = new Set();
              try {
-               const ownReqSnap = await db.collection('requisitions').where('hospitalId', '==', hospId).get();
+const ownReqSnap = await db.collection('requisitions').where('hospitalId', '==', hospId).get();
+ownDocIds = new Set(ownReqSnap.docs.map(d => d.id));
                duplicateReq = ownReqSnap.docs.map(d => ({ id:d.id, ...d.data() })).find(r =>
                  Number(r.month) === currentMonth && Number(r.year) === currentYear && !String(r.id || '').startsWith('HIST-')
                ) || null;
@@ -3363,7 +3366,13 @@ const CreateReqView = ({ ctx, round = null }) => {
                if (dupRound) throw new Error(`รอบที่ ${roundFormNo(activeRound)} มีใบเบิกของ รพ.สต. นี้อยู่แล้ว (${dupRound.id})`);
              }
 
-             const newId = buildRequisitionId(hospId, currentMonth, currentYear);
+let newId = buildRequisitionId(hospId, currentMonth, currentYear);
+// กันการเขียนทับใบเดิมที่ ID ซ้ำ: ถ้าซ้ำให้ต่อท้าย -2, -3, ...
+const baseNewId = newId;
+for (let n = 2; ownDocIds.has(newId) || (ctx.appDb.requisitions || []).some(r => String(r.id) === newId); n++) {
+  newId = baseNewId + '-' + n;
+}
+savedNewId = newId;
              const reqRef = db.collection('requisitions').doc(newId);
              const createPayload = {
                hospitalId: hospId,
@@ -3445,7 +3454,7 @@ const CreateReqView = ({ ctx, round = null }) => {
              ctx.setTargetUploadHosp(null);
              ctx.forceSetCurrentView ? ctx.forceSetCurrentView('dashboard') : ctx.setCurrentView('dashboard');
            }
-           return ctx.editReqId || buildRequisitionId(hospId, currentMonth, currentYear);
+return ctx.editReqId || savedNewId || buildRequisitionId(hospId, currentMonth, currentYear);
          } finally {
            setIsSubmitting(false);
          }

@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.15.0"></script>
+  <script src="shared.js?v=6.16.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.15.0';
+      var need = '6.16.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -625,6 +625,12 @@
       // v6.9 ใบเบิกด่วนของรอบนี้ที่ยังไม่รวม → รวมยอดเข้าใบเบิกจริง
       const urgentRoundId = round?.id || editReq?.round_id || '';
       const [urgentDocs] = useState(() => urgentRoundId ? (ctx.urgents || []).filter(u => u.status === 'Active' && u.round_id === urgentRoundId) : []);
+      // v6.16 จ่ายล่วงหน้า (รับแล้ว) ที่ยังไม่อยู่ในใบใด → รวมเข้าใบนี้ (รอบเร็วที่สุดที่เห็น) · แก้/ลบส่วนนี้ไม่ได้
+      const [predispDocs] = useState(() => {
+        const claimed = new Set(); (ctx.reqs || []).filter(r => r.status !== 'Cancelled' && r.id !== editReq?.id).forEach(r => (r.predisp_ids || []).forEach(x => claimed.add(x)));
+        const already = new Set(editReq?.predisp_ids || []);
+        return (ctx.predispense || []).filter(p => p.status === 'Active' && !claimed.has(p.id) && !already.has(p.id));
+      });
       const [items, setItems] = useState(() => {
         const merged = (() => {
         if (editReq) return (editReq.items || []).map(it => { const d = ctx.drugById.get(String(it.drugId)); return { ...it, isDiscontinued: d ? isDrugDiscontinuedAll(d) : !!it.discontinuedAll }; });
@@ -649,6 +655,13 @@
             const base = drug ? baseItemFromDrug(ctx, drug) : { drugId: String(ui.drugId), name: ui.name, unit: ui.unit, packSize: ui.packSize, price: ui.price, type: ui.type };
             merged.push({ ...base, requestQty: q, dispenseQty: q, urgentQty: q, note: '', source: 'urgent', requestMode: defaultRequestMode(q, safePackSize(base.packSize)) });
           }
+        }));
+        predispDocs.forEach(pd => (pd.items || []).forEach(pi => {
+          const q = toNonNegativeNumber(pi.qty); if (!q) return;
+          const idx = merged.findIndex(it => String(it.drugId) === String(pi.drugId));
+          if (idx >= 0) { const it = merged[idx]; const nq = toNonNegativeNumber(it.requestQty) + q; merged[idx] = { ...it, requestQty: nq, dispenseQty: nq, predispQty: toNonNegativeNumber(it.predispQty) + q }; }
+          else { const drug = ctx.drugById.get(String(pi.drugId)); const base = drug ? baseItemFromDrug(ctx, drug) : { drugId: String(pi.drugId), name: pi.name, unit: pi.unit, packSize: pi.packSize, price: pi.price, type: pi.type };
+            merged.push({ ...base, requestQty: q, dispenseQty: q, predispQty: q, note: '', source: 'predispense', requestMode: defaultRequestMode(q, safePackSize(base.packSize)) }); }
         }));
         return merged.map(it => it.urgentQty ? { ...it, note: it.note || `รวมเบิกด่วน ${fmtNum(it.urgentQty)} ${it.unit || ''}`.trim() } : it);
       });
@@ -708,11 +721,12 @@
         lastAddedRef.current = null;
       }, [items.length]);
 
-      const setQty = (id, qty, mode) => setItems(prev => prev.map(it => String(it.drugId) === id ? { ...it, requestQty: toNonNegativeNumber(qty), dispenseQty: toNonNegativeNumber(qty), ...(mode ? { requestMode: mode } : {}) } : it));
+      // v6.16 ช่องจำนวน = ยอดเบิกปกติ · ยอดรับแล้ว (ด่วน/จ่ายล่วงหน้า) บวกเพิ่มเสมอ แก้ไม่ได้
+      const setQty = (id, qty, mode) => setItems(prev => prev.map(it => String(it.drugId) === id ? { ...it, requestQty: toNonNegativeNumber(qty) + receivedQtyOf(it), dispenseQty: toNonNegativeNumber(qty) + receivedQtyOf(it), ...(mode ? { requestMode: mode } : {}) } : it));
       const fillLast = () => setItems(prev => prev.map(it => it.lastQty ? { ...it, requestQty: it.lastQty, dispenseQty: it.lastQty } : it));
       const clearTemplate = () => setItems(prev => prev.filter(it => toNonNegativeNumber(it.requestQty) > 0));
       const setItemNote = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === id ? { ...it, note: v } : it));
-      const removeItem = (id) => setItems(prev => prev.filter(it => String(it.drugId) !== id));
+      const removeItem = (id) => setItems(prev => prev.flatMap(it => String(it.drugId) !== id ? [it] : receivedQtyOf(it) > 0 ? [{ ...it, requestQty: receivedQtyOf(it), dispenseQty: receivedQtyOf(it) }] : []));
 
       const valid = items.filter(it => toNonNegativeNumber(it.requestQty) > 0);
       const total = valid.reduce((s, it) => s + internalItemValue(it), 0);
@@ -729,7 +743,7 @@
             setSaving(true);
             try {
               const clean = valid.map(({ lastQty, ...it }) => ({ ...it, source: it.source === 'template' ? 'template' : (it.source || 'manual'), requestQty: toNonNegativeNumber(it.requestQty), dispenseQty: toNonNegativeNumber(it.requestQty), note: safeText(it.note) }));
-              const savedId = await saveInternalReq({ ctx, editReq, round, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent, ...(urgentDocs.length ? { urgent_ids: urgentDocs.map(u => u.id).concat(editReq?.urgent_ids || []) } : {}) } });
+              const savedId = await saveInternalReq({ ctx, editReq, round, kind: 'dept', items: clean, extra: { note: safeText(note), urgent: !!urgent, ...(urgentDocs.length ? { urgent_ids: urgentDocs.map(u => u.id).concat(editReq?.urgent_ids || []) } : {}), ...(predispDocs.length ? { predisp_ids: [...new Set([...(editReq?.predisp_ids || []), ...predispDocs.map(p => p.id)])] } : {}) } });
               for (const u of urgentDocs) {
                 try { await db.collection('internal_urgent').doc(u.id).update({ status: 'Merged', merged_req_id: savedId, merged_req_no: safeText(editReq?.form_no || (round ? roundFormNo(round) : '')), merged_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() }); }
                 catch (e) { console.warn('merge urgent', e); }
@@ -766,6 +780,11 @@
             </div>
           )}
 
+          {predispDocs.length > 0 && (
+            <div id="predisp-merge-banner" className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl px-4 py-3 text-sm">
+              <i className="fa-solid fa-hand-holding-medical mr-2"></i>รวมรายการที่ห้องยาจ่ายล่วงหน้าแล้ว (รับแล้ว) {predispDocs.length} ใบเข้าในรายการแล้ว — แสดงเป็น "+n รับแล้ว" แก้/ลบไม่ได้
+            </div>
+          )}
           {urgentDocs.length > 0 && (
             <div id="urgent-merge-banner" className="bg-red-50 border border-red-200 text-red-800 rounded-xl px-4 py-3 text-sm">
               <i className="fa-solid fa-truck-medical mr-2"></i>รวมยอดจากใบเบิกด่วน {urgentDocs.length} ใบของรอบนี้เข้าในรายการแล้ว (ดูหมายเหตุ "รวมเบิกด่วน" ในแต่ละรายการ) — เมื่อส่งใบเบิก ใบเบิกด่วนจะถูกปิดเป็น "รวมเข้าใบเบิกแล้ว"
@@ -842,12 +861,13 @@
                           <div className="text-[11px] text-slate-400"><span className="font-mono">{id}</span> · {it.unit}{safePackSize(it.packSize) > 1 ? ` · แพ็คละ ${safePackSize(it.packSize)}` : ''}</div>
                         </td>
                         <td className="p-3">
-                          <PackQtyInput item={it} inputId={`qty-${id}`} compact onChange={(q, m) => setQty(id, q, m)} />
+                          <PackQtyInput item={{ ...it, requestQty: regularQtyOf(it) }} inputId={`qty-${id}`} compact onChange={(q, m) => setQty(id, q, m)} />
+                          {receivedQtyOf(it) > 0 && <div className="mt-1"><span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 rounded px-1.5 py-0.5" title="ยอดที่รับไปแล้ว (เบิกด่วน / จ่ายล่วงหน้า) — แก้หรือลบไม่ได้"><i className="fa-solid fa-lock mr-1"></i>+{formatQty(receivedQtyOf(it), it.packSize)} รับแล้ว</span> <span className="text-[11px] text-slate-500">รวม {qtyWithReceivedText(it)}</span></div>}
                           {it.lastQty ? <button type="button" onClick={() => setQty(id, it.lastQty, it.requestMode)} className="text-[11px] text-teal-700 hover:underline mt-1 block">ครั้งก่อน {safePackSize(it.packSize) > 1 ? `${formatQty(it.lastQty, it.packSize)} แพ็ค` : `${fmtNum(it.lastQty)} ${it.unit}`}</button> : null}
                         </td>
                         <td className="p-3"><input value={it.note || ''} onChange={e => setItemNote(id, e.target.value)} placeholder="-" aria-label={`หมายเหตุ ${it.name}`} className="w-full min-w-[8rem] px-2 py-1 border border-slate-200 rounded-lg text-sm" /></td>
                         <td className="p-3 text-right tnum text-slate-500">{fmtMoney(internalItemValue({ ...it, dispenseQty: it.requestQty }))}</td>
-                        <td className="p-3 text-center"><button onClick={() => removeItem(id)} aria-label={`ลบ ${it.name}`} className="text-slate-300 hover:text-red-500"><i className="fa-solid fa-trash-can"></i></button></td>
+                        <td className="p-3 text-center">{receivedQtyOf(it) > 0 && regularQtyOf(it) <= 0 ? <i className="fa-solid fa-lock text-emerald-600" title="ยอดรับแล้ว — ลบไม่ได้"></i> : <button onClick={() => removeItem(id)} aria-label={`ลบ ${it.name}`} className="text-slate-300 hover:text-red-500"><i className="fa-solid fa-trash-can"></i></button>}</td>
                       </tr>
                     );
                   })}
@@ -2517,6 +2537,7 @@ ORDER BY d.name`;
       const [urgents, setUrgents] = useState([]);
       const [pharmLots, setPharmLots] = useState([]); // v6.14 คลังห้องยาแยก lot
       const [pharmMetaList, setPharmMetaList] = useState([]);
+      const [predispense, setPredispense] = useState([]); // v6.16 จ่ายล่วงหน้า (รับแล้ว) โดยแอดมิน
       const [view, setView] = useState('history');
       const [editReq, setEditReq] = useState(null);
       const [printReq, setPrintReq] = useState(null);
@@ -2545,13 +2566,14 @@ ORDER BY d.name`;
         try {
           const uid = currentUser?.uid || auth.currentUser?.uid || 'anon';
           const tombs = await rxSyncTombs(uid);
-          const [r, s, ug, pl, pm] = await Promise.all([
+          const [r, s, ug, pl, pm, pd] = await Promise.all([
             db.collection('internal_requisitions').where('deptId', '==', String(id)).get(),
             // สต็อกห้องยามีหลายร้อยรายการ → แคช + ดึงเฉพาะที่เปลี่ยน (ต้องมี index dept_id + updated_at)
             rxSync({ uid, col: 'internal_stock', scope: String(id), tombs, query: db.collection('internal_stock').where('dept_id', '==', String(id)) }).catch(() => null),
             db.collection('internal_urgent').where('deptId', '==', String(id)).get().catch(() => null),
             db.collection('pharmacy_lots').where('dept_id', '==', String(id)).get().catch(() => null),
-            db.collection('pharmacy_lot_meta').where('dept_id', '==', String(id)).get().catch(() => null)
+            db.collection('pharmacy_lot_meta').where('dept_id', '==', String(id)).get().catch(() => null),
+            db.collection('internal_predispense').where('deptId', '==', String(id)).get().catch(() => null)
           ]);
           setUrgents(ug ? ug.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => tsToMillis(b.created_at) - tsToMillis(a.created_at)) : []);
           rxCountReads('internal_requisitions[dept]', r.size || 1);
@@ -2559,6 +2581,7 @@ ORDER BY d.name`;
           setStock(s || []);
           setPharmLots(pl ? pl.docs.map(x => ({ id: x.id, ...x.data() })) : []);
           setPharmMetaList(pm ? pm.docs.map(x => ({ id: x.id, ...x.data() })) : []);
+          setPredispense(pd ? pd.docs.map(x => ({ id: x.id, ...x.data() })) : []);
         } catch (e) { showToast('โหลดใบเบิกไม่สำเร็จ: ' + e.message, 'error'); }
         finally { setLoadingDept(false); }
       };
@@ -2605,7 +2628,7 @@ ORDER BY d.name`;
       if (!currentUser) return null;
 
       const ctx = {
-        currentUser, isAdmin, dept, reqs, stock, urgents,
+        currentUser, isAdmin, dept, reqs, stock, urgents, predispense,
         drugs: masters.drugs, drugById, unitName: (d) => d ? (unitById.get(String(d.unit_id))?.unit_name || d.unit_id || '') : '',
         showToast, setConfirmDialog, reload: () => reload(), reloadMasters, drugTypes,
         rounds: roundsFor(masters.rounds, 'internal'),

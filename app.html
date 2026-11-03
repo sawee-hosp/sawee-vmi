@@ -4867,7 +4867,7 @@ const ViewReqView = ({ ctx }) => {
             .catch(e => ctx.showToast('ตัดคลังย่อย INVS ตามยอดใช้ไม่สำเร็จ: ' + (e?.message || e) + ' — ทำซ้ำได้ที่เมนู คลังย่อย รพ.สต. → INVS', 'error'));
           await ctx.refreshData();
           setShowInvsModal(false);
-          if (approveAfterInvs) { setApproveAfterInvs(false); setIsInvsBusy(false); await handleApprove(); return; }
+          if (approveAfterInvs) { setApproveAfterInvs(false); setIsInvsBusy(false); await handleApprove({ invsItems: data.items }); return; }
         } catch(e) {
           if (e?.payload) setInvsPreflight(e.payload);
           ctx.showToast('ส่งเข้า INVS ไม่สำเร็จ: ' + (e?.message || e), 'error');
@@ -4917,10 +4917,15 @@ const ViewReqView = ({ ctx }) => {
           return false;
       };
 
-      const handleApprove = async () => {
+      const handleApprove = async (opts) => {
         setIsApproving(true);
         const reqRef = db.collection('requisitions').doc(req.id);
         const approvalToken = makeActionToken();
+        // v6.12 ราคาตาม INVS: ส่ง INVS แล้ว → ราคาในใบ = ราคา INVS ล่าสุด (cost ต่อหน่วยย่อยจาก Bridge × บรรจุของ VMI) แทนราคา master
+        const invsSrc = (opts && Array.isArray(opts.invsItems) && opts.invsItems.length) ? opts.invsItems
+          : (Array.isArray(req.invs_items_snapshot) && req.invs_items_snapshot.length ? req.invs_items_snapshot : (req.invs_request_lot_snapshot || []));
+        const invsUnitCost = new Map();
+        (invsSrc || []).forEach(x => { const c = toNonNegativeNumber(x?.cost); if (x && x.drug_id != null && c > 0) invsUnitCost.set(String(x.drug_id), c); });
 
         // ก่อนอนุมัติ Admin re-derive master fields/สถานะยกเลิกจากฐานปัจจุบันอีกครั้ง
         // เพื่อไม่เชื่อข้อมูลราคา/pack/type/สถานะที่มาจาก client เพียงอย่างเดียว
@@ -4943,6 +4948,12 @@ const ViewReqView = ({ ctx }) => {
             usage: toNonNegativeNumber(raw.usage),
             prevExcess: toSafeNumber(raw.prevExcess)
           };
+          const invsCost = invsUnitCost.get(String(raw.drugId));
+          if (invsCost > 0) {
+            const invsPrice = Math.round(invsCost * item.packSize * 10000) / 10000;
+            if (Math.abs(invsPrice - item.price) > 0.0001) item.price_before_invs = item.price;
+            item.price = invsPrice; item.price_source = 'INVS';
+          }
           const reconciliationBase = raw.actualStockTouched && raw.actualStock !== null && raw.actualStock !== undefined
             ? toNonNegativeNumber(raw.actualStock)
             : (item.prevExcess - item.usage);

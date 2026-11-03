@@ -138,3 +138,4 @@
 - Bridge 2.11.2: snapshot `lots_after[{lot_no,expiry,qty_before,qty_issue,qty_after}]` ทุก lot ในคลังจ่าย → ใบ "พิมพ์ใบเบิกพร้อมยอดคงเหลือ" แสดงยอดเหลือทุก lot หลังหักใบนี้ (lot ที่ตัดสีแดง; ใบที่ส่งก่อน 2.11.2 แสดงเฉพาะ lot ที่ตัด)
 - หน้าตรวจก่อนส่ง INVS (ใบ รพ.สต. + คิวใบภายใน) แสดง "คงคลังรวมทุก lot" (stock_before) และ "เหลือหลังเบิก" (stock_after) ของคลังใหญ่
 - tests/v612.js · v69_emergency.js ล็อกวันที่ 25 ต.ค. (เดิมผลขึ้นกับวันที่รัน: รพ.สต. สร้างใบได้เฉพาะวันที่ 20-31)
+- ราคาตาม INVS (ข้อ 7 แบบ ข): `handleApprove(opts)` ใบที่ส่ง INVS แล้ว → `items[].price` = cost ต่อหน่วยย่อยจาก Bridge (ผลส่ง `data.items` หรือ `invs_items_snapshot`/`invs_request_lot_snapshot`) × packSize ของ VMI · เก็บ `price_before_invs`, `price_source:'INVS'` · ไม่แก้ราคาใน master_drugs (ใช้ปุ่ม Sync รายการยาจาก INVS เหมือนเดิม)

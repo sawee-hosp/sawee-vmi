@@ -89,5 +89,29 @@ const open=async(b,uid,time,extra)=>{ seed(uid,extra); const ctx=await b.newCont
     check('rpst add: D5 = 30 units (0(30))', r5.includes('0(30)') || r5.includes('(30)'), r5.replace(/\s+/g,' ').slice(0,160));
     check('rpst add: no errors', !errs.length, errs.join(' | ')); await ctx.close();
   }
+  // 6) ข้อ 7 (ข): ส่ง INVS + บันทึกจัดยา → ราคาในใบ = ราคา INVS (cost ต่อหน่วยย่อย × บรรจุ) · ใบพิมพ์พร้อมยอดคงเหลือแสดงทุก lot
+  {
+    const {p,ctx,errs}=await open(b,'a1','2026-10-28T10:00:00');
+    await p.evaluate(()=>{ const orig=window.fetch; window.__calls=[]; window.print=()=>{};
+      window.fetch=async(url,init)=>{ const u=String(url); if(/invs_api/.test(u)){ const body=JSON.parse(init.body); window.__calls.push(body.action);
+          const items=[{drug_id:'D1',drug_name:'Paracetamol',qty:3000,lot_no:'A1',expiry:'20270131',cost:0.3,value:900,stock_before:5000,stock_after:2000,stock_lots:2,
+            lots_after:[{lot_no:'A1',expiry:'20270131',qty_before:1000,qty_issue:1000,qty_after:0},{lot_no:'B2',expiry:'20280531',qty_before:4000,qty_issue:2000,qty_after:2000}]},
+            {drug_id:'D2',drug_name:'Amoxicillin',qty:300,lot_no:'C3',expiry:'20270301',cost:1.5,value:450,stock_before:300,stock_after:0,stock_lots:1}];
+          const data=body.action==='preflight'?{ok:true,item_count:2,total_value:1350,items,warnings:[],errors:[],live_send_enabled:true,marker:'SVx'}:{ok:true,sub_po_no:'PO999',items,item_count:2,total_value:1350};
+          return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json'}}); }
+        if(/api\/line/.test(u)) return new Response('{"ok":true}',{status:200,headers:{'Content-Type':'application/json'}});
+        return orig(url,init); }; });
+    await p.click('tr.cursor-pointer >> nth=0'); await p.waitForTimeout(800);
+    await p.click('button:has-text("ส่ง INVS + บันทึกจัดยา")'); await p.click('.fixed button:has-text("ตรวจ INVS ต่อ")'); await p.waitForTimeout(800);
+    const pf=await p.innerText('body'); check('preflight shows stock all lots + after', pf.includes('คงคลังรวมทุก lot') && pf.includes('5,000') && pf.includes('2,000'));
+    const sendBtn=p.locator('button:has-text("ส่ง INVS + ยืนยันจัดยา")').last(); await sendBtn.click(); await p.waitForTimeout(300);
+    await p.locator('.fixed button').last().click(); await p.waitForTimeout(2500);
+    const r=await p.evaluate(()=>{const d=window.__STORE.requisitions.get('REQ-2026-10-H1'); return {st:d.status, items:(d.items||[]).map(i=>i.drugId+':'+i.price+':'+(i.price_source||'')+':'+(i.price_before_invs??''))};});
+    check('invs price: approved with INVS price', r.st==='Completed' && r.items.includes('D1:300:INVS:260') && r.items.includes('D2:150:INVS:120'), JSON.stringify(r)+' calls='+JSON.stringify(await p.evaluate(()=>window.__calls)));
+    const sheet=await p.evaluate(()=>buildInvsStockSheetHtml({req:{invs_sub_po_no:'PO999',items:[],invs_request_lot_snapshot:[{drug_id:'D1',qty:3000,cost:0.3,value:900,stock_before:5000,stock_after:2000,stock_lots:2,
+      lots_after:[{lot_no:'A1',expiry:'20270131',qty_before:1000,qty_issue:1000,qty_after:0},{lot_no:'B2',expiry:'20280531',qty_before:4000,qty_issue:2000,qty_after:2000},{lot_no:'C9',expiry:'20290101',qty_before:500,qty_issue:0,qty_after:500}]}]},ctx:{findDrug:()=>null,appDb:{units:[]}},unitTitle:'รพ.สต.ทุ่งระยะ'}));
+    check('stock sheet: all lots incl. untouched', /A1[^<]*·[^<]*· เหลือ <b>0<\/b>/.test(sheet) && sheet.includes('C9') && /C9[^<]*เหลือ <b>500<\/b>/.test(sheet), '');
+    check('invs price: no errors', !errs.length, errs.join(' | ')); await ctx.close();
+  }
   console.log(res.join('\n')); await b.close();
 })().catch(e=>{console.error('HARNESS',e.message); console.log(res.join('\n')); process.exit(1);});

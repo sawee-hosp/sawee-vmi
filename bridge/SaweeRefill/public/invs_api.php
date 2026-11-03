@@ -28,7 +28,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.11.2';
+const BRIDGE_VERSION = '2.13.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -339,6 +339,16 @@ function validDateYmd(string $d): bool {
     return checkdate($m,$dd,$y);
 }
 
+// v2.13.0 ฐาน traceability แยกจาก INVS (config trace.* · ไม่ระบุใช้ host/user/password/port ของ mysql.* และฐาน sawee_trace)
+function connectTraceDb(array $config): mysqli {
+    $t=$config['trace'] ?? []; $m=$config['mysql'] ?? [];
+    $host=(string)($t['host'] ?? $m['host'] ?? '127.0.0.1'); $user=(string)($t['user'] ?? $m['user'] ?? ''); $pass=(string)($t['password'] ?? $m['password'] ?? '');
+    $dbName=(string)($t['database'] ?? 'sawee_trace'); $port=(int)($t['port'] ?? $m['port'] ?? 3306);
+    if ($dbName==='' || $dbName===(string)($m['database'] ?? '')) throw new RuntimeException('trace.database ต้องเป็นฐานแยกจาก INVS');
+    mysqli_report(MYSQLI_REPORT_ERROR|MYSQLI_REPORT_STRICT);
+    $db=mysqli_init(); $db->options(MYSQLI_OPT_CONNECT_TIMEOUT,10); $db->real_connect($host,$user,$pass,$dbName,$port); $db->set_charset('utf8mb4');
+    return $db;
+}
 function connectDb(array $config): mysqli {
     mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
     $db=mysqli_init();
@@ -386,10 +396,18 @@ function totalOnHand(mysqli $db,string $workingCode,string $stockId): array {
     return ['qty'=>finiteNumber($r['qty'] ?? 0),'lots'=>(int)($r['lots'] ?? 0)];
 }
 // v2.10.1 ทุก lot ที่มีของในคลังจ่าย เรียงแบบเดียวกับ lot ตั้งต้น (RECORD_NUMBER) — ใช้คำนวณ lot ที่จะถูกตัด + ยอดคงเหลือหลังจ่าย
+// v2.13.0 ชื่อการค้า (drug_vn.TRADE_NAME ผ่าน inv_md_c.TRADE_CODE) — ถ้าไม่มีคอลัมน์ให้ว่าง
+function tradeJoinSql(mysqli $db): array {
+    static $cache=null; if ($cache!==null) return $cache;
+    $ok=tableHasColumn($db,'inv_md_c','TRADE_CODE') && tableHasColumn($db,'drug_vn','TRADE_CODE') && tableHasColumn($db,'drug_vn','TRADE_NAME');
+    $cache=$ok ? ['sel'=>", c.TRADE_CODE AS TRADE_CODE, (SELECT MAX(v.TRADE_NAME) FROM drug_vn v WHERE v.TRADE_CODE=c.TRADE_CODE) AS TRADE_NAME",'ok'=>true] : ['sel'=>", '' AS TRADE_CODE, '' AS TRADE_NAME",'ok'=>false];
+    return $cache;
+}
 function lotsOnHand(mysqli $db,string $workingCode,string $stockId): array {
-    $st=$db->prepare("SELECT RECORD_NUMBER, LOT_NO, EXPIRED_DATE, QTY_ON_HAND FROM inv_md_c WHERE TRIM(WORKING_CODE)=TRIM(?) AND DEPT_ID=? AND COALESCE(QTY_ON_HAND,0)>0 ORDER BY RECORD_NUMBER ASC");
+    $tj=tradeJoinSql($db);
+    $st=$db->prepare("SELECT c.RECORD_NUMBER, c.LOT_NO, c.EXPIRED_DATE, c.QTY_ON_HAND{$tj['sel']} FROM inv_md_c c WHERE TRIM(c.WORKING_CODE)=TRIM(?) AND c.DEPT_ID=? AND COALESCE(c.QTY_ON_HAND,0)>0 ORDER BY c.RECORD_NUMBER ASC");
     $st->bind_param('ss',$workingCode,$stockId); $st->execute(); $res=$st->get_result(); $out=[];
-    while ($r=$res->fetch_assoc()) $out[]=['lot_no'=>cleanText($r['LOT_NO'] ?? ''),'expiry'=>cleanText($r['EXPIRED_DATE'] ?? ''),'qty'=>finiteNumber($r['QTY_ON_HAND'] ?? 0)];
+    while ($r=$res->fetch_assoc()) $out[]=['lot_no'=>cleanText($r['LOT_NO'] ?? ''),'expiry'=>cleanText($r['EXPIRED_DATE'] ?? ''),'qty'=>finiteNumber($r['QTY_ON_HAND'] ?? 0),'trade_code'=>cleanText($r['TRADE_CODE'] ?? ''),'trade_name'=>cleanText($r['TRADE_NAME'] ?? '')];
     $st->close(); return $out;
 }
 function allocateLots(array $lots,float $qty): array {
@@ -400,7 +418,7 @@ function allocateLots(array $lots,float $qty): array {
 // v2.11.2 ยอดคงเหลือทุก lot หลังหักจำนวนจ่ายใบนี้ (lot ที่ไม่ถูกตัดก็แสดง) — ใช้พิมพ์ใบเบิกพร้อมยอดคงเหลือ
 function lotsAfterIssue(array $lots,float $qty): array {
     $left=$qty; $out=[];
-    foreach ($lots as $l) { $use=$left>1e-9?min($l['qty'],$left):0.0; $left-=$use; $out[]=['lot_no'=>$l['lot_no'],'expiry'=>$l['expiry'],'qty_before'=>$l['qty'],'qty_issue'=>$use,'qty_after'=>max(0.0,$l['qty']-$use)]; }
+    foreach ($lots as $l) { $use=$left>1e-9?min($l['qty'],$left):0.0; $left-=$use; $out[]=['lot_no'=>$l['lot_no'],'expiry'=>$l['expiry'],'qty_before'=>$l['qty'],'qty_issue'=>$use,'qty_after'=>max(0.0,$l['qty']-$use),'trade_code'=>$l['trade_code'] ?? '','trade_name'=>$l['trade_name'] ?? '']; }
     return $out;
 }
 function drugExists(mysqli $db,string $workingCode): ?array {
@@ -626,7 +644,7 @@ $raw=(string)file_get_contents('php://input');
 $body=json_decode($raw,true);
 if (!is_array($body)) respondError('JSON_INVALID','Request body ต้องเป็น JSON',400);
 $action=cleanText($body['action'] ?? '');
-if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
+if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send','hosxp_usage_daily','invs_lots','trace_query'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
 
 // ----------------------------- list_depts (READ-ONLY) -----------------------------
 if ($action==='list_depts') {
@@ -1197,9 +1215,16 @@ if ($action==='invs_extras') {
             }
             $res->free();
         }
+        // v2.13.0 กลุ่ม VEN จาก sawee_drug_class (WORKING_CODE + VEN) ที่ รพ.ดูแลเอง — มีเฉพาะยา
+        $vens=[];
+        if (tableHasColumn($db,'sawee_drug_class','VEN') && tableHasColumn($db,'sawee_drug_class','WORKING_CODE')) {
+            $res=$db->query("SELECT TRIM(WORKING_CODE) AS working_code, UPPER(TRIM(VEN)) AS ven FROM sawee_drug_class WHERE VEN IS NOT NULL AND TRIM(VEN)<>''");
+            while ($r=$res->fetch_assoc()) { $wc=cleanText($r['working_code'] ?? ''); $v=cleanText($r['ven'] ?? ''); if ($wc!=='' && in_array($v,['V','E','N'],true)) $vens[]=['working_code'=>$wc,'ven'=>$v]; }
+            $res->free(); $detected['ven']='sawee_drug_class.VEN';
+        } else { $detected['ven']=''; }
         $db->close();
-        logBridge($config,'INFO','INVS_EXTRAS',['admin_uid'=>$admin['uid'],'keywords'=>count($keywords),'locations'=>count($locations),'detected'=>$detected]);
-        respond(['ok'=>true,'action'=>'invs_extras','detected'=>$detected,'keywords'=>$keywords,'locations'=>$locations,'location_full'=>$locFull,'bridge_version'=>BRIDGE_VERSION]);
+        logBridge($config,'INFO','INVS_EXTRAS',['admin_uid'=>$admin['uid'],'keywords'=>count($keywords),'locations'=>count($locations),'vens'=>count($vens),'detected'=>$detected]);
+        respond(['ok'=>true,'action'=>'invs_extras','detected'=>$detected,'keywords'=>$keywords,'locations'=>$locations,'location_full'=>$locFull,'vens'=>$vens,'bridge_version'=>BRIDGE_VERSION]);
     } catch (Throwable $e) {
         if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
         respondError('BRIDGE_ERROR',$e->getMessage(),500);
@@ -1253,6 +1278,98 @@ if ($action==='hosxp_usage') {
         if (isset($hdb) && $hdb instanceof mysqli) { try { $hdb->close(); } catch (Throwable $ignore) {} }
         logBridge($config,'ERROR','HOSXP_USAGE_FAILED',['uid'=>$actor['uid'] ?? '','error'=>$e->getMessage()]);
         respondError('HOSXP_ERROR','ดึงยอดใช้จาก HOSxP ไม่สำเร็จ: '.$e->getMessage(),500);
+    }
+}
+
+// v2.12.0 ยอดใช้ HOSxP รายวันต่อ icode (อ่านอย่างเดียว) — ห้องยาคำนวณ ASU 180 วัน / σ / ADI · ไม่มีข้อมูลผู้ป่วย มีแค่ยอดรวมต่อวัน
+if ($action==='hosxp_usage_daily') {
+    $actor=requireRoles($config,$body,['admin','pharmacy']);
+    $from=cleanText($body['date_from'] ?? ''); $to=cleanText($body['date_to'] ?? '');
+    if (!validDateYmd($from) || !validDateYmd($to)) respondError('DATE_INVALID','date_from / date_to ต้องเป็นรูปแบบ YYYY-MM-DD',400);
+    if ($from>$to) respondError('DATE_INVALID','วันเริ่มต้องไม่เกินวันสิ้นสุด',400);
+    $days=(int)((strtotime($to)-strtotime($from))/86400)+1;
+    if ($days>400) respondError('DATE_RANGE_TOO_LONG','ช่วงวันที่ยาวเกิน 400 วัน',400);
+    try {
+        $hdb=connectHosxp($config);
+        $customSql=trim((string)($config['hosxp']['daily_sql'] ?? ''));
+        // ต้องคืนคอลัมน์ icode, d (วันที่), qty — ยอดสุทธิ (คืนยาติดลบ) OPD+IPD
+        $sql=$customSql!=='' ? $customSql : "SELECT o.icode, DATE(o.rxdate) AS d, SUM(o.qty) AS qty FROM opitemrece o WHERE o.rxdate BETWEEN ? AND ? GROUP BY o.icode, DATE(o.rxdate)";
+        $dateMode=strtolower(cleanText($config['hosxp']['date_mode'] ?? 'auto')) ?: 'auto';
+        $run=function(string $f,string $t) use ($hdb,$sql) { $st=$hdb->prepare($sql); $st->bind_param('ss',$f,$t); $st->execute(); $res=$st->get_result(); $out=[]; while ($r=$res->fetch_assoc()) $out[]=$r; $st->close(); return $out; };
+        $usedMode='ce';
+        if ($dateMode==='be') { $raw=$run(shiftYears($from,543),shiftYears($to,543)); $usedMode='be'; }
+        else { $raw=$run($from,$to); if (!$raw && $dateMode==='auto') { $raw=$run(shiftYears($from,543),shiftYears($to,543)); if ($raw) $usedMode='be'; } }
+        $series=[]; $n=0;
+        foreach ($raw as $r) {
+            $icode=cleanText($r['icode'] ?? ''); $d=substr(cleanText($r['d'] ?? ''),0,10); if ($icode==='' || !validDateYmd($d)) continue;
+            if ($usedMode==='be') $d=shiftYears($d,-543);
+            $q=finiteNumber($r['qty'] ?? 0); if (abs($q)<1e-9) continue;
+            if (!isset($series[$icode])) $series[$icode]=[];
+            $series[$icode][$d]=($series[$icode][$d] ?? 0)+$q; $n++;
+        }
+        $hdb->close();
+        logBridge($config,'INFO','HOSXP_USAGE_DAILY',['uid'=>$actor['uid'],'from'=>$from,'to'=>$to,'icodes'=>count($series),'points'=>$n]);
+        respond(['ok'=>true,'action'=>'hosxp_usage_daily','date_from'=>$from,'date_to'=>$to,'days'=>$days,'icode_count'=>count($series),'series'=>(object)$series,'date_mode_used'=>$usedMode,'custom_sql'=>$customSql!=='','bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($hdb) && $hdb instanceof mysqli) { try { $hdb->close(); } catch (Throwable $ignore) {} }
+        logBridge($config,'ERROR','HOSXP_USAGE_DAILY_FAILED',['uid'=>$actor['uid'] ?? '','error'=>$e->getMessage()]);
+        respondError('HOSXP_ERROR','ดึงยอดใช้รายวันจาก HOSxP ไม่สำเร็จ: '.$e->getMessage(),500);
+    }
+}
+
+// v2.12.0 lot คงเหลือในคลังจ่าย INVS ของยาที่ระบุ เรียง FEFO (EXP → RECORD_NUMBER) — อ่านอย่างเดียว ใช้วางแผนหยิบ/เคลียร์ lot
+if ($action==='invs_lots') {
+    $actor=requireRoles($config,$body,['admin','pharmacy']);
+    $ids=array_values(array_unique(array_filter(array_map(fn($v)=>cleanText((string)$v),(array)($body['drug_ids'] ?? [])),fn($v)=>$v!=='')));
+    if (count($ids)>1500) respondError('TOO_MANY','ส่งรหัสยาได้ไม่เกิน 1,500 รายการต่อครั้ง',400);
+    $stockId=cleanText($body['stock_id'] ?? ''); if ($stockId==='') $stockId=cleanText(cfg($config,'invs','default_stock_id','10'));
+    try {
+        $db=connectDb($config); $lots=[];
+        foreach (array_chunk($ids,200) as $chunk) {
+            $ph=implode(',',array_fill(0,count($chunk),'?'));
+            $tj=tradeJoinSql($db);
+            $st=$db->prepare("SELECT TRIM(c.WORKING_CODE) AS WC, c.RECORD_NUMBER, c.LOT_NO, c.EXPIRED_DATE, c.QTY_ON_HAND{$tj['sel']} FROM inv_md_c c WHERE c.DEPT_ID=? AND TRIM(c.WORKING_CODE) IN ($ph) AND COALESCE(c.QTY_ON_HAND,0)>0");
+            $types=str_repeat('s',count($chunk)+1); $args=array_merge([$stockId],$chunk); $st->bind_param($types,...$args); $st->execute(); $res=$st->get_result();
+            while ($r=$res->fetch_assoc()) $lots[cleanText($r['WC'])][]=['lot_no'=>cleanText($r['LOT_NO'] ?? ''),'expiry'=>cleanText($r['EXPIRED_DATE'] ?? ''),'qty'=>finiteNumber($r['QTY_ON_HAND'] ?? 0),'record'=>(int)$r['RECORD_NUMBER'],'trade_code'=>cleanText($r['TRADE_CODE'] ?? ''),'trade_name'=>cleanText($r['TRADE_NAME'] ?? '')];
+            $st->close();
+        }
+        $db->close();
+        $expKey=function($e){ $v=preg_replace('/\D/','',(string)$e); if (strlen($v)>=8) { $y=(int)substr($v,0,4); if ($y>2400) $y-=543; return sprintf('%04d%s',$y,substr($v,4,4)); } return '99999999'; };
+        foreach ($lots as $k=>$arr) { usort($arr,fn($a,$b)=>strcmp($expKey($a['expiry']),$expKey($b['expiry'])) ?: ($a['record']<=>$b['record'])); $lots[$k]=$arr; }
+        respond(['ok'=>true,'action'=>'invs_lots','stock_id'=>$stockId,'lots'=>(object)$lots,'bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
+        respondError('INVS_ERROR','อ่าน lot จาก INVS ไม่สำเร็จ: '.$e->getMessage(),500);
+    }
+}
+
+// v2.13.0 Traceability (อ่านอย่างเดียว): ฐาน sawee_trace บนเครื่อง Bridge (ไม่ใช่ INVS/HOSxP) — CLI trace_dispense.php เป็นผู้เขียน
+// เก็บ HN/VN/AN + วันที่จ่าย + ยา + lot (ไม่มีชื่อผู้ป่วย) · ข้อมูลส่งถึงเบราว์เซอร์ผู้ค้นเท่านั้น ไม่บันทึกลง Firestore
+if ($action==='trace_query') {
+    $actor=requireRoles($config,$body,['admin','pharmacy']);
+    $lotNo=cleanText($body['lot_no'] ?? ''); $hn=cleanText($body['hn'] ?? ''); $drugId=cleanText($body['drug_id'] ?? '');
+    $from=cleanText($body['date_from'] ?? ''); $to=cleanText($body['date_to'] ?? '');
+    if ($lotNo==='' && $hn==='') respondError('QUERY_REQUIRED','ระบุ Lot หรือ HN อย่างน้อย 1 อย่าง',400);
+    if (($from!=='' && !validDateYmd($from)) || ($to!=='' && !validDateYmd($to))) respondError('DATE_INVALID','วันที่ต้องเป็น YYYY-MM-DD',400);
+    try {
+        $tdb=connectTraceDb($config);
+        $w=[]; $types=''; $args=[];
+        if ($lotNo!=='') { $w[]='d.lot_no=?'; $types.='s'; $args[]=$lotNo; }
+        if ($hn!=='') { $w[]='d.hn=?'; $types.='s'; $args[]=$hn; }
+        if ($drugId!=='') { $w[]='d.drug_id=?'; $types.='s'; $args[]=$drugId; }
+        if ($from!=='') { $w[]='d.rxdate>=?'; $types.='s'; $args[]=$from; }
+        if ($to!=='') { $w[]='d.rxdate<=?'; $types.='s'; $args[]=$to; }
+        $st=$tdb->prepare('SELECT d.rxdate, d.hn, d.vn, d.an, d.drug_id, d.icode, d.qty, d.qty_hosxp, d.lot_no, d.expiry, d.trade_name, d.kind, d.dept_id FROM trace_dispense d WHERE '.implode(' AND ',$w).' ORDER BY d.rxdate DESC, d.id DESC LIMIT 3000');
+        $st->bind_param($types,...$args); $st->execute(); $res=$st->get_result(); $rows=[];
+        while ($r=$res->fetch_assoc()) $rows[]=['rxdate'=>(string)$r['rxdate'],'hn'=>(string)$r['hn'],'vn'=>(string)$r['vn'],'an'=>(string)$r['an'],'drug_id'=>(string)$r['drug_id'],'icode'=>(string)$r['icode'],'qty'=>finiteNumber($r['qty']),'qty_hosxp'=>finiteNumber($r['qty_hosxp']),'lot_no'=>(string)$r['lot_no'],'expiry'=>(string)$r['expiry'],'trade_name'=>(string)$r['trade_name'],'kind'=>(string)$r['kind'],'dept_id'=>(string)$r['dept_id']];
+        $st->close();
+        $state=[]; $res2=$tdb->query('SELECT dept_id, drug_id, initial_ymd, processed_to FROM trace_drug_state ORDER BY processed_to DESC LIMIT 1'); if ($res2) { $state=$res2->fetch_assoc() ?: []; $res2->free(); }
+        $tdb->close();
+        logBridge($config,'INFO','TRACE_QUERY',['uid'=>$actor['uid'],'role'=>$actor['role'],'lot'=>$lotNo!=='','hn'=>$hn!=='','rows'=>count($rows)]);
+        respond(['ok'=>true,'action'=>'trace_query','rows'=>$rows,'count'=>count($rows),'truncated'=>count($rows)>=3000,'last_processed'=>$state['processed_to'] ?? '','bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($tdb) && $tdb instanceof mysqli) { try { $tdb->close(); } catch (Throwable $ignore) {} }
+        respondError('TRACE_ERROR','ค้นข้อมูล traceability ไม่สำเร็จ: '.$e->getMessage(),500);
     }
 }
 

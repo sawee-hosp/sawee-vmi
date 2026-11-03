@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.12.0 · Bridge v2.11.2)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.14.0 · Bridge v2.13.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -138,3 +138,30 @@
 - Bridge 2.11.2: snapshot `lots_after[{lot_no,expiry,qty_before,qty_issue,qty_after}]` ทุก lot ในคลังจ่าย → ใบ "พิมพ์ใบเบิกพร้อมยอดคงเหลือ" แสดงยอดเหลือทุก lot หลังหักใบนี้ (lot ที่ตัดสีแดง; ใบที่ส่งก่อน 2.11.2 แสดงเฉพาะ lot ที่ตัด)
 - หน้าตรวจก่อนส่ง INVS (ใบ รพ.สต. + คิวใบภายใน) แสดง "คงคลังรวมทุก lot" (stock_before) และ "เหลือหลังเบิก" (stock_after) ของคลังใหญ่
 - tests/v612.js · v69_emergency.js ล็อกวันที่ 25 ต.ค. (เดิมผลขึ้นกับวันที่รัน: รพ.สต. สร้างใบได้เฉพาะวันที่ 20-31)
+- ราคาตาม INVS (ข้อ 7 แบบ ข): `handleApprove(opts)` ใบที่ส่ง INVS แล้ว → `items[].price` = cost ต่อหน่วยย่อยจาก Bridge (ผลส่ง `data.items` หรือ `invs_items_snapshot`/`invs_request_lot_snapshot`) × packSize ของ VMI · เก็บ `price_before_invs`, `price_source:'INVS'` · ไม่แก้ราคาใน master_drugs (ใช้ปุ่ม Sync รายการยาจาก INVS เหมือนเดิม)
+
+## v6.13 ห้องยา: สูตร ASU 180 วัน (PharmacyReqView, เช็กบ็อกซ์ "สูตร ASU 180 วัน" ค่าเริ่มต้นเปิด จำใน localStorage `rxfill_ph_asu`)
+- Bridge 2.12.0 (อ่านอย่างเดียว): `hosxp_usage_daily` {date_from,date_to} → series {icode:{YYYY-MM-DD:qty สุทธิ OPD+IPD}} (config `hosxp.daily_sql` ไม่บังคับ) · `invs_lots` {drug_ids[], stock_id?} → lot คงเหลือคลังจ่าย (ค่าเริ่มต้น invs.default_stock_id) เรียง EXP → RECORD_NUMBER
+- ปุ่ม "ยอดใช้ 180 วัน + lot INVS" (yesterday−179 … yesterday) · shared.js `calcAsuStats` / `calcPharmacyPlanV2` / `allocatePharmLots`
+  - d̄ = max(เฉลี่ย 180 วัน, เฉลี่ย 60 วันล่าสุด) วันปฏิทิน × ตัวคูณ HOSxP→INVS · S = d̄ × (14 + 3 + SS) · SS ตาม `master_drugs.ven` V7/E3/N1 (แอดมินเลือกในตารางห้องยา ค่าเริ่มต้น N)
+  - IP = คงเหลือ (เครดิตเดิม − ยอดใช้รอบนี้ หรือที่แก้เอง) + ค้างรับ · Q = S − IP → ปัดเต็มแพ็ก → ปัดเลขสวย (<10:1, ≤50:5, ≤200:10, ≤1000:50, >1000:100 ตามจำนวนแพ็ก) → ไม่เกิน Maximum
+  - เคลียร์ lot: จัดสรร FEFO ถ้า lot สุดท้ายเหลือ ≤ max(20% ของ Q, 1 แพ็ก, 7 วันของ d̄) เบิกทั้ง lot (ไม่ปัดเลขสวย) · คลังใหญ่ไม่พอ = ลดเหลือที่มี + เตือน
+  - ยาใช้น้อย (ยอด 17 วัน < 1 แพ็ก หรือ < 200 บาท): ข้ามจนกว่า IP < ยอด 17 วัน แล้วเบิกให้พอ ≥ 1 แพ็ก (สูงสุด 60 วัน, มูลค่า ≤ 2,000 บาท)
+  - ไม่ใช่ยาใช้น้อย แต่ IP พอถึงรอบหน้าและยอดที่ขาด < minOrderValue = รวบไปรอบหน้า
+- ตาราง: คอลัมน์ "Lot ที่หยิบ · เหลือหลังหยิบ" + หมายเหตุ เคลียร์ lot / ปัดจาก / ใช้น้อยสำรอง · ใบพิมพ์ห้องยา (`buildInternalReqFormHtml` `lotPickHtml`) แสดง "หยิบ Lot X (EXP) n → เหลือ m" ใต้ชื่อยา · Excel มีคอลัมน์ lot
+- บันทึกในใบ: `formula:'asu180'`, `asu_from/asu_to`, items `asu{d180,d60,dbar,sigma,adi,cv2,activeDays}`, `ven`, `ssDays`, `asuTarget`, `asuNeed`, `slowMover`, `clearLot`, `roundUpQty`, `lotPlan[{lot_no,expiry,qty,lot_qty,remain}]`
+- ส่ง INVS ยังเป็น 1 บรรทัด/ยาเหมือนเดิม (lot plan เป็นแผนหยิบ — ยืนยันตัด lot ใน INVS)
+- ขั้นต่อไป (ยังไม่ทำ): Dashboard วันยาขาด/fill rate
+
+## v6.14 VEN sync · คลังห้องยาแยก lot · Traceability
+- VEN: Bridge `invs_extras` อ่าน `sawee_drug_class` (WORKING_CODE + VEN = V/E/N, มีเฉพาะยา) → หน้าต่าง "คำค้นหา/ตำแหน่ง INVS" แสดงคอลัมน์ VEN → บันทึก `master_drugs.ven` (ยาที่ไม่อยู่ในตารางคงค่าเดิม)
+- ชื่อการค้า: Bridge `tradeJoinSql` = `drug_vn.TRADE_NAME` ผ่าน `inv_md_c.TRADE_CODE` → `invs_lots`, `lotsOnHand`, snapshot `lots_after[].trade_name`
+- คลังห้องยาแยก lot (internal.html เมนู "คลังห้องยา (lot)" `PharmacyLotsView`): collection `pharmacy_lots` {dept_id, drug_id, lot_no, expiry YYYYMMDD, qty, trade_name, source INITIAL|RECEIPT, received_ymd, active} + `pharmacy_lot_meta/{dept}__{drug}` {initial_ymd, initialized} · บันทึก initial = ปิด lot เดิม (active:false) + lot ใหม่ + internal_stock.balance = ยอดนับ · ปุ่มเติม lot จากคลังใหญ่ INVS เป็นตัวช่วยกรอก
+  - shared.js `pharmActiveLots` / `pharmLotsRemaining` / `pharmUsageSince`: คงเหลือ = lot (initial + RECEIPT ที่รับหลังวันนับ) − ยอดใช้ HOSxP หลังวันนับ (FEFO ตาม EXP)
+  - PharmacyReqView: ยาที่บันทึก initial แล้ว ใช้คงเหลือจาก lot (ต้องกด "ยอดใช้ 180 วัน" ดึงย้อนครอบคลุมวันหลังนับ สูงสุด 400 วัน) · ยังไม่บันทึก = วิธีเดิม (เครดิต − ยอดใช้)
+  - app.html `addPharmacyReceiptLots` (ใน completeInternalRequisition ห้องยา): lot ที่รับ = snapshot ตอนส่ง INVS (lots_after qty_issue / alloc) เฉพาะยาที่บันทึก initial · doc id `{dept}__{drug}__R__{reqId}__{i}` · ส่วนที่ไม่รู้ lot = "ไม่ทราบ lot"
+  - rules v6.14: pharmacy_lots / pharmacy_lot_meta อ่าน = แอดมิน/หน่วยตัวเอง · เขียน = แอดมิน/ห้องยาของตัวเอง · ลบ = แอดมิน
+- Traceability (ฐาน `sawee_trace` บนเครื่อง Bridge ใน LAN, schema `tools/sawee_trace_schema.sql`, config `trace.{enabled,database,host,user,password,port,log_file}` ไม่ระบุใช้ของ mysql.* · ฐานต้องไม่ใช่ฐาน INVS)
+  - CLI `cli/trace_dispense.php` (ใน SYNC_BACKGROUND.bat ทำงานเมื่อ `trace.enabled=true`): อ่าน Firestore (meta/lots/master_drugs) + HOSxP `opitemrece` (hn, vn, an, rxdate, icode, qty) → `trace_dispense` (kind D จ่าย / R คืน → lot ล่าสุดของ HN นั้น / X ไม่มี lot) · `trace_lot` remain · `trace_drug_state` (initial เปลี่ยน = รีเซ็ต lot ของยา) · lot รับเข้าใช้ได้ตั้งแต่วันรับ · `--fixture` / `--until` สำหรับทดสอบ
+  - Bridge `trace_query` {lot_no | hn, drug_id?, date_from?, date_to?} (admin/pharmacy, อ่านอย่างเดียว, 3,000 แถว) → internal.html เมนู "ย้อนรอย lot (Trace)" (`TraceView`, CSV) — ข้อมูลผู้ป่วยไม่เก็บใน Firestore
+- tests/v614.js

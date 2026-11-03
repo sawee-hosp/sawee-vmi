@@ -13,6 +13,8 @@ set "RC1=%errorlevel%"
 set "RC2=%errorlevel%"
 "%PHP%" "cli\sync_virtual_stock.php"
 set "RC3=%errorlevel%"
+rem v6.14 Traceability (ทำงานเมื่อตั้ง trace.enabled=true ใน config.php) — ไม่กระทบผลของงานอื่น
+if exist "cli\trace_dispense.php" "%PHP%" "cli\trace_dispense.php"
 if not "%RC1%"=="0" exit /b %RC1%
 if not "%RC2%"=="0" exit /b %RC2%
 exit /b %RC3%

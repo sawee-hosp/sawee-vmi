@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.13.0';
+const APP_VERSION = '6.14.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1057,6 +1057,28 @@ const calcPharmacyPlanV2 = (p) => {
   res.lotPlan = lots ? allocatePharmLots(lots, res.suggested) : [];
   res.coverRounds = roundNeed > 0 ? (ip + res.suggested) / roundNeed : 0;
   return res;
+};
+
+// ===== v6.14 คลังห้องยาแยก lot (pharmacy_lots + pharmacy_lot_meta) =====
+// คงเหลือเสมือน = lot ที่นับ initial + lot รับเข้าหลังวันนับ − ยอดใช้ HOSxP หลังวันนับ (ตัด EXP ใกล้สุดก่อน)
+const pharmLotExpKey = (e) => { const v = String(e || '').replace(/\D/g, ''); if (v.length >= 8) { let y = Number(v.slice(0, 4)); if (y > 2400) y -= 543; return String(y).padStart(4, '0') + v.slice(4, 8); } return '99999999'; };
+const pharmActiveLots = (lots, meta) => {
+  const init = String(meta?.initial_ymd || '');
+  return (lots || []).filter(l => l && l.active !== false && toNonNegativeNumber(l.qty) > 0 && (l.source !== 'RECEIPT' || String(l.received_ymd || '') > init))
+    .sort((a, b) => pharmLotExpKey(a.expiry).localeCompare(pharmLotExpKey(b.expiry)) || String(a.received_ymd || '').localeCompare(String(b.received_ymd || '')));
+};
+const pharmLotsRemaining = (lots, meta, usedQty) => {
+  let left = Math.max(0, toSafeNumber(usedQty)); let total = 0;
+  const out = pharmActiveLots(lots, meta).map(l => { const q = toNonNegativeNumber(l.qty); const use = Math.min(q, left); left -= use; total += q - use; return { ...l, used: use, remain: Math.round((q - use) * 1000) / 1000 }; });
+  return { lots: out, total: Math.round(total * 1000) / 1000, short: Math.round(left * 1000) / 1000 };
+};
+// ยอดใช้จาก series รายวัน (หน่วย HOSxP) หลังวันนับ ถึงวันสุดท้ายของ series × ตัวคูณ — null ถ้า series ไม่ครอบคลุมวันหลังนับ
+const pharmUsageSince = (series, seriesFrom, seriesTo, initialYmd, multiplier) => {
+  if (!series || !initialYmd || !seriesFrom) return null;
+  const start = addDaysYmd(initialYmd, 1);
+  if (start < seriesFrom) return null;
+  let sum = 0; Object.entries(series).forEach(([d, q]) => { if (d >= start && d <= seriesTo) sum += toSafeNumber(q); });
+  return sum * (toNonNegativeNumber(multiplier, 1) || 1);
 };
 
 const buildInternalReqId = (deptId) => {

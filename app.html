@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.13.0"></script>
+  <script src="shared.js?v=6.14.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.13.0';
+      var need = '6.14.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -8298,6 +8298,29 @@ const AdminConfigView = ({ ctx }) => {
     };
 
     // อนุมัติแบบ 3 ขั้น (claim → บวกสต็อกห้องยาแบบ chunk idempotent → finalize) retry ได้ปลอดภัย
+    // v6.14 รับยาเข้าคลังห้องยาแยก lot (เฉพาะยาที่บันทึก initial แล้ว) — lot ตาม snapshot ตอนส่ง INVS (lots_after / alloc) · doc id คงที่ = ทำซ้ำได้
+    const addPharmacyReceiptLots = async (ctx, req, finalItems) => {
+      const metaSnap = await db.collection('pharmacy_lot_meta').where('dept_id', '==', String(req.deptId)).get();
+      const inited = new Set(metaSnap.docs.map(d => d.data()).filter(m => m.initialized !== false).map(m => String(m.drug_id)));
+      if (!inited.size) return 0;
+      const snapArr = Array.isArray(req.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length ? req.invs_request_lot_snapshot : (req.invs_items_snapshot || []);
+      const byDrug = new Map(snapArr.map(x => [String(x.drug_id), x]));
+      const today = toYmd(new Date()); const ts = firebase.firestore.FieldValue.serverTimestamp(); const ops = [];
+      finalItems.filter(it => toNonNegativeNumber(it.dispenseQty) > 0 && inited.has(String(it.drugId))).forEach(it => {
+        const x = byDrug.get(String(it.drugId)) || {};
+        const src = Array.isArray(x.lots_after) && x.lots_after.some(l => toNonNegativeNumber(l.qty_issue) > 0)
+          ? x.lots_after.filter(l => toNonNegativeNumber(l.qty_issue) > 0).map(l => ({ lot_no: l.lot_no, expiry: l.expiry, qty: toNonNegativeNumber(l.qty_issue), trade_name: l.trade_name || '' }))
+          : Array.isArray(x.alloc) && x.alloc.length ? x.alloc.map(l => ({ lot_no: l.lot_no, expiry: l.expiry, qty: toNonNegativeNumber(l.qty), trade_name: '' })) : [];
+        let left = toNonNegativeNumber(it.dispenseQty); const lots = [];
+        src.forEach(l => { if (left <= 1e-9) return; const q = Math.min(l.qty, left); left -= q; lots.push({ ...l, qty: q }); });
+        if (left > 1e-9) lots.push({ lot_no: 'ไม่ทราบ lot', expiry: '', qty: left, trade_name: '' });
+        lots.forEach((l, i) => ops.push({ type: 'set', options: { merge: false }, ref: db.collection('pharmacy_lots').doc(`${req.deptId}__${it.drugId}__R__${req.id}__${i}`), data: {
+          dept_id: String(req.deptId), drug_id: String(it.drugId), lot_no: safeText(l.lot_no), expiry: safeText(l.expiry), qty: Math.round(l.qty * 1000) / 1000, trade_name: safeText(l.trade_name),
+          source: 'RECEIPT', received_ymd: today, ref_req_id: req.id, invs_sub_po_no: safeText(req.invs_sub_po_no), active: true, created_by_uid: ctx.currentUser.uid, created_at: ts, updated_at: ts } }));
+      });
+      if (ops.length) await executeBatchChunks(ops);
+      return ops.length;
+    };
     const completeInternalRequisition = async (ctx, req, finalItems) => {
       const ref = db.collection('internal_requisitions').doc(req.id);
       const token = makeActionToken ? makeActionToken() : String(Date.now());
@@ -8332,6 +8355,7 @@ const AdminConfigView = ({ ctx }) => {
               tx.update(ref, { stock_applied_chunks: firebase.firestore.FieldValue.arrayUnion(c) });
             });
           }
+          try { await addPharmacyReceiptLots(ctx, req, finalItems); } catch (lotErr) { console.warn('[pharmacy lots]', lotErr); ctx.showToast && ctx.showToast('บันทึก lot รับเข้าห้องยาไม่สำเร็จ: ' + (lotErr?.message || lotErr), 'warn'); }
         }
         const total = finalItems.reduce((s, it) => s + internalItemValue(it), 0);
         await db.runTransaction(async (tx) => {
@@ -8490,6 +8514,8 @@ const AdminConfigView = ({ ctx }) => {
           const kw = new Map(), loc = new Map();
           (data.keywords || []).forEach(k => { const id = String(k.working_code); if (!kw.has(id)) kw.set(id, new Set()); kw.get(id).add(k.keyword); });
           (data.locations || []).forEach(l => { loc.set(String(l.working_code), normDrugLocation(l.location)); });
+          // v6.14 VEN จาก sawee_drug_class (มีเฉพาะยา — ยาที่ไม่อยู่ในตารางคงค่าเดิม)
+          const venMap = new Map((data.vens || []).map(v => [String(v.working_code), String(v.ven).toUpperCase()]));
           const known = new Set(ctx.appDb.drugs.map(d => String(d.drug_id)));
           const changes = [];
           const cleanKw = (d, set) => {
@@ -8503,10 +8529,11 @@ const AdminConfigView = ({ ctx }) => {
             const newKw = kw.has(id) ? cleanKw(d, kw.get(id)) : (d.invs_keywords || '');
             // v6.6 sawee_location เป็นตำแหน่งทั้งหมด (location_full): ยาที่ไม่มีแถว/ว่าง/0 → ล้างตำแหน่งเดิม
             const newLoc = data.location_full ? (loc.get(id) || '') : (loc.has(id) ? loc.get(id) : (d.invs_location || ''));
-            if (newKw !== (d.invs_keywords || '') || newLoc !== (d.invs_location || '')) changes.push({ d, newKw, newLoc });
+            const newVen = venMap.has(id) ? venMap.get(id) : (d.ven || '');
+            if (newKw !== (d.invs_keywords || '') || newLoc !== (d.invs_location || '') || newVen !== (d.ven || '')) changes.push({ d, newKw, newLoc, newVen });
           });
           const unknown = new Set([...kw.keys(), ...[...loc.keys()].filter(id => loc.get(id))].filter(id => !known.has(id)));
-          setDiff({ detected: data.detected || {}, kwCount: kw.size, locCount: [...loc.values()].filter(Boolean).length, changes, unknown: unknown.size });
+          setDiff({ detected: data.detected || {}, kwCount: kw.size, locCount: [...loc.values()].filter(Boolean).length, venCount: venMap.size, changes, unknown: unknown.size });
         } catch (e) { ctx.showToast('ดึงจาก INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
         finally { setBusy(''); }
       };
@@ -8515,7 +8542,7 @@ const AdminConfigView = ({ ctx }) => {
         setBusy('apply');
         try {
           await executeBatchChunks(diff.changes.map(c => ({ type: 'update', ref: db.collection('master_drugs').doc(String(c.d.drug_id)),
-            data: { invs_keywords: c.newKw, invs_location: c.newLoc, invs_extras_synced_at: firebase.firestore.FieldValue.serverTimestamp() } })));
+            data: { invs_keywords: c.newKw, invs_location: c.newLoc, ...(c.newVen ? { ven: c.newVen } : {}), invs_extras_synced_at: firebase.firestore.FieldValue.serverTimestamp() } })));
           await writeAuditLog(ctx.currentUser, 'INVS_EXTRAS_SYNC', 'master_drugs', 'BATCH', { updated: diff.changes.length });
           ctx.showToast(`อัปเดตคำค้นหา/ตำแหน่ง ${diff.changes.length} รายการ`); await ctx.refreshData(); onClose();
         } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); } finally { setBusy(''); }
@@ -8531,16 +8558,16 @@ const AdminConfigView = ({ ctx }) => {
                   <div className="grid md:grid-cols-4 gap-3 text-sm">
                     <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">แหล่งคำค้นหา</div><b>{diff.detected.keyword || 'ไม่พบ — ตรวจว่า Bridge เป็น v2.7.0'}</b></div>
                     <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">แหล่งตำแหน่ง</div><b>{diff.detected.location || 'ไม่พบ'}</b></div>
-                    <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">ยาที่มีคำค้นหา / ตำแหน่ง</div><b>{diff.kwCount} / {diff.locCount}</b></div>
+                    <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">ยาที่มีคำค้นหา / ตำแหน่ง / VEN</div><b>{diff.kwCount} / {diff.locCount} / {diff.venCount || 0}</b>{!diff.detected.ven && <div className="text-[10px] text-amber-700">ไม่พบตาราง sawee_drug_class (ต้องใช้ Bridge 2.13.0)</div>}</div>
                     <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">จะอัปเดต</div><b>{diff.changes.length} รายการ</b>{diff.unknown ? <div className="text-[11px] text-amber-700">รหัสที่ไม่มีในแอป {diff.unknown}</div> : null}</div>
                   </div>
                   <div className="overflow-auto max-h-72 border rounded-xl">
                     <table className="w-full text-sm">
-                      <thead className="bg-slate-50 text-xs text-slate-500 sticky top-0"><tr><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">ชื่อยา</th><th className="p-2 text-left">คำค้นหา</th><th className="p-2 text-left">ตำแหน่ง</th></tr></thead>
+                      <thead className="bg-slate-50 text-xs text-slate-500 sticky top-0"><tr><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">ชื่อยา</th><th className="p-2 text-left">คำค้นหา</th><th className="p-2 text-left">ตำแหน่ง</th><th className="p-2 text-center">VEN</th></tr></thead>
                       <tbody>{diff.changes.slice(0, 300).map(c => (
                         <tr key={c.d.drug_id} className="border-t"><td className="p-2 font-mono text-xs">{c.d.drug_id}</td><td className="p-2">{c.d.drug_name}</td>
                           <td className="p-2 text-xs">{c.newKw || '-'}{(c.d.invs_keywords || '') !== c.newKw && c.d.invs_keywords ? <div className="text-slate-400 line-through">{c.d.invs_keywords}</div> : null}</td>
-                          <td className="p-2 text-xs font-bold text-teal-700">{c.newLoc || '-'}{(c.d.invs_location || '') !== c.newLoc && c.d.invs_location ? <div className="text-slate-400 line-through font-normal">{c.d.invs_location}</div> : null}</td></tr>
+                          <td className="p-2 text-xs font-bold text-teal-700">{c.newLoc || '-'}{(c.d.invs_location || '') !== c.newLoc && c.d.invs_location ? <div className="text-slate-400 line-through font-normal">{c.d.invs_location}</div> : null}</td><td className="p-2 text-center text-xs font-bold">{c.newVen || '-'}{(c.d.ven || '') !== (c.newVen || '') && c.d.ven ? <div className="text-slate-400 line-through font-normal">{c.d.ven}</div> : null}</td></tr>
                       ))}</tbody>
                     </table>
                   </div>

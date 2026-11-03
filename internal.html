@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.13.0"></script>
+  <script src="shared.js?v=6.14.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.13.0';
+      var need = '6.14.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -943,6 +943,179 @@ ORDER BY d.name`;
       return { byDrug, unmatched };
     };
 
+    // ===== v6.14 คลังห้องยาแยก lot: บันทึก initial (ยอดนับจริงราย lot) =====
+    // ยาที่ยังไม่บันทึก initial ระบบใช้วิธีเดิม (เครดิตเดิม − ยอดใช้) · บันทึกแล้ว = คงเหลือจาก lot − ยอดใช้ HOSxP หลังวันนับ (FEFO)
+    const ymdToExp = (v) => String(v || '').replace(/-/g, '').slice(0, 8);
+    const expToYmd = (e) => { const v = String(e || '').replace(/\D/g, ''); if (v.length < 8) return ''; let y = Number(v.slice(0, 4)); if (y > 2400) y -= 543; return `${y}-${v.slice(4, 6)}-${v.slice(6, 8)}`; };
+    const PharmacyLotsView = ({ ctx }) => {
+      const today = toYmd(new Date());
+      const [search, setSearch] = useState('');
+      const [onlyPending, setOnlyPending] = useState(false);
+      const [edit, setEdit] = useState(null); // { drug, date, rows:[{lot_no, expiry(YYYY-MM-DD), qty, trade_name}] }
+      const [busy, setBusy] = useState('');
+      const candidates = useMemo(() => {
+        const ids = new Set([...ctx.stock.map(x => String(x.drug_id)), ...ctx.pharmMeta.keys()]);
+        ctx.reqs.filter(r => r.kind === 'pharmacy' && r.status !== 'Cancelled').forEach(r => (r.items || []).forEach(it => ids.add(String(it.drugId))));
+        return [...ids].map(id => ctx.drugById.get(id)).filter(Boolean).sort((a, b) => String(a.drug_name).localeCompare(String(b.drug_name), 'th'));
+      }, [ctx.stock, ctx.reqs, ctx.pharmMeta, ctx.drugById]);
+      const q = normalizeForMatch(search);
+      const list = useMemo(() => {
+        let base = candidates;
+        if (search.trim()) {
+          const extra = ctx.drugs.filter(d => normalizeForMatch(d.drug_name).includes(q) || String(d.drug_id).toLowerCase().includes(search.trim().toLowerCase()));
+          const seen = new Set(base.map(d => String(d.drug_id))); base = [...base.filter(d => normalizeForMatch(d.drug_name).includes(q) || String(d.drug_id).toLowerCase().includes(search.trim().toLowerCase())), ...extra.filter(d => !seen.has(String(d.drug_id)))];
+        }
+        if (onlyPending) base = base.filter(d => !ctx.pharmMeta.has(String(d.drug_id)));
+        return base.slice(0, 500);
+      }, [candidates, search, onlyPending, ctx.drugs, ctx.pharmMeta]);
+      const doneCount = candidates.filter(d => ctx.pharmMeta.has(String(d.drug_id))).length;
+      const openEdit = (drug) => {
+        const id = String(drug.drug_id); const meta = ctx.pharmMeta.get(id);
+        const lots = (ctx.pharmLotsByDrug.get(id) || []).filter(l => l.active !== false && l.source === 'INITIAL');
+        setEdit({ drug, date: today, rows: lots.length ? lots.map(l => ({ lot_no: l.lot_no || '', expiry: expToYmd(l.expiry), qty: String(l.qty ?? ''), trade_name: l.trade_name || '' })) : [{ lot_no: '', expiry: '', qty: '', trade_name: '' }], prevDate: meta?.initial_ymd || '' });
+      };
+      const pullInvs = async () => {
+        setBusy('invs');
+        try {
+          const res = await callInvsBridge('invs_lots', '', { drug_ids: [String(edit.drug.drug_id)], stock_id: safeText(ctx.dept?.invs_stock_id) });
+          const lots = (res.lots || {})[String(edit.drug.drug_id)] || [];
+          if (!lots.length) { ctx.showToast('คลังใหญ่ INVS ไม่มี lot ของยานี้', 'warn'); return; }
+          setEdit(e => ({ ...e, rows: [...e.rows.filter(r => r.lot_no || r.qty), ...lots.filter(l => !e.rows.some(r => r.lot_no === l.lot_no)).map(l => ({ lot_no: l.lot_no, expiry: expToYmd(l.expiry), qty: '', trade_name: l.trade_name || '' }))] }));
+          ctx.showToast(`เติม lot จาก INVS ${lots.length} lot — กรอกจำนวนที่นับได้ในห้องยา`);
+        } catch (e) { ctx.showToast('ดึง lot จาก INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const setRow = (i, patch) => setEdit(e => ({ ...e, rows: e.rows.map((r, j) => j === i ? { ...r, ...patch } : r) }));
+      const save = async () => {
+        const rows = edit.rows.filter(r => toNonNegativeNumber(r.qty) > 0);
+        if (!edit.date || edit.date > today) return ctx.showToast('วันที่นับต้องไม่เกินวันนี้', 'error');
+        if (rows.some(r => !safeText(r.lot_no))) return ctx.showToast('กรอกเลข Lot ให้ครบทุกแถวที่มีจำนวน (ไม่ทราบ lot ให้ใส่ "-")', 'error');
+        setBusy('save');
+        try {
+          const id = String(edit.drug.drug_id); const dept = String(ctx.dept.dept_id); const stamp = edit.date.replace(/-/g, '') + '_' + Date.now().toString(36);
+          const ts = firebase.firestore.FieldValue.serverTimestamp();
+          const ops = (ctx.pharmLotsByDrug.get(id) || []).filter(l => l.active !== false).map(l => ({ type: 'update', ref: db.collection('pharmacy_lots').doc(l.id), data: { active: false, closed_by_count: edit.date, updated_at: ts } }));
+          rows.forEach((r, i) => ops.push({ type: 'set', options: { merge: false }, ref: db.collection('pharmacy_lots').doc(`${dept}__${id}__I__${stamp}__${i}`), data: {
+            dept_id: dept, drug_id: id, lot_no: safeText(r.lot_no), expiry: ymdToExp(r.expiry), qty: toNonNegativeNumber(r.qty), trade_name: safeText(r.trade_name),
+            source: 'INITIAL', received_ymd: edit.date, active: true, created_by_uid: ctx.currentUser.uid, created_by_name: safeText(ctx.currentUser.name), created_at: ts, updated_at: ts } }));
+          const total = rows.reduce((a, r) => a + toNonNegativeNumber(r.qty), 0);
+          ops.push({ type: 'set', options: { merge: true }, ref: db.collection('pharmacy_lot_meta').doc(`${dept}__${id}`), data: { dept_id: dept, drug_id: id, initial_ymd: edit.date, initialized: true, initial_total: total, lot_count: rows.length, counted_by_uid: ctx.currentUser.uid, counted_by_name: safeText(ctx.currentUser.name), counted_at: ts, updated_at: ts } });
+          ops.push({ type: 'set', options: { merge: true }, ref: db.collection('internal_stock').doc(internalStockDocId(dept, id)), data: { dept_id: dept, drug_id: id, balance: total, last_source: 'LOT_COUNT', counted_at: ts, updated_at: ts, updated_by_uid: ctx.currentUser.uid, updated_by_name: safeText(ctx.currentUser.name) } });
+          await executeBatchChunks(ops);
+          await writeAuditLog(ctx.currentUser, 'PHARM_LOT_INITIAL', 'pharmacy_lot_meta', `${dept}__${id}`, { date: edit.date, lots: rows.length, total });
+          ctx.showToast(`บันทึก initial ${edit.drug.drug_name} ${rows.length} lot รวม ${fmtNum(total)}`);
+          setEdit(null); await ctx.reload();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      return (
+        <div className="space-y-5" id="ph-lots-view">
+          <div>
+            <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-layer-group text-teal-600 mr-2"></i>คลังห้องยาแยก lot</h2>
+            <p className="text-sm text-slate-500 mt-1">บันทึกยอดนับจริงราย lot (initial) — หลังจากนั้นระบบหักยอดจ่ายจาก HOSxP ตาม EXP ใกล้สุดก่อน และบวก lot ที่รับจากใบเบิกที่จ่ายเสร็จ · ยาที่ยังไม่บันทึกใช้วิธีเดิมไปก่อน</p>
+          </div>
+          <div className="flex flex-wrap gap-3 items-center">
+            <input id="ph-lots-search" value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหายา (ชื่อ / รหัส)" className="flex-1 min-w-[16rem] p-3 border rounded-xl" />
+            <label className="text-sm font-bold text-slate-600 flex items-center gap-2"><input type="checkbox" checked={onlyPending} onChange={e => setOnlyPending(e.target.checked)} />เฉพาะที่ยังไม่บันทึก</label>
+            <span className="text-sm text-slate-500">บันทึกแล้ว <b className="text-teal-700">{doneCount}</b> / {candidates.length} รายการที่ห้องยาเคยใช้</span>
+          </div>
+          {edit && (
+            <div className="bg-white border-2 border-teal-300 rounded-2xl p-5 space-y-3" id="ph-lot-editor">
+              <div className="flex flex-wrap justify-between gap-3 items-end">
+                <div><div className="font-black text-lg">{edit.drug.drug_name}</div><div className="text-xs text-slate-500 font-mono">{edit.drug.drug_id} · {ctx.unitName(edit.drug)}{edit.prevDate ? ` · นับครั้งก่อน ${formatThaiDate(edit.prevDate)}` : ''}</div></div>
+                <label className="text-sm font-bold text-slate-600">วันที่นับ <input type="date" id="ph-lot-date" value={edit.date} max={today} onChange={e => setEdit(x => ({ ...x, date: e.target.value }))} className="ml-2 p-2 border rounded-lg" /></label>
+              </div>
+              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">นับ ณ สิ้นวันที่เลือก — ยอดจ่ายใน HOSxP ตั้งแต่วันถัดไปจะถูกหักจาก lot · บันทึกใหม่ = แทนที่ lot เดิมของยานี้ทั้งหมด</div>
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-2 text-left">Lot</th><th className="p-2 text-left">วันหมดอายุ</th><th className="p-2 text-left">ชื่อการค้า</th><th className="p-2 text-right">จำนวนที่นับได้ ({ctx.unitName(edit.drug)})</th><th></th></tr></thead>
+                <tbody>{edit.rows.map((r, i) => <tr key={i} className="border-t">
+                  <td className="p-1"><input aria-label="lot" value={r.lot_no} onChange={e => setRow(i, { lot_no: e.target.value })} className="w-full p-2 border rounded-lg font-mono" /></td>
+                  <td className="p-1"><input aria-label="exp" type="date" value={r.expiry} onChange={e => setRow(i, { expiry: e.target.value })} className="p-2 border rounded-lg" /></td>
+                  <td className="p-1"><input aria-label="trade" value={r.trade_name} onChange={e => setRow(i, { trade_name: e.target.value })} className="w-full p-2 border rounded-lg" /></td>
+                  <td className="p-1"><input aria-label="qty" type="number" min="0" value={r.qty} onChange={e => setRow(i, { qty: e.target.value })} className="w-32 p-2 border rounded-lg text-right font-bold ml-auto block" /></td>
+                  <td className="p-1 text-right"><button onClick={() => setEdit(x => ({ ...x, rows: x.rows.filter((_, j) => j !== i) }))} className="text-red-500 px-2" aria-label="ลบแถว"><i className="fa-solid fa-xmark"></i></button></td>
+                </tr>)}</tbody>
+              </table>
+              <div className="flex flex-wrap gap-2 justify-between">
+                <div className="flex gap-2">
+                  <button onClick={() => setEdit(x => ({ ...x, rows: [...x.rows, { lot_no: '', expiry: '', qty: '', trade_name: '' }] }))} className="px-4 py-2 rounded-xl border font-bold text-slate-600"><i className="fa-solid fa-plus mr-1"></i>เพิ่ม lot</button>
+                  <button id="ph-lot-invs" onClick={pullInvs} disabled={!!busy} className="px-4 py-2 rounded-xl border border-indigo-300 text-indigo-700 font-bold disabled:opacity-40">{busy === 'invs' ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : <i className="fa-solid fa-database mr-1"></i>}เติม lot จากคลังใหญ่ INVS</button>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <span className="text-sm text-slate-500">รวม <b>{fmtNum(edit.rows.reduce((a, r) => a + toNonNegativeNumber(r.qty), 0))}</b></span>
+                  <button onClick={() => setEdit(null)} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ยกเลิก</button>
+                  <button id="ph-lot-save" onClick={save} disabled={!!busy} className="px-5 py-2 rounded-xl bg-teal-600 text-white font-bold disabled:opacity-40">{busy === 'save' ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : <i className="fa-solid fa-floppy-disk mr-1"></i>}บันทึก initial</button>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="bg-white rounded-2xl border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-2 text-left">รายการ</th><th className="p-2 text-left">วันที่นับ</th><th className="p-2 text-left">Lot ในห้องยา (นับ + รับเข้า)</th><th className="p-2 text-right">รวมที่บันทึก</th><th></th></tr></thead>
+              <tbody>{list.map(d => { const id = String(d.drug_id); const meta = ctx.pharmMeta.get(id); const lots = meta ? pharmActiveLots(ctx.pharmLotsByDrug.get(id) || [], meta) : [];
+                return <tr key={id} className="border-t align-top">
+                  <td className="p-2"><div className="font-semibold">{d.drug_name}</div><div className="text-[11px] text-slate-400 font-mono">{id} · {ctx.unitName(d)}</div></td>
+                  <td className="p-2">{meta ? formatThaiDate(meta.initial_ymd) : <span className="text-amber-700 font-bold">ยังไม่บันทึก</span>}</td>
+                  <td className="p-2 text-[11px]">{lots.map(l => <div key={l.id}><b className="font-mono">{l.lot_no}</b> {fmtExpShort(l.expiry)} · {fmtNum(l.qty)}{l.source === 'RECEIPT' ? <span className="text-teal-600"> (รับ {formatThaiDate(l.received_ymd)})</span> : ''}{l.trade_name ? <span className="text-slate-400"> · {l.trade_name}</span> : ''}</div>)}</td>
+                  <td className="p-2 text-right font-bold">{meta ? fmtNum(lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0)) : '-'}</td>
+                  <td className="p-2 text-right"><button onClick={() => openEdit(d)} className="px-3 py-1.5 rounded-lg bg-teal-50 text-teal-700 border border-teal-200 font-bold text-xs">{meta ? 'นับใหม่ / แก้' : 'บันทึก initial'}</button></td>
+                </tr>; })}</tbody>
+            </table>
+          </div>
+        </div>
+      );
+    };
+
+    // ===== v6.14 ย้อนรอย lot (Traceability) — ข้อมูลอยู่ในฐาน sawee_trace บนเครื่อง Bridge (LAN) ไม่เก็บใน Firestore =====
+    const TraceView = ({ ctx }) => {
+      const [lot, setLot] = useState(''); const [hn, setHn] = useState(''); const [from, setFrom] = useState(''); const [to, setTo] = useState('');
+      const [res, setRes] = useState(null); const [busy, setBusy] = useState(false);
+      const run = async () => {
+        if (!lot.trim() && !hn.trim()) return ctx.showToast('ระบุ Lot หรือ HN', 'error');
+        setBusy(true);
+        try { setRes(await callInvsBridge('trace_query', '', { lot_no: lot.trim(), hn: hn.trim(), date_from: from, date_to: to })); }
+        catch (e) { ctx.showToast('ค้นไม่สำเร็จ: ' + (e?.message || e) + ' (ต้องใช้ Bridge 2.13.0 + ฐาน sawee_trace)', 'error'); }
+        finally { setBusy(false); }
+      };
+      const rows = res?.rows || [];
+      const patients = new Set(rows.filter(r => r.kind === 'D').map(r => r.hn)).size;
+      const csv = () => {
+        const esc = v => { const t = String(v ?? ''); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+        const head = ['วันที่จ่าย', 'HN', 'VN', 'AN', 'รหัสยา', 'ชื่อยา', 'ชื่อการค้า', 'Lot', 'EXP', 'จำนวน', 'ประเภท'];
+        const body = rows.map(r => [r.rxdate, r.hn, r.vn, r.an, r.drug_id, ctx.drugById.get(r.drug_id)?.drug_name || '', r.trade_name, r.lot_no, r.expiry, r.qty, r.kind === 'R' ? 'คืน' : r.kind === 'X' ? 'ไม่มี lot' : 'จ่าย']);
+        const blob = new Blob(['﻿' + [head, ...body].map(r => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `trace_${lot || hn}.csv`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      };
+      return (
+        <div className="space-y-5" id="trace-view">
+          <div>
+            <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-magnifying-glass-location text-teal-600 mr-2"></i>ย้อนรอย lot (Traceability)</h2>
+            <p className="text-sm text-slate-500 mt-1">ค้นว่า lot นี้จ่ายให้ผู้ป่วย HN ใดบ้าง หรือผู้ป่วยได้ lot ใด — จับคู่จากยอดจ่าย HOSxP กับ lot ในห้องยาตาม EXP ใกล้สุดก่อน (สมมติฐาน FEFO) เฉพาะยาที่บันทึก initial แล้ว</p>
+            <p className="text-xs text-red-700 mt-1"><i className="fa-solid fa-user-shield mr-1"></i>ข้อมูลผู้ป่วย (PDPA) อยู่ในเครื่อง Bridge ใน รพ. เท่านั้น — ใช้เพื่อการเรียกคืนยา/ความปลอดภัยผู้ป่วย</p>
+          </div>
+          <div className="bg-white border rounded-2xl p-4 flex flex-wrap gap-3 items-end">
+            <label className="text-xs font-bold text-slate-500">Lot<input id="trace-lot" value={lot} onChange={e => setLot(e.target.value)} className="block mt-1 p-2.5 border rounded-xl font-mono" /></label>
+            <label className="text-xs font-bold text-slate-500">HN<input id="trace-hn" value={hn} onChange={e => setHn(e.target.value)} className="block mt-1 p-2.5 border rounded-xl font-mono" /></label>
+            <label className="text-xs font-bold text-slate-500">ตั้งแต่<input type="date" value={from} onChange={e => setFrom(e.target.value)} className="block mt-1 p-2.5 border rounded-xl" /></label>
+            <label className="text-xs font-bold text-slate-500">ถึง<input type="date" value={to} onChange={e => setTo(e.target.value)} className="block mt-1 p-2.5 border rounded-xl" /></label>
+            <button id="trace-run" onClick={run} disabled={busy} className="px-5 py-2.5 rounded-xl bg-teal-600 text-white font-bold disabled:opacity-40">{busy ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-magnifying-glass mr-2"></i>}ค้นหา</button>
+            {rows.length > 0 && <button onClick={csv} className="px-4 py-2.5 rounded-xl border font-bold text-slate-600"><i className="fa-solid fa-file-csv mr-1"></i>CSV</button>}
+          </div>
+          {res && <div className="text-sm text-slate-600" id="trace-summary">พบ <b>{fmtNum(rows.length)}</b> แถว · ผู้ป่วย <b>{fmtNum(patients)}</b> ราย{res.truncated ? ' (แสดง 3,000 แถวแรก)' : ''}{res.last_processed ? ` · ประมวลผลถึง ${formatThaiDate(res.last_processed)}` : ''}</div>}
+          {res && <div className="bg-white rounded-2xl border overflow-auto max-h-[60vh]">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500 sticky top-0"><tr><th className="p-2 text-left">วันที่จ่าย</th><th className="p-2 text-left">HN</th><th className="p-2 text-left">VN / AN</th><th className="p-2 text-left">ยา</th><th className="p-2 text-left">ชื่อการค้า</th><th className="p-2 text-left">Lot · EXP</th><th className="p-2 text-right">จำนวน</th></tr></thead>
+              <tbody>{rows.map((r, i) => <tr key={i} className={`border-t ${r.kind === 'R' ? 'text-sky-700' : r.kind === 'X' ? 'text-red-600' : ''}`}>
+                <td className="p-2">{formatThaiDate(r.rxdate)}</td><td className="p-2 font-mono">{r.hn}</td><td className="p-2 font-mono text-xs">{r.an || r.vn}</td>
+                <td className="p-2">{ctx.drugById.get(r.drug_id)?.drug_name || r.drug_id}</td><td className="p-2">{r.trade_name}</td>
+                <td className="p-2 font-mono text-xs">{r.kind === 'X' ? 'ไม่มี lot' : `${r.lot_no} · ${fmtExpShort(r.expiry)}`}</td>
+                <td className="p-2 text-right">{fmtNum(r.qty)}{r.kind === 'R' ? ' (คืน)' : ''}</td></tr>)}</tbody>
+            </table>
+          </div>}
+        </div>
+      );
+    };
+
     // v6.13 EXP สั้น ๆ 20270131 → 31/01/70
     const fmtExpShort = (raw) => { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return raw ? String(raw) : ''; const y = Number(v.slice(0, 4)); return `${v.slice(6, 8)}/${v.slice(4, 6)}/${String(y < 2400 ? y + 543 : y).slice(-2)}`; };
     const PharmacyReqView = ({ ctx, editReq, round, onDone }) => {
@@ -1082,11 +1255,15 @@ ORDER BY d.name`;
           const stockDoc = stockMap.get(id);
           const stockBal = toNonNegativeNumber(stockDoc?.balance);
           const onHandTouched = st.onHand !== null && st.onHand !== undefined;
-          const onHand = onHandTouched ? toNonNegativeNumber(st.onHand) : Math.max(0, stockBal - usage);
+          // v6.14 ยาที่บันทึก initial แล้ว: คงเหลือ = lot ในห้องยา − ยอดใช้ HOSxP หลังวันนับ (FEFO) · ยังไม่บันทึก = วิธีเดิม
+          const lotMeta = ctx.pharmMeta ? ctx.pharmMeta.get(id) : null;
+          const lotUsed = lotMeta && asuSeriesByDrug ? pharmUsageSince(asuSeriesByDrug.get(id) || {}, asuData.from, asuData.to, lotMeta.initial_ymd, multiplier) : null;
+          const roomLots = lotUsed !== null ? pharmLotsRemaining(ctx.pharmLotsByDrug.get(id) || [], lotMeta, lotUsed) : null;
+          const onHand = onHandTouched ? toNonNegativeNumber(st.onHand) : roomLots ? roomLots.total : Math.max(0, stockBal - usage);
           const inTransit = inTransitMap.get(id) || 0;
           const blocked = String(base.type) === '6' || !!base.isDiscontinued;
           const sAsu = storedAsu.get(id);
-          const asuStats = asuMode ? (asuSeriesByDrug ? calcAsuStats(asuSeriesByDrug.get(id) || {}, asuData.from, asuData.to, multiplier) : (sAsu ? sAsu.stats : null)) : null;
+          const asuStats = asuMode ? (asuSeriesByDrug ? calcAsuStats(asuSeriesByDrug.get(id) || {}, addDaysYmd(asuData.to, -179), asuData.to, multiplier) : (sAsu ? sAsu.stats : null)) : null;
           const lots = asuMode && invsLots ? (invsLots[id] || []) : null;
           const plan = asuStats ? calcPharmacyPlanV2({ stats: asuStats, onHand, inTransit, item: base, ven: drugVen(drug), lots, minOrderValue }) : null;
           const sug = plan ? { dailyAvg: plan.dbar, target: plan.S > 0 ? Math.ceil(plan.S / safePackSize(base.packSize) - 1e-9) * safePackSize(base.packSize) : 0, suggested: plan.suggested, skipReason: plan.suggested > 0 ? '' : plan.reason, coverRounds: plan.coverRounds }
@@ -1105,13 +1282,13 @@ ORDER BY d.name`;
             stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit,
             dailyAvg: sug.dailyAvg, target: sug.target, suggested, follow, dispense, blocked, source,
             skipReason: blocked ? '' : sug.skipReason, coverRounds: sug.coverRounds,
-            asu: asuStats, plan, lotPlan, lotsLoaded: !!lots, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
+            asu: asuStats, plan, lotPlan, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
             value: internalItemValue({ dispenseQty: dispense, packSize: base.packSize, price: base.price }),
             note: st.note || ''
           });
         });
         return out;
-      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue, asuMode, asuSeriesByDrug, asuData, invsLots, storedAsu]);
+      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue, asuMode, asuSeriesByDrug, asuData, invsLots, storedAsu, ctx.pharmMeta, ctx.pharmLotsByDrug]);
       const derived = useMemo(() => derivedAll.filter(r => !hideTypes.includes(String(r.base.type))), [derivedAll, hideTypes]);
       const hiddenByType = useMemo(() => { const m = {}; derivedAll.forEach(r => { const t = String(r.base.type); if (hideTypes.includes(t)) m[t] = (m[t] || 0) + 1; }); return m; }, [derivedAll, hideTypes]);
 
@@ -1148,7 +1325,10 @@ ORDER BY d.name`;
       const rowIds = useMemo(() => new Set(derived.map(r => r.id)), [derived]);
 
       const fetchAsu = async () => {
-        const asuTo = yesterday, asuFrom = addDaysYmd(yesterday, -179);
+        const asuTo = yesterday;
+        // v6.14 ดึงย้อนให้ครอบคลุมวันหลังนับ initial เก่าสุด (สูงสุด 400 วัน) เพื่อหักยอดใช้จาก lot ห้องยา
+        const oldestInit = [...(ctx.pharmMeta ? ctx.pharmMeta.values() : [])].map(m => addDaysYmd(m.initial_ymd, 1)).filter(Boolean).sort()[0] || '';
+        const asuFrom = [addDaysYmd(yesterday, -179), oldestInit].filter(Boolean).sort()[0] < addDaysYmd(yesterday, -399) ? addDaysYmd(yesterday, -399) : [addDaysYmd(yesterday, -179), oldestInit].filter(Boolean).sort()[0];
         setBusy('asu');
         try {
           const data = await callInvsBridge('hosxp_usage_daily', '', { date_from: asuFrom, date_to: asuTo });
@@ -1507,7 +1687,9 @@ ORDER BY d.name`;
                         <td className="p-2 text-right tnum" title={r.asu ? `เฉลี่ย 180 วัน ${fmtNum(r.asu.d180, 2)} · 60 วัน ${fmtNum(r.asu.d60, 2)} · σ ${fmtNum(r.asu.sigma, 2)} · วันที่มีการจ่าย ${r.asu.activeDays}${r.asu.adi ? ` · ADI ${r.asu.adi}` : ''}` : ''}>{r.dailyAvg ? fmtNum(r.dailyAvg, r.dailyAvg < 10 ? 2 : 1) : '-'}{r.asu && <div className="text-[10px] text-indigo-500">{r.asu.d60 > r.asu.d180 ? '60 วัน' : '180 วัน'}</div>}</td>
                         <td className="p-2 text-right whitespace-nowrap">
                           <NumCell value={r.onHand} touched={r.onHandTouched} ariaLabel={`เครดิต ${r.base.name}`} onCommit={v => patchRow(r.id, { onHand: v })} />
-                          {!r.onHandTouched && r.hasStock && r.usage > 0 && <div className="text-[10px] text-slate-400">{fmtNum(r.stockBal)} − {fmtNum(r.usage)}</div>}
+                          {!r.onHandTouched && r.roomLots && <div className="text-[10px] text-teal-700 font-bold" title={r.roomLots.lots.map(l => `${l.lot_no} ${fmtExpShort(l.expiry)} เหลือ ${fmtNum(l.remain)}`).join('\n')}>lot ห้องยา {r.roomLots.lots.filter(l => l.remain > 0).length} lot</div>}
+                          {!r.onHandTouched && !r.roomLots && r.lotMeta && <div className="text-[10px] text-amber-700">นับ lot แล้ว — กด "ยอดใช้ 180 วัน"</div>}
+                          {!r.onHandTouched && !r.roomLots && !r.lotMeta && r.hasStock && r.usage > 0 && <div className="text-[10px] text-slate-400">{fmtNum(r.stockBal)} − {fmtNum(r.usage)}</div>}
                           {r.onHandTouched && !editReq && <button onClick={() => patchRow(r.id, { onHand: null })} className="text-[10px] text-slate-400 hover:text-teal-600 block ml-auto">↺ คืนค่า</button>}
                         </td>
                         <td className="p-2 text-right tnum">{r.inTransit ? fmtNum(r.inTransit) : '-'}</td>
@@ -2330,6 +2512,8 @@ ORDER BY d.name`;
       const [reqs, setReqs] = useState([]);
       const [stock, setStock] = useState([]);
       const [urgents, setUrgents] = useState([]);
+      const [pharmLots, setPharmLots] = useState([]); // v6.14 คลังห้องยาแยก lot
+      const [pharmMetaList, setPharmMetaList] = useState([]);
       const [view, setView] = useState('history');
       const [editReq, setEditReq] = useState(null);
       const [printReq, setPrintReq] = useState(null);
@@ -2358,16 +2542,20 @@ ORDER BY d.name`;
         try {
           const uid = currentUser?.uid || auth.currentUser?.uid || 'anon';
           const tombs = await rxSyncTombs(uid);
-          const [r, s, ug] = await Promise.all([
+          const [r, s, ug, pl, pm] = await Promise.all([
             db.collection('internal_requisitions').where('deptId', '==', String(id)).get(),
             // สต็อกห้องยามีหลายร้อยรายการ → แคช + ดึงเฉพาะที่เปลี่ยน (ต้องมี index dept_id + updated_at)
             rxSync({ uid, col: 'internal_stock', scope: String(id), tombs, query: db.collection('internal_stock').where('dept_id', '==', String(id)) }).catch(() => null),
-            db.collection('internal_urgent').where('deptId', '==', String(id)).get().catch(() => null)
+            db.collection('internal_urgent').where('deptId', '==', String(id)).get().catch(() => null),
+            db.collection('pharmacy_lots').where('dept_id', '==', String(id)).get().catch(() => null),
+            db.collection('pharmacy_lot_meta').where('dept_id', '==', String(id)).get().catch(() => null)
           ]);
           setUrgents(ug ? ug.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => tsToMillis(b.created_at) - tsToMillis(a.created_at)) : []);
           rxCountReads('internal_requisitions[dept]', r.size || 1);
           setReqs(r.docs.map(x => ({ id: x.id, ...x.data() })));
           setStock(s || []);
+          setPharmLots(pl ? pl.docs.map(x => ({ id: x.id, ...x.data() })) : []);
+          setPharmMetaList(pm ? pm.docs.map(x => ({ id: x.id, ...x.data() })) : []);
         } catch (e) { showToast('โหลดใบเบิกไม่สำเร็จ: ' + e.message, 'error'); }
         finally { setLoadingDept(false); }
       };
@@ -2417,7 +2605,9 @@ ORDER BY d.name`;
         currentUser, isAdmin, dept, reqs, stock, urgents,
         drugs: masters.drugs, drugById, unitName: (d) => d ? (unitById.get(String(d.unit_id))?.unit_name || d.unit_id || '') : '',
         showToast, setConfirmDialog, reload: () => reload(), reloadMasters, drugTypes,
-        rounds: roundsFor(masters.rounds, 'internal')
+        rounds: roundsFor(masters.rounds, 'internal'),
+        pharmLots, pharmMeta: new Map(pharmMetaList.filter(m => m.initialized !== false).map(m => [String(m.drug_id), m])),
+        pharmLotsByDrug: pharmLots.reduce((m, l) => { const k = String(l.drug_id); if (!m.has(k)) m.set(k, []); m.get(k).push(l); return m; }, new Map())
       };
 
       const pendingCount = reqs.filter(r => r.status === 'Pending' || r.status === 'Draft').length;
@@ -2457,6 +2647,8 @@ ORDER BY d.name`;
                 {kind === 'dept' && <NavBtn id="urgent" icon="fa-truck-medical" label="เบิกยาด่วน" badge={urgents.filter(u => u.status === 'Active').length || null} />}
                 {kind === 'pharmacy' && <NavBtn id="stock" icon="fa-boxes-stacked" label="สต็อกห้องยา" />}
                 {kind === 'pharmacy' && <NavBtn id="estimate" icon="fa-chart-column" label="ประมาณการใช้ยา" />}
+                {kind === 'pharmacy' && <NavBtn id="lots" icon="fa-layer-group" label="คลังห้องยา (lot)" />}
+                {kind === 'pharmacy' && <NavBtn id="trace" icon="fa-magnifying-glass-location" label="ย้อนรอย lot (Trace)" />}
                 {isAdmin && <a href="app.html" className="shrink-0 px-4 py-3 rounded-xl font-bold text-slate-300 hover:bg-slate-800 flex items-center gap-3"><i className="fa-solid fa-arrow-left w-5 text-center"></i><span>กลับหน้าแอดมิน</span></a>}
               </nav>
               <div className="hidden md:block p-4 border-t border-slate-800">
@@ -2494,6 +2686,8 @@ ORDER BY d.name`;
                     {view === 'stock' && kind === 'pharmacy' && <StockView ctx={ctx} />}
                     {view === 'urgent' && kind === 'dept' && <UrgentReqView ctx={ctx} />}
                     {view === 'estimate' && kind === 'pharmacy' && <UsageEstimateView ctx={ctx} />}
+                    {view === 'lots' && kind === 'pharmacy' && <PharmacyLotsView ctx={ctx} />}
+                    {view === 'trace' && kind === 'pharmacy' && <TraceView ctx={ctx} />}
                   </>
                 )}
               </div>

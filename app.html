@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.14.0"></script>
+  <script src="shared.js?v=6.15.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.14.0';
+      var need = '6.15.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -530,13 +530,14 @@
       const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
       const snap = Array.isArray(req.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length ? req.invs_request_lot_snapshot : (req.invs_items_snapshot || []);
       const num = (v) => toSafeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+      const pk = (v, pack) => safePackSize(pack) > 1 ? formatQty(Math.round(toSafeNumber(v) * 1000) / 1000, pack) : num(v); // v6.15 หน่วยใหญ่ เช่น 10(3)
       const money = (v) => toSafeNumber(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const exp = (raw) => { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); return v.length === 8 ? `${v.slice(6, 8)}/${v.slice(4, 6)}/${Number(v.slice(0, 4)) < 2400 ? Number(v.slice(0, 4)) + 543 : v.slice(0, 4)}` : esc(raw || '-'); };
       const rows = snap.map(x => {
         const d = ctx.findDrug(x.drug_id) || {};
         const reqItem = (req.items || []).find(it => String(it.drugId) === String(x.drug_id));
         const unit = (ctx.appDb.units || []).find(u => String(u.unit_id) === String(d.unit_id))?.unit_name || safeText(reqItem?.unit) || safeText(d.unit_id) || '';
-        return { x, d, unit, name: x.drug_name || d.drug_name || x.drug_id, loc: safeText(d.invs_location), type: String(d.type || '1') };
+        return { x, d, unit, pack: safePackSize(d.pack_size ?? reqItem?.packSize ?? x.vmi_pack_size), name: x.drug_name || d.drug_name || x.drug_id, loc: safeText(d.invs_location), type: String(d.type || '1') };
       }).sort((a, b) => a.type.localeCompare(b.type) || compareByLocation(a.loc, a.name, b.loc, b.name));
       const hasStock = rows.some(r => r.x.stock_after !== undefined);
       const total = rows.reduce((s, r) => s + toSafeNumber(r.x.value), 0);
@@ -545,10 +546,10 @@
         // v6.12 แสดงทุก lot ในคลังจ่าย พร้อมยอดเหลือหลังหักใบนี้ (Bridge ≥ 2.11.2 เก็บ lots_after) · ใบเก่าแสดงเฉพาะ lot ที่ตัด
         const lotsAfter = Array.isArray(r.x.lots_after) ? r.x.lots_after : [];
         const lots = lotsAfter.length
-          ? lotsAfter.map(a => `<div class="${toSafeNumber(a.qty_issue) > 0 ? 'cut' : ''}">${esc(a.lot_no || '-')} · ${exp(a.expiry)} · เหลือ <b>${num(a.qty_after)}</b>${toSafeNumber(a.qty_issue) > 0 ? ` <span class="xs">(จ่าย ${num(a.qty_issue)})</span>` : ''}</div>`).join('')
+          ? lotsAfter.map(a => `<div class="${toSafeNumber(a.qty_issue) > 0 ? 'cut' : ''}">${esc(a.lot_no || '-')} · ${exp(a.expiry)} · เหลือ <b>${pk(a.qty_after, r.pack)}</b>${toSafeNumber(a.qty_issue) > 0 ? ` <span class="xs">(จ่าย ${pk(a.qty_issue, r.pack)})</span>` : ''}</div>`).join('')
           : alloc.map(a => `<div>${esc(a.lot_no || '-')} · ${exp(a.expiry)}${alloc.length > 1 ? ` · <b>${num(a.qty)}</b>` : ''}</div>`).join('');
         return `<tr><td class="c">${i + 1}</td><td class="name">${esc(r.name)}</td><td class="c">${esc(r.unit)}</td><td class="r b">${num(r.x.qty)}</td><td class="lot">${lots}</td>` +
-          `<td class="r stock">${r.x.stock_after !== undefined ? num(r.x.stock_after) : '-'}${r.x.stock_lots > 1 ? `<div class="xs">${r.x.stock_lots} lot ก่อนจ่าย ${num(r.x.stock_before)}</div>` : ''}</td>` +
+          `<td class="r stock">${r.x.stock_after !== undefined ? pk(r.x.stock_after, r.pack) : '-'}${r.x.stock_lots > 1 ? `<div class="xs">${r.x.stock_lots} lot ก่อนจ่าย ${pk(r.x.stock_before, r.pack)}</div>` : ''}</td>` +
           `<td class="r">${money(r.x.cost)}</td><td class="r">${money(r.x.value)}</td><td class="c code">${esc(drugCodeLabel(r.x.drug_id, r.d.old_code))}</td></tr>`;
       }).join('');
       const title = `${unitTitle} INVS ${req.invs_sub_po_no || ''} คงเหลือ`.replace(/[\\/:*?"<>|]+/g, '-');
@@ -5622,7 +5623,7 @@ const ViewReqView = ({ ctx }) => {
                 <div className="overflow-auto max-h-[52vh] border rounded-xl">
                   <table className="w-full text-xs whitespace-nowrap">
                     <thead className="bg-slate-100 sticky top-0"><tr><th className="p-2 text-left">ยา</th><th className="p-2 text-right">จำนวน</th><th className="p-2">Lot</th><th className="p-2">หมดอายุ</th><th className="p-2 text-right">เหลือใน Lot</th><th className="p-2 text-right bg-sky-50">คงคลังรวมทุก lot</th><th className="p-2 text-right bg-sky-50">เหลือหลังเบิก</th><th className="p-2 text-right">Pack</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">ราคา/Pack</th><th className="p-2 text-right">มูลค่า</th></tr></thead>
-                    <tbody>{(invsPreflight.items || []).map((x,i)=><tr key={`${x.drug_id||x.WORKING_CODE}-${i}`} className="border-t"><td className="p-2"><div className="font-bold">{x.drug_name || ''}{x.extra ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">ส่ง INVS เพิ่ม</span> : x.extra_qty > 0 ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">+{toNonNegativeNumber(x.extra_qty).toLocaleString('th-TH')} ส่งเพิ่ม</span> : null}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE}</div></td><td className="p-2 text-right font-black">{toNonNegativeNumber(x.qty ?? x.QTY_ORDER).toLocaleString()}</td><td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td><td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td><td className="p-2 text-right">{x.lot_qty_on_hand !== undefined ? toNonNegativeNumber(x.lot_qty_on_hand).toLocaleString() : '-'}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? toNonNegativeNumber(x.stock_before).toLocaleString() : '-'}</td><td className={`p-2 text-right font-black bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty ?? x.QTY_ORDER) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? toNonNegativeNumber(x.stock_after).toLocaleString() : '-'}</td><td className="p-2 text-right">{toNonNegativeNumber(x.pack_ratio ?? x.PACK_RATIO).toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(x.cost ?? x.COST)}</td><td className="p-2 text-right">{formatUnitPrice(x.pack_cost ?? x.PACK_COST)}</td><td className="p-2 text-right font-black text-indigo-700">฿{toNonNegativeNumber(x.value ?? x.VALUE).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>)}</tbody>
+                    <tbody>{(invsPreflight.items || []).map((x,i)=><tr key={`${x.drug_id||x.WORKING_CODE}-${i}`} className="border-t"><td className="p-2"><div className="font-bold">{x.drug_name || ''}{x.extra ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">ส่ง INVS เพิ่ม</span> : x.extra_qty > 0 ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">+{toNonNegativeNumber(x.extra_qty).toLocaleString('th-TH')} ส่งเพิ่ม</span> : null}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE}</div></td><td className="p-2 text-right font-black">{toNonNegativeNumber(x.qty ?? x.QTY_ORDER).toLocaleString()}</td><td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td><td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td><td className="p-2 text-right">{x.lot_qty_on_hand !== undefined ? toNonNegativeNumber(x.lot_qty_on_hand).toLocaleString() : '-'}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className={`p-2 text-right font-black bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty ?? x.QTY_ORDER) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className="p-2 text-right">{toNonNegativeNumber(x.pack_ratio ?? x.PACK_RATIO).toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(x.cost ?? x.COST)}</td><td className="p-2 text-right">{formatUnitPrice(x.pack_cost ?? x.PACK_COST)}</td><td className="p-2 text-right font-black text-indigo-700">฿{toNonNegativeNumber(x.value ?? x.VALUE).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>)}</tbody>
                   </table>
                 </div>
 
@@ -8298,6 +8299,14 @@ const AdminConfigView = ({ ctx }) => {
     };
 
     // อนุมัติแบบ 3 ขั้น (claim → บวกสต็อกห้องยาแบบ chunk idempotent → finalize) retry ได้ปลอดภัย
+    // v6.15 มูลค่าที่บันทึก = ราคา INVS ที่ Bridge ส่งกลับ (cost ต่อหน่วยย่อย × บรรจุของ VMI) — ใช้กับใบภายใน (หน่วยงาน/ห้องยา) เหมือนใบ รพ.สต.
+    const applyInvsPricesToItems = (items, invsItems) => {
+      const cost = new Map(); (invsItems || []).forEach(x => { const c = toNonNegativeNumber(x?.cost); if (x && x.drug_id != null && c > 0) cost.set(String(x.drug_id), c); });
+      if (!cost.size) return items;
+      return (items || []).map(it => { const c = cost.get(String(it.drugId)); if (!(c > 0)) return it;
+        const price = Math.round(c * safePackSize(it.packSize) * 10000) / 10000;
+        return { ...it, ...(Math.abs(price - toNonNegativeNumber(it.price)) > 0.0001 ? { price_before_invs: toNonNegativeNumber(it.price) } : {}), price, price_source: 'INVS' }; });
+    };
     // v6.14 รับยาเข้าคลังห้องยาแยก lot (เฉพาะยาที่บันทึก initial แล้ว) — lot ตาม snapshot ตอนส่ง INVS (lots_after / alloc) · doc id คงที่ = ทำซ้ำได้
     const addPharmacyReceiptLots = async (ctx, req, finalItems) => {
       const metaSnap = await db.collection('pharmacy_lot_meta').where('dept_id', '==', String(req.deptId)).get();
@@ -8665,14 +8674,44 @@ const AdminConfigView = ({ ctx }) => {
       const setQty = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, dispenseQty: toNonNegativeNumber(v) } : it));
       const setNote = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, adminNote: v } : it));
 
-      const saveEdits = async () => {
+      // v6.15 ใบเบิกด่วนของหน่วยงานที่ยังไม่รวม (Active) — รวมเข้าใบนี้ได้ตอนตรวจ (รอบเดียวกัน = รวมอัตโนมัติก่อนตรวจ INVS)
+      const [urgents, setUrgents] = useState([]);
+      useEffect(() => { let alive = true; if (req.kind === 'pharmacy') return;
+        db.collection('internal_urgent').where('deptId', '==', String(req.deptId)).get()
+          .then(sn => { if (alive) setUrgents(sn.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.status === 'Active')); }).catch(() => {});
+        return () => { alive = false; }; }, [req.id]);
+      const sameRound = (u) => !!u.round_id && !!req.round_id && String(u.round_id) === String(req.round_id);
+      const mergeUrgents = async (list) => {
+        if (!list.length) return items;
+        const merged = items.map(it => ({ ...it }));
+        list.forEach(u => (u.items || []).forEach(ui => {
+          const q = toNonNegativeNumber(ui.requestQty ?? ui.dispenseQty); if (!q) return;
+          const idx = merged.findIndex(it => String(it.drugId) === String(ui.drugId));
+          if (idx >= 0) { const it = merged[idx]; merged[idx] = { ...it, requestQty: toNonNegativeNumber(it.requestQty) + q, dispenseQty: toNonNegativeNumber(it.dispenseQty) + q, urgentQty: toNonNegativeNumber(it.urgentQty) + q }; }
+          else { const d = ctx.findDrug(ui.drugId); merged.push({ drugId: String(ui.drugId), name: ui.name || d?.drug_name || '', unit: ui.unit || ctx.findUnitName?.(d?.unit_id) || '', packSize: safePackSize(ui.packSize ?? d?.pack_size), price: toNonNegativeNumber(ui.price ?? d?.price), type: String(ui.type || d?.type || '1'), requestQty: q, dispenseQty: q, urgentQty: q, source: 'urgent' }); }
+        }));
+        const withNote = merged.map(it => it.urgentQty ? { ...it, note: /รวมเบิกด่วน/.test(it.note || '') ? it.note : `${it.note ? it.note + ' · ' : ''}รวมเบิกด่วน ${toNonNegativeNumber(it.urgentQty).toLocaleString('th-TH')} ${it.unit || ''}`.trim() } : it);
+        await saveEdits(withNote);
+        const ts = firebase.firestore.FieldValue.serverTimestamp();
+        await executeBatchChunks([
+          ...list.map(u => ({ type: 'update', ref: db.collection('internal_urgent').doc(u.id), data: { status: 'Merged', merged_req_id: req.id, merged_req_no: safeText(req.form_no || req.doc_no), merged_at: ts, merged_by_name: safeText(ctx.currentUser.name), updated_at: ts } })),
+          { type: 'update', ref: db.collection('internal_requisitions').doc(req.id), data: { urgent_ids: firebase.firestore.FieldValue.arrayUnion(...list.map(u => u.id)), updated_at: ts } }
+        ]);
+        await writeAuditLog(ctx.currentUser, 'INTERNAL_URGENT_MERGE', 'internal_requisitions', req.id, { urgent_ids: list.map(u => u.id) });
+        setItems(withNote); setUrgents(prev => prev.filter(u => !list.some(x => x.id === u.id)));
+        ctx.showToast(`รวมใบเบิกด่วน ${list.length} ใบเข้าใบนี้แล้ว`);
+        return withNote;
+      };
+      const saveEdits = async (itemsArg) => {
+        const saveItems = Array.isArray(itemsArg) ? itemsArg : items;
+        const saveTotal = saveItems.reduce((s, it) => s + internalItemValue(it), 0);
         const ref = db.collection('internal_requisitions').doc(req.id);
         await db.runTransaction(async (tx) => {
           const snap = await tx.get(ref);
           const cur = snap.data();
           if (!['Pending', 'ApprovalFailed'].includes(cur.status)) throw new Error('สถานะใบเปลี่ยนแล้ว กรุณารีเฟรช');
           if (cur.invs_sub_po_no) throw new Error('ใบนี้ส่ง INVS แล้ว แก้จำนวนไม่ได้');
-          tx.update(ref, { items, admin_note: safeText(adminNote), total_value: Math.round(total * 100) / 100, admin_edited_at: firebase.firestore.FieldValue.serverTimestamp(), admin_edited_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+          tx.update(ref, { items: saveItems, admin_note: safeText(adminNote), total_value: Math.round(saveTotal * 100) / 100, admin_edited_at: firebase.firestore.FieldValue.serverTimestamp(), admin_edited_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
         });
         await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_ADMIN_EDIT', 'internal_requisitions', req.id, { dept_id: req.deptId });
       };
@@ -8688,7 +8727,9 @@ const AdminConfigView = ({ ctx }) => {
       };
 
       const doPreflight = () => run('preflight', async () => {
-        if (dirty) { await saveEdits(); await reload(); }
+        const autoMerge = editable ? urgents.filter(sameRound) : [];
+        if (autoMerge.length) { await mergeUrgents(autoMerge); await reload(); }
+        else if (dirty) { await saveEdits(); await reload(); }
         try {
           const data = await callInvsBridge('preflight', req.id, { source: 'internal' });
           setPreflight(data);
@@ -8702,14 +8743,20 @@ const AdminConfigView = ({ ctx }) => {
         const data = await callInvsBridge('send', req.id, { source: 'internal' });
         ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
         setPreflight(null);
-        const fresh = (await db.collection('internal_requisitions').doc(req.id).get()).data();
-        await completeInternalRequisition(ctx, { ...req, ...fresh, id: req.id }, fresh.items || items);
+        const fresh = (await db.collection('internal_requisitions').doc(req.id).get()).data() || {};
+        (data.warnings || []).filter(w => /Firestore/.test(String(w))).forEach(w => ctx.showToast(w, 'warn'));
+        // v6.15 ใบพิมพ์/มูลค่าใช้ผลที่ Bridge ส่งกลับโดยตรง (ไม่พึ่งการอ่านกลับจาก Firestore) — เดิมถ้าอ่านกลับไม่ได้ฟิลด์ INVS ใบพิมพ์จะว่าง
+        const sent = { ...req, ...fresh, id: req.id,
+          invs_status: fresh.invs_status || 'SENT', invs_sub_po_no: fresh.invs_sub_po_no || data.sub_po_no || '',
+          invs_sent_at: fresh.invs_sent_at || new Date().toISOString(),
+          invs_request_lot_snapshot: Array.isArray(fresh.invs_request_lot_snapshot) && fresh.invs_request_lot_snapshot.length ? fresh.invs_request_lot_snapshot : (data.items || []) };
+        await completeInternalRequisition(ctx, sent, applyInvsPricesToItems(fresh.items || items, data.items || sent.invs_request_lot_snapshot));
         ctx.showToast('อนุมัติแล้ว' + (isPharmacy ? ' และบวกยอดเข้าสต็อกห้องยา' : ''));
         rxTaskDone('adm_internal');
         await reload(); onBack();
         // v6.9 พิมพ์ใบเบิกพร้อมยอดคงเหลือคลัง + Lot/EXP ที่ตัด
         if (!data.already_sent) ctx.setConfirmDialog({ title: 'พิมพ์ใบเบิกพร้อมยอดคงเหลือ?', message: `INVS เลข ${data.sub_po_no} — พิมพ์ใบที่มี Lot/EXP ที่ตัดจ่าย และยอดคงเหลือคลัง (รวมทุก lot)`, icon: 'fa-print', iconColor: 'text-cyan-600', confirmBtnClass: 'bg-cyan-700 hover:bg-cyan-800', confirmText: 'พิมพ์',
-          onConfirm: () => printHtmlDocument(buildInvsStockSheetHtml({ req: { ...req, ...fresh }, ctx, unitTitle: req.dept_name || '' })) });
+          onConfirm: () => printHtmlDocument(buildInvsStockSheetHtml({ req: sent, ctx, unitTitle: req.dept_name || '' })) });
       }));
 
       const doApproveOnly = () => confirmOrder(() => ctx.setConfirmDialog({
@@ -8718,7 +8765,7 @@ const AdminConfigView = ({ ctx }) => {
         icon: 'fa-check', iconColor: 'text-emerald-600', confirmBtnClass: 'bg-emerald-600 hover:bg-emerald-700', confirmText: 'อนุมัติ',
         onConfirm: () => run('approve', async () => {
           if (dirty && !invsSent) await saveEdits();
-          await completeInternalRequisition(ctx, req, invsSent ? (req.items || items) : items);
+          await completeInternalRequisition(ctx, req, invsSent ? applyInvsPricesToItems(req.items || items, req.invs_request_lot_snapshot || req.invs_items_snapshot) : items);
           ctx.showToast('อนุมัติแล้ว'); rxTaskDone('adm_internal'); await reload(); onBack();
         })
       }));
@@ -8763,6 +8810,11 @@ const AdminConfigView = ({ ctx }) => {
             {req.note && <div className="mt-4 bg-slate-50 rounded-xl p-3 text-sm"><b>หมายเหตุจากผู้เบิก:</b> {req.note}</div>}
             {req.approval_error && <div className="mt-3 bg-red-50 text-red-700 rounded-xl p-3 text-sm"><b>อนุมัติไม่สำเร็จครั้งก่อน:</b> {req.approval_error} — กดอนุมัติอีกครั้งได้ (ยอดสต็อกที่บวกไปแล้วจะไม่ถูกบวกซ้ำ)</div>}
             {ahead.length > 0 && actionable && <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm"><i className="fa-solid fa-list-ol mr-2"></i>มี {ahead.length} ใบที่ส่งก่อนใบนี้ยังรอ — แนะนำอนุมัติตามลำดับเพื่อให้ INVS ตัด lot ตามลำดับ</div>}
+            {editable && urgents.length > 0 && <div id="iq-urgent-banner" className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-800">
+              <div className="font-bold"><i className="fa-solid fa-truck-medical mr-1"></i>มีใบเบิกด่วนของหน่วยงานนี้ที่ยังไม่รวม {urgents.length} ใบ{urgents.some(sameRound) ? ' — ใบรอบเดียวกันจะรวมให้อัตโนมัติเมื่อกดตรวจ INVS' : ''}</div>
+              {urgents.map(u => <div key={u.id} className="mt-1 flex flex-wrap items-center gap-2"><span>{formatThaiDate(u.form_date || u.round_date)} · รอบที่ {u.round_no || '-'}{u.round_date ? ` (${formatThaiDate(u.round_date)})` : ''} · {(u.items || []).length} รายการ{sameRound(u) ? ' (รอบเดียวกับใบนี้)' : ''}</span>
+                <button onClick={() => run('merge', async () => { await mergeUrgents([u]); await reload(); })} disabled={!!busy} className="px-3 py-1 rounded-lg bg-red-600 text-white font-bold text-xs disabled:opacity-40">รวมเข้าใบนี้</button></div>)}
+            </div>}
           </div>
 
           <div className="flex flex-wrap gap-2 justify-end">
@@ -8834,7 +8886,7 @@ const AdminConfigView = ({ ctx }) => {
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 sticky top-0"><tr><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">ชื่อ</th><th className="p-2 text-right">จำนวน</th><th className="p-2 text-left">Lot / หมดอายุ</th><th className="p-2 text-right">คงคลัง lot</th><th className="p-2 text-right bg-sky-50">คงคลังรวมทุก lot</th><th className="p-2 text-right bg-sky-50">เหลือหลังเบิก</th><th className="p-2 text-right">มูลค่า</th></tr></thead>
                     <tbody>{(preflight.items || []).map(x => (
-                      <tr key={x.drug_id} className="border-t"><td className="p-2 font-mono">{x.drug_id}</td><td className="p-2">{x.drug_name}</td><td className="p-2 text-right">{iqNum(x.qty)}</td><td className="p-2">{x.lot_no} · {x.expiry}</td><td className="p-2 text-right">{iqNum(x.lot_qty_on_hand)}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? iqNum(x.stock_before) : '-'}</td><td className={`p-2 text-right font-bold bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? iqNum(x.stock_after) : '-'}</td><td className="p-2 text-right">{iqMoney(x.value)}</td></tr>
+                      <tr key={x.drug_id} className="border-t"><td className="p-2 font-mono">{x.drug_id}</td><td className="p-2">{x.drug_name}</td><td className="p-2 text-right">{iqNum(x.qty)}</td><td className="p-2">{x.lot_no} · {x.expiry}</td><td className="p-2 text-right">{iqNum(x.lot_qty_on_hand)}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className={`p-2 text-right font-bold bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className="p-2 text-right">{iqMoney(x.value)}</td></tr>
                     ))}</tbody>
                   </table>
                 </div>

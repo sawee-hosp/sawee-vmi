@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.14.0';
+const APP_VERSION = '6.15.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1214,12 +1214,12 @@ const buildInternalReqFormHtml = (opts) => {
   const blank = !!opts.blankQty;
   const colCount = isPharmacy ? 12 : 10;
   // v6.13 ห้องยา: Lot ที่ต้องหยิบ (FEFO) + ยอดเหลือใน lot หลังหยิบ ใต้ชื่อยา
-  const lotExp = function (raw) { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return esc(raw || ''); const y = Number(v.slice(0, 4)); return v.slice(6, 8) + '/' + v.slice(4, 6) + '/' + String(y < 2400 ? y + 543 : y).slice(-2); };
-  const lotPickHtml = function (it) {
+  // v6.15 ช่องคงเหลือ: "10(3)" = คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (หน่วยใหญ่) แล้วตามด้วย lot ที่ต้องหยิบ "43831 [7], 48NVSFSD [3(150)]"
+  const lotPickHtml = function (it, pack) {
     if (!isPharmacy || blank || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
-    return '<div class="lotpick">' + it.lotPlan.map(function (l) { return 'หยิบ Lot <b>' + esc(l.lot_no || '-') + '</b> (EXP ' + lotExp(l.expiry) + ') ' + fmtLotNum(l.qty) + ' → เหลือ ' + fmtLotNum(l.remain); }).join('<br>') + '</div>';
+    const after = it.lotStockAfter != null && it.lotStockAfter !== '' ? '<b>' + esc(formatQty(Math.round(toSafeNumber(it.lotStockAfter) * 1000) / 1000, pack)) + '</b>' : '';
+    return after + '<div class="lotpick">' + it.lotPlan.map(function (l) { return esc(l.lot_no || '-') + ' [' + esc(formatQty(Math.round(toSafeNumber(l.qty) * 1000) / 1000, pack)) + ']'; }).join(', ') + '</div>';
   };
-  const fmtLotNum = function (v) { return toSafeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 }); };
   // v6.6.5 หน่วยงาน: มูลค่า = จำนวนเบิก × ราคา (ช่องจำนวนจ่ายเว้นว่างให้ห้องยาเขียน) · ห้องยา: คิดจากจำนวนจ่ายเหมือนเดิม
   const valueOf = function (it) {
     const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
@@ -1246,7 +1246,7 @@ const buildInternalReqFormHtml = (opts) => {
         const tgt = it.targetQty != null ? z(it.targetQty, qty(toNonNegativeNumber(it.targetQty), pack)) : '-';
         return trOpen(li) +
           '<td class="c">' + n + '</td>' +
-          '<td class="name">' + esc(it.name) + lotPickHtml(it) + '</td>' +
+          '<td class="name">' + esc(it.name) + '</td>' +
           '<td class="c muted">' + esc(it.unit) + '</td>' +
           '<td class="c">' + pack + '</td>' +
           '<td class="c">' + z(it.usage, qty(it.usage, pack)) + '</td>' +
@@ -1255,7 +1255,7 @@ const buildInternalReqFormHtml = (opts) => {
           '<td class="c b">' + (blank ? '' : z(disp, qty(disp, pack))) + '</td>' +
           '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
           '<td class="r b">' + (blank ? '' : z(disp, money(valueOf(it)))) + '</td>' +
-          '<td class="c"></td>' + // คงเหลือ: เว้นให้เขียนในกระดาษ
+          '<td class="c lotcell">' + lotPickHtml(it, pack) + '</td>' + // v6.15 คงเหลือ: คลังใหญ่รวมทุก lot หลังหยิบ (หน่วยใหญ่) + lot ที่ต้องหยิบ · ไม่มีข้อมูล lot = เว้นให้เขียนในกระดาษ
           '<td class="c code">' + esc(drugCodeLabel(it.drugId, oldCodeOf(it.drugId))) + '</td>' +
           '</tr>';
       }
@@ -1301,7 +1301,7 @@ const buildInternalReqFormHtml = (opts) => {
     '.items{font-size:10.5px}.items th,.items td{border:1px solid #444;padding:3px 4px;vertical-align:middle}' +
     '.items th{background:#eee;font-weight:700;text-align:center;line-height:1.25}' +
     '.items tr{page-break-inside:avoid}.items thead{display:table-header-group}' +
-    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.muted{color:#333}.lotpick{font-weight:400;font-size:9px;color:#1e3a8a;line-height:1.3;margin-top:1px}' +
+    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.muted{color:#333}.lotpick{font-weight:400;font-size:8.5px;color:#1e3a8a;line-height:1.25;margin-top:1px;font-family:Consolas,monospace}' +
     ".code{font-family:Consolas,'Courier New',monospace;font-size:9.5px;color:#555}.xs{font-size:8.5px;color:#666;line-height:1.1}" +
     '.grp td{background:#f2f2f2;font-weight:700}.grp .sub{float:right}' +
     '.blue{color:#1d4ed8;font-weight:600}.items td.tgt,.items th.tgt{background:#f1f1f1;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +

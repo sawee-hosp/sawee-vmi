@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.14.0 · Bridge v2.13.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.15.0 · Bridge v2.13.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -165,3 +165,11 @@
   - CLI `cli/trace_dispense.php` (ใน SYNC_BACKGROUND.bat ทำงานเมื่อ `trace.enabled=true`): อ่าน Firestore (meta/lots/master_drugs) + HOSxP `opitemrece` (hn, vn, an, rxdate, icode, qty) → `trace_dispense` (kind D จ่าย / R คืน → lot ล่าสุดของ HN นั้น / X ไม่มี lot) · `trace_lot` remain · `trace_drug_state` (initial เปลี่ยน = รีเซ็ต lot ของยา) · lot รับเข้าใช้ได้ตั้งแต่วันรับ · `--fixture` / `--until` สำหรับทดสอบ
   - Bridge `trace_query` {lot_no | hn, drug_id?, date_from?, date_to?} (admin/pharmacy, อ่านอย่างเดียว, 3,000 แถว) → internal.html เมนู "ย้อนรอย lot (Trace)" (`TraceView`, CSV) — ข้อมูลผู้ป่วยไม่เก็บใน Firestore
 - tests/v614.js
+
+## v6.15
+- มูลค่าที่บันทึก = ราคา INVS ทั้ง 3 ระบบ: รพ.สต. (`handleApprove`) และใบภายใน หน่วยงาน/ห้องยา (`applyInvsPricesToItems` ใน doSendAndApprove / ปิดใบที่ส่ง INVS แล้ว) → price = cost ต่อหน่วยย่อย × บรรจุ VMI, `price_source:'INVS'`, `price_before_invs` · ก่อนส่ง INVS ยังแสดงราคาประมาณจาก master
+- ใบพิมพ์พร้อมยอดคงเหลือ (คิวใบภายใน): ใช้ผลที่ Bridge ตอบกลับ (`data.items`, `data.sub_po_no`) ถ้าอ่านกลับจาก Firestore ไม่ได้ฟิลด์ INVS — เดิมใบว่าง "รวม 0 รายการ / เลขที่ INVS -" · แสดงคำเตือนถ้า Bridge บันทึกกลับ Firestore ไม่สำเร็จ
+- คงคลัง/เหลือหลังเบิกแสดงหน่วยใหญ่ `formatQty` เช่น 9(50) ในใบพิมพ์พร้อมยอดคงเหลือ + หน้าตรวจก่อนส่ง INVS (รพ.สต. และคิวใบภายใน; บรรจุ = vmi_pack_size หรือ pack_ratio)
+- ใบพิมพ์ห้องยา: ช่อง "คงเหลือ" = คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (หน่วยใหญ่, `lotStockAfter`) + lot ที่ต้องหยิบ "43831 [7], 48NVSFSD [3(150)]" (ย้ายจากใต้ชื่อยา) · ไม่มีข้อมูล lot = เว้นว่างให้เขียน
+- ใบเบิกด่วน: แอดมินเปิดใบหน่วยงานในคิว → แถบแดงแสดงใบด่วน Active ของหน่วยงานที่ยังไม่รวม · รอบเดียวกัน (round_id ตรง) รวมอัตโนมัติตอนกด "ตรวจ INVS แล้วอนุมัติ" · รอบอื่น/คีย์ย้อนหลังกด "รวมเข้าใบนี้" เอง (`mergeUrgents` → urgentQty, หมายเหตุ "รวมเบิกด่วน", ใบด่วน Merged + urgent_ids) — เดิมรวมเฉพาะตอนหน่วยงานสร้างใบ
+- tests/v615.js

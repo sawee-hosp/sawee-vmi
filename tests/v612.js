@@ -103,7 +103,7 @@ const open=async(b,uid,time,extra)=>{ seed(uid,extra); const ctx=await b.newCont
         return orig(url,init); }; });
     await p.click('tr.cursor-pointer >> nth=0'); await p.waitForTimeout(800);
     await p.click('button:has-text("ส่ง INVS + บันทึกจัดยา")'); await p.click('.fixed button:has-text("ตรวจ INVS ต่อ")'); await p.waitForTimeout(800);
-    const pf=await p.innerText('body'); check('preflight shows stock all lots + after', pf.includes('คงคลังรวมทุก lot') && pf.includes('5,000') && pf.includes('2,000'));
+    const pf=await p.innerText('body'); check('preflight shows stock all lots + after', pf.includes('คงคลังรวมทุก lot') && /\b5000\b/.test(pf) && /\b2000\b/.test(pf));
     const sendBtn=p.locator('button:has-text("ส่ง INVS + ยืนยันจัดยา")').last(); await sendBtn.click(); await p.waitForTimeout(300);
     await p.locator('.fixed button').last().click(); await p.waitForTimeout(2500);
     const r=await p.evaluate(()=>{const d=window.__STORE.requisitions.get('REQ-2026-10-H1'); return {st:d.status, items:(d.items||[]).map(i=>i.drugId+':'+i.price+':'+(i.price_source||'')+':'+(i.price_before_invs??''))};});

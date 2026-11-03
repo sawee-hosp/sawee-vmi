@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.14.0"></script>
+  <script src="shared.js?v=6.15.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.14.0';
+      var need = '6.15.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1142,7 +1142,7 @@ ORDER BY d.name`;
       const toggleAsu = (v) => { setAsuMode(v); try { localStorage.setItem('rxfill_ph_asu', v ? '1' : '0'); } catch (e) { /* ignore */ } };
       const [asuData, setAsuData] = useState(null);   // { from, to, series: { icode: { ymd: qty } } }
       const [invsLots, setInvsLots] = useState(null); // { drugId: [{lot_no, expiry, qty}] } เรียง FEFO
-      const [storedAsu] = useState(() => { const m = new Map(); if (editReq) (editReq.items || []).forEach(it => { if (it.asu) m.set(String(it.drugId), { stats: it.asu, lotPlan: it.lotPlan || [], dispense: toNonNegativeNumber(it.dispenseQty) }); }); return m; });
+      const [storedAsu] = useState(() => { const m = new Map(); if (editReq) (editReq.items || []).forEach(it => { if (it.asu) m.set(String(it.drugId), { stats: it.asu, lotPlan: it.lotPlan || [], dispense: toNonNegativeNumber(it.dispenseQty), stockAfter: it.lotStockAfter ?? null }); }); return m; });
       // v6.13 รวมยอดรายวันของ icode ทุกตัวที่ผูกกับยา INVS
       const asuSeriesByDrug = useMemo(() => {
         if (!asuData) return null;
@@ -1274,6 +1274,9 @@ ORDER BY d.name`;
           // Lot ที่ต้องหยิบ + เหลือหลังหยิบ (ตามจำนวนเบิกจริง) — ไม่มี lot ใหม่ใช้ของที่บันทึกไว้ถ้าจำนวนเท่าเดิม
           const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan ? plan.lotPlan : allocatePharmLots(lots, dispense))
             : (sAsu && Math.abs(sAsu.dispense - dispense) < 1e-9 ? sAsu.lotPlan : []);
+          // v6.15 คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (ใช้ในช่องคงเหลือของใบพิมพ์)
+          const lotStockAfter = lots ? Math.max(0, Math.round((lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) - dispense) * 1000) / 1000)
+            : (sAsu && Math.abs(sAsu.dispense - dispense) < 1e-9 ? sAsu.stockAfter : null);
           const source = u ? 'usage' : (st.source || (historyIds.has(id) ? 'history' : 'manual'));
           out.push({
             id, base, drug, multiplier, multiplierChanged: !!drug && Math.abs(multiplier - getHosxpMultiplier(drug)) > 1e-9,
@@ -1282,7 +1285,7 @@ ORDER BY d.name`;
             stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit,
             dailyAvg: sug.dailyAvg, target: sug.target, suggested, follow, dispense, blocked, source,
             skipReason: blocked ? '' : sug.skipReason, coverRounds: sug.coverRounds,
-            asu: asuStats, plan, lotPlan, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
+            asu: asuStats, plan, lotPlan, lotStockAfter, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
             value: internalItemValue({ dispenseQty: dispense, packSize: base.packSize, price: base.price }),
             note: st.note || ''
           });
@@ -1440,7 +1443,7 @@ ORDER BY d.name`;
                 requestQty: r.dispense, dispenseQty: r.dispense, followSuggest: r.follow, source: r.source, note: r.note, skipReason: r.skipReason || '',
                 ...(r.asu ? { asu: r.asu, ven: r.ven, ssDays: r.plan?.ssDays ?? null, asuCoverDays: r.plan?.coverDays ?? null, asuTarget: r.plan ? Math.round(r.plan.S * 1000) / 1000 : null,
                   asuNeed: r.plan ? Math.round(r.plan.need * 1000) / 1000 : null, slowMover: !!r.plan?.slow, clearLot: r.follow ? (r.plan?.clearLot || '') : '', roundUpQty: r.follow ? (r.plan?.roundUp || 0) : 0 } : {}),
-                lotPlan: r.lotPlan || []
+                lotPlan: r.lotPlan || [], lotStockAfter: r.lotStockAfter ?? null
               });
               const items = orderRows.map(toItem);
               const zeroRows = derived.filter(r => r.dispense <= 0 && (r.usage > 0 || r.onHandTouched || r.source === 'manual')).map(r => ({
@@ -1745,7 +1748,7 @@ ORDER BY d.name`;
             const typesSrc = ctx.drugTypes || DEFAULT_DRUG_TYPES;
             const rows = derived.filter(r => r.usage > 0 || r.dispense > 0 || r.source === 'manual'); // หมวดที่ซ่อน (5/6) ถูกกรองออกแล้วใน derived
             const roundT = (r) => { const pack = safePackSize(r.base.packSize); return roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target; };
-            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source, lotPlan: r.lotPlan || [] }));
+            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source, lotPlan: r.lotPlan || [], lotStockAfter: r.lotStockAfter ?? null }));
             const cur = effEdit();
             const formNo = estForm.no;
             const formDate = estForm.date;

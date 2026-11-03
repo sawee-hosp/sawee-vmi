@@ -10,7 +10,7 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
   users:{h1:{name:'จนท ทุ่งระยะ',role:'hospital',hospital_id:'H1',email:'h@x',line_user_id:'x'}}}})+';');
 (async()=>{
   const b=await chromium.launch({executablePath:'/opt/pw-browsers/chromium'});
-  const p=await (await b.newContext({viewport:{width:1400,height:900}})).newPage(); const errs=[]; p.on('pageerror',e=>errs.push(e.message));
+  const p=await (await b.newContext({viewport:{width:1400,height:900}})).newPage(); await p.clock.install({time:new Date('2026-10-25T10:00:00')}); const errs=[]; p.on('pageerror',e=>errs.push(e.message));
   await p.goto('file://'+path.join(DIR,'t_app.html')); await p.waitForTimeout(1800);
   await p.click('text=เบิกยาฉุกเฉิน (ใบ ฉ)'); await p.waitForTimeout(500);
   await p.click('#em-new'); await p.waitForTimeout(200);

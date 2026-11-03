@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.10.0';
+const APP_VERSION = '6.12.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -2084,3 +2084,73 @@ const buildPharmacyEstimateFormHtml = (opts) => {
     '<div class="sigs"><div>ลงชื่อ ..................................... ผู้ประมาณการ</div><div>ลงชื่อ ..................................... ผู้ตรวจสอบ</div></div>' +
     '<div class="stamp">พิมพ์เมื่อ: ' + stamp + '</div></body></html>';
 };
+
+// ===== v6.12 ติดตั้งไอคอน Sawee Rxfill บนเดสก์ท็อป (PWA: manifest.webmanifest + sw.js) =====
+// ปุ่มเดียว: Chrome/Edge เปิดหน้าต่างติดตั้งให้ (beforeinstallprompt) · Safari/iPhone ทำเองไม่ได้ → แสดงวิธีเพิ่มไอคอน
+// เตือน 1 ครั้งต่อการ login (จำด้วย uid + เวลา login ล่าสุด) จนกว่าเครื่องนี้จะติดตั้งแล้ว
+const RX_PWA_INSTALLED_KEY = 'rxfill_pwa_installed';
+const RX_PWA_REMIND_KEY = 'rxfill_pwa_reminded';
+let rxPwaPrompt = null;
+const rxPwaLs = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} return null; };
+const rxPwaStandalone = () => { try { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; } catch (e) { return false; } };
+const rxPwaInstalled = () => rxPwaStandalone() || rxPwaLs(RX_PWA_INSTALLED_KEY) === '1';
+const rxPwaIsIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const rxPwaIsSafari = () => /^((?!chrome|chromium|android|edg|crios|fxios).)*safari/i.test(navigator.userAgent);
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); rxPwaPrompt = e; rxPwaLs(RX_PWA_INSTALLED_KEY, null); });
+window.addEventListener('appinstalled', () => { rxPwaPrompt = null; rxPwaLs(RX_PWA_INSTALLED_KEY, '1'); rxPwaCloseModal(); });
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+
+function rxPwaCloseModal() { const el = document.getElementById('rx-pwa-modal'); if (el) el.remove(); }
+function rxPwaManualSteps() {
+  if (rxPwaIsIos()) return 'iPhone/iPad (Safari): กดปุ่ม <b>แชร์</b> (สี่เหลี่ยมมีลูกศรขึ้น) → <b>เพิ่มไปยังหน้าจอโฮม</b> → <b>เพิ่ม</b>';
+  if (rxPwaIsSafari()) return 'Safari บน Mac: เมนู <b>ไฟล์ (File)</b> → <b>เพิ่มไปยัง Dock (Add to Dock)</b>';
+  return 'Chrome: เมนู <b>⋮</b> → <b>แคสต์ บันทึก และแชร์</b> → <b>ติดตั้งหน้าเว็บเป็นแอป</b><br>Edge: เมนู <b>…</b> → <b>แอป</b> → <b>ติดตั้งไซต์นี้เป็นแอป</b><br><span style="color:#64748b">(ถ้าไม่มีเมนูนี้ แปลว่าเครื่องนี้ติดตั้งแล้ว หรือเบราว์เซอร์ไม่รองรับ — แนะนำใช้ Chrome หรือ Edge)</span>';
+}
+function rxPwaShowModal() {
+  if (document.getElementById('rx-pwa-modal')) return;
+  const canPrompt = !!rxPwaPrompt;
+  const wrap = document.createElement('div');
+  wrap.id = 'rx-pwa-modal';
+  wrap.setAttribute('role', 'dialog');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;font-family:Sarabun,Tahoma,sans-serif';
+  wrap.innerHTML = '<div style="background:#fff;border-radius:20px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.3);text-align:center">' +
+    '<img src="icons/icon-192.png" alt="Rxfill" style="width:96px;height:96px;border-radius:22px;margin:0 auto 12px;display:block">' +
+    '<div style="font-size:20px;font-weight:800;color:#0f172a">ติดตั้งไอคอน Sawee Rxfill บนเดสก์ท็อป</div>' +
+    '<div style="font-size:14px;color:#475569;margin:8px 0 16px">เปิดระบบได้ในคลิกเดียวจากหน้าจอ ไม่ต้องจำที่อยู่เว็บ</div>' +
+    (canPrompt
+      ? '<button id="rx-pwa-install" style="width:100%;padding:14px;border:0;border-radius:14px;background:linear-gradient(135deg,#0d9488,#059669);color:#fff;font-size:17px;font-weight:800;cursor:pointer">ติดตั้งเลย (คลิกเดียว)</button>'
+      : '<div style="text-align:left;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:12px;font-size:14px;line-height:1.7;color:#14532d">' + rxPwaManualSteps() + '</div>' +
+        '<button id="rx-pwa-done" style="width:100%;margin-top:12px;padding:12px;border:1px solid #059669;border-radius:14px;background:#fff;color:#047857;font-size:15px;font-weight:800;cursor:pointer">ติดตั้งแล้ว ไม่ต้องเตือนอีก</button>') +
+    '<button id="rx-pwa-later" style="width:100%;margin-top:8px;padding:10px;border:0;background:transparent;color:#64748b;font-size:14px;font-weight:700;cursor:pointer">ไว้ทีหลัง</button></div>';
+  document.body.appendChild(wrap);
+  const ins = document.getElementById('rx-pwa-install'); if (ins) ins.onclick = () => rxInstallApp();
+  const done = document.getElementById('rx-pwa-done'); if (done) done.onclick = () => { rxPwaLs(RX_PWA_INSTALLED_KEY, '1'); rxPwaCloseModal(); };
+  document.getElementById('rx-pwa-later').onclick = rxPwaCloseModal;
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) rxPwaCloseModal(); });
+}
+// ปุ่ม "ติดตั้งไอคอนบนเดสก์ท็อป" ในเมนู — ติดตั้งในคลิกเดียวถ้าเบราว์เซอร์รองรับ
+async function rxInstallApp() {
+  if (rxPwaStandalone()) { alert('กำลังใช้งานจากไอคอนที่ติดตั้งแล้ว'); return 'installed'; }
+  if (!rxPwaPrompt) { rxPwaShowModal(); return 'manual'; }
+  const p = rxPwaPrompt; rxPwaPrompt = null;
+  try {
+    p.prompt();
+    const r = await p.userChoice;
+    if (r && r.outcome === 'accepted') { rxPwaLs(RX_PWA_INSTALLED_KEY, '1'); rxPwaCloseModal(); return 'installed'; }
+  } catch (e) {}
+  return 'dismissed';
+}
+// เรียกหลัง login สำเร็จ (app.html / internal.html) — เตือนครั้งเดียวต่อการ login
+function rxPwaRemindOnLogin(uid) {
+  if (!uid || rxPwaInstalled()) return;
+  let signIn = '';
+  try { signIn = (auth.currentUser && auth.currentUser.metadata && auth.currentUser.metadata.lastSignInTime) || ''; } catch (e) {}
+  const key = String(uid) + '|' + signIn;
+  if (rxPwaLs(RX_PWA_REMIND_KEY) === key) return;
+  // รอให้เบราว์เซอร์ส่งสัญญาณ "ติดตั้งได้" (beforeinstallprompt) ก่อนตัดสินใจ
+  setTimeout(() => {
+    if (rxPwaInstalled()) return;
+    if (rxPwaPrompt || rxPwaIsIos() || rxPwaIsSafari()) { rxPwaLs(RX_PWA_REMIND_KEY, key); rxPwaShowModal(); }
+    // Chrome/Edge ไม่ส่งสัญญาณ = ติดตั้งแล้ว (หรือเบราว์เซอร์ไม่รองรับ) → ไม่เตือน
+  }, 3500);
+}

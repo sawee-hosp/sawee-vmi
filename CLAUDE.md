@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.12.0 · Bridge v2.11.2)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.13.0 · Bridge v2.12.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -139,3 +139,16 @@
 - หน้าตรวจก่อนส่ง INVS (ใบ รพ.สต. + คิวใบภายใน) แสดง "คงคลังรวมทุก lot" (stock_before) และ "เหลือหลังเบิก" (stock_after) ของคลังใหญ่
 - tests/v612.js · v69_emergency.js ล็อกวันที่ 25 ต.ค. (เดิมผลขึ้นกับวันที่รัน: รพ.สต. สร้างใบได้เฉพาะวันที่ 20-31)
 - ราคาตาม INVS (ข้อ 7 แบบ ข): `handleApprove(opts)` ใบที่ส่ง INVS แล้ว → `items[].price` = cost ต่อหน่วยย่อยจาก Bridge (ผลส่ง `data.items` หรือ `invs_items_snapshot`/`invs_request_lot_snapshot`) × packSize ของ VMI · เก็บ `price_before_invs`, `price_source:'INVS'` · ไม่แก้ราคาใน master_drugs (ใช้ปุ่ม Sync รายการยาจาก INVS เหมือนเดิม)
+
+## v6.13 ห้องยา: สูตร ASU 180 วัน (PharmacyReqView, เช็กบ็อกซ์ "สูตร ASU 180 วัน" ค่าเริ่มต้นเปิด จำใน localStorage `rxfill_ph_asu`)
+- Bridge 2.12.0 (อ่านอย่างเดียว): `hosxp_usage_daily` {date_from,date_to} → series {icode:{YYYY-MM-DD:qty สุทธิ OPD+IPD}} (config `hosxp.daily_sql` ไม่บังคับ) · `invs_lots` {drug_ids[], stock_id?} → lot คงเหลือคลังจ่าย (ค่าเริ่มต้น invs.default_stock_id) เรียง EXP → RECORD_NUMBER
+- ปุ่ม "ยอดใช้ 180 วัน + lot INVS" (yesterday−179 … yesterday) · shared.js `calcAsuStats` / `calcPharmacyPlanV2` / `allocatePharmLots`
+  - d̄ = max(เฉลี่ย 180 วัน, เฉลี่ย 60 วันล่าสุด) วันปฏิทิน × ตัวคูณ HOSxP→INVS · S = d̄ × (14 + 3 + SS) · SS ตาม `master_drugs.ven` V7/E3/N1 (แอดมินเลือกในตารางห้องยา ค่าเริ่มต้น N)
+  - IP = คงเหลือ (เครดิตเดิม − ยอดใช้รอบนี้ หรือที่แก้เอง) + ค้างรับ · Q = S − IP → ปัดเต็มแพ็ก → ปัดเลขสวย (<10:1, ≤50:5, ≤200:10, ≤1000:50, >1000:100 ตามจำนวนแพ็ก) → ไม่เกิน Maximum
+  - เคลียร์ lot: จัดสรร FEFO ถ้า lot สุดท้ายเหลือ ≤ max(20% ของ Q, 1 แพ็ก, 7 วันของ d̄) เบิกทั้ง lot (ไม่ปัดเลขสวย) · คลังใหญ่ไม่พอ = ลดเหลือที่มี + เตือน
+  - ยาใช้น้อย (ยอด 17 วัน < 1 แพ็ก หรือ < 200 บาท): ข้ามจนกว่า IP < ยอด 17 วัน แล้วเบิกให้พอ ≥ 1 แพ็ก (สูงสุด 60 วัน, มูลค่า ≤ 2,000 บาท)
+  - ไม่ใช่ยาใช้น้อย แต่ IP พอถึงรอบหน้าและยอดที่ขาด < minOrderValue = รวบไปรอบหน้า
+- ตาราง: คอลัมน์ "Lot ที่หยิบ · เหลือหลังหยิบ" + หมายเหตุ เคลียร์ lot / ปัดจาก / ใช้น้อยสำรอง · ใบพิมพ์ห้องยา (`buildInternalReqFormHtml` `lotPickHtml`) แสดง "หยิบ Lot X (EXP) n → เหลือ m" ใต้ชื่อยา · Excel มีคอลัมน์ lot
+- บันทึกในใบ: `formula:'asu180'`, `asu_from/asu_to`, items `asu{d180,d60,dbar,sigma,adi,cv2,activeDays}`, `ven`, `ssDays`, `asuTarget`, `asuNeed`, `slowMover`, `clearLot`, `roundUpQty`, `lotPlan[{lot_no,expiry,qty,lot_qty,remain}]`
+- ส่ง INVS ยังเป็น 1 บรรทัด/ยาเหมือนเดิม (lot plan เป็นแผนหยิบ — ยืนยันตัด lot ใน INVS)
+- ขั้นต่อไป (ยังไม่ทำ): คลังห้องยาแยก lot + บันทึก initial, Dashboard วันยาขาด/fill rate, Traceability (ฐานบนเครื่อง Bridge ใน LAN ไม่เขียน HOSxP)

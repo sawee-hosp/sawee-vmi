@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.12.0"></script>
+  <script src="shared.js?v=6.13.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.12.0';
+      var need = '6.13.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -943,6 +943,8 @@ ORDER BY d.name`;
       return { byDrug, unmatched };
     };
 
+    // v6.13 EXP สั้น ๆ 20270131 → 31/01/70
+    const fmtExpShort = (raw) => { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return raw ? String(raw) : ''; const y = Number(v.slice(0, 4)); return `${v.slice(6, 8)}/${v.slice(4, 6)}/${String(y < 2400 ? y + 543 : y).slice(-2)}`; };
     const PharmacyReqView = ({ ctx, editReq, round, onDone }) => {
       const isAdmin = ctx.isAdmin;
       const today = toYmd(new Date());
@@ -962,6 +964,24 @@ ORDER BY d.name`;
       const [minOrderValue, setMinOrderValue] = useState(() => toNonNegativeNumber(editReq?.min_order_value ?? ctx.dept?.min_order_value, 100));
       const [coverDays, setCoverDays] = useState(() => toNonNegativeNumber(editReq?.cover_days, 0) || toNonNegativeNumber(ctx.dept?.cover_days, 0) || INTERNAL_DEFAULT_COVER_DAYS);
       const [note, setNote] = useState(editReq?.note || '');
+      // v6.13 สูตร ASU 180 วัน (14 + lead 3 + SS ตาม VEN) + lot INVS (FEFO / เคลียร์ lot)
+      const [asuMode, setAsuMode] = useState(() => { if (editReq) return editReq.formula === 'asu180'; try { return localStorage.getItem('rxfill_ph_asu') !== '0'; } catch (e) { return true; } });
+      const toggleAsu = (v) => { setAsuMode(v); try { localStorage.setItem('rxfill_ph_asu', v ? '1' : '0'); } catch (e) { /* ignore */ } };
+      const [asuData, setAsuData] = useState(null);   // { from, to, series: { icode: { ymd: qty } } }
+      const [invsLots, setInvsLots] = useState(null); // { drugId: [{lot_no, expiry, qty}] } เรียง FEFO
+      const [storedAsu] = useState(() => { const m = new Map(); if (editReq) (editReq.items || []).forEach(it => { if (it.asu) m.set(String(it.drugId), { stats: it.asu, lotPlan: it.lotPlan || [], dispense: toNonNegativeNumber(it.dispenseQty) }); }); return m; });
+      // v6.13 รวมยอดรายวันของ icode ทุกตัวที่ผูกกับยา INVS
+      const asuSeriesByDrug = useMemo(() => {
+        if (!asuData) return null;
+        const index = buildHosxpIndex(ctx.drugs); const m = new Map();
+        Object.entries(asuData.series || {}).forEach(([icode, days]) => {
+          const drug = index.get(String(icode)); if (!drug) return;
+          const id = String(drug.drug_id); const cur = m.get(id) || {};
+          Object.entries(days || {}).forEach(([d, q]) => { cur[d] = (cur[d] || 0) + toSafeNumber(q); });
+          m.set(id, cur);
+        });
+        return m;
+      }, [asuData, ctx.drugs]);
 
       // ยอดใช้ที่ดึงมา (raw) + meta
       const [usageRaw, setUsageRaw] = useState(null);
@@ -1065,10 +1085,18 @@ ORDER BY d.name`;
           const onHand = onHandTouched ? toNonNegativeNumber(st.onHand) : Math.max(0, stockBal - usage);
           const inTransit = inTransitMap.get(id) || 0;
           const blocked = String(base.type) === '6' || !!base.isDiscontinued;
-          const sug = calcPharmacySuggestion({ usage, days: calcDays, coverDays, roundDays, minOrderValue, onHand, inTransit, item: base });
+          const sAsu = storedAsu.get(id);
+          const asuStats = asuMode ? (asuSeriesByDrug ? calcAsuStats(asuSeriesByDrug.get(id) || {}, asuData.from, asuData.to, multiplier) : (sAsu ? sAsu.stats : null)) : null;
+          const lots = asuMode && invsLots ? (invsLots[id] || []) : null;
+          const plan = asuStats ? calcPharmacyPlanV2({ stats: asuStats, onHand, inTransit, item: base, ven: drugVen(drug), lots, minOrderValue }) : null;
+          const sug = plan ? { dailyAvg: plan.dbar, target: plan.S > 0 ? Math.ceil(plan.S / safePackSize(base.packSize) - 1e-9) * safePackSize(base.packSize) : 0, suggested: plan.suggested, skipReason: plan.suggested > 0 ? '' : plan.reason, coverRounds: plan.coverRounds }
+            : calcPharmacySuggestion({ usage, days: calcDays, coverDays, roundDays, minOrderValue, onHand, inTransit, item: base });
           const suggested = blocked ? 0 : sug.suggested;
           const follow = st.dispenseManual === null || st.dispenseManual === undefined;
           const dispense = follow ? suggested : toNonNegativeNumber(st.dispenseManual);
+          // Lot ที่ต้องหยิบ + เหลือหลังหยิบ (ตามจำนวนเบิกจริง) — ไม่มี lot ใหม่ใช้ของที่บันทึกไว้ถ้าจำนวนเท่าเดิม
+          const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan ? plan.lotPlan : allocatePharmLots(lots, dispense))
+            : (sAsu && Math.abs(sAsu.dispense - dispense) < 1e-9 ? sAsu.lotPlan : []);
           const source = u ? 'usage' : (st.source || (historyIds.has(id) ? 'history' : 'manual'));
           out.push({
             id, base, drug, multiplier, multiplierChanged: !!drug && Math.abs(multiplier - getHosxpMultiplier(drug)) > 1e-9,
@@ -1077,12 +1105,13 @@ ORDER BY d.name`;
             stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit,
             dailyAvg: sug.dailyAvg, target: sug.target, suggested, follow, dispense, blocked, source,
             skipReason: blocked ? '' : sug.skipReason, coverRounds: sug.coverRounds,
+            asu: asuStats, plan, lotPlan, lotsLoaded: !!lots, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
             value: internalItemValue({ dispenseQty: dispense, packSize: base.packSize, price: base.price }),
             note: st.note || ''
           });
         });
         return out;
-      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue]);
+      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue, asuMode, asuSeriesByDrug, asuData, invsLots, storedAsu]);
       const derived = useMemo(() => derivedAll.filter(r => !hideTypes.includes(String(r.base.type))), [derivedAll, hideTypes]);
       const hiddenByType = useMemo(() => { const m = {}; derivedAll.forEach(r => { const t = String(r.base.type); if (hideTypes.includes(t)) m[t] = (m[t] || 0) + 1; }); return m; }, [derivedAll, hideTypes]);
 
@@ -1117,6 +1146,31 @@ ORDER BY d.name`;
       }), [derived]);
 
       const rowIds = useMemo(() => new Set(derived.map(r => r.id)), [derived]);
+
+      const fetchAsu = async () => {
+        const asuTo = yesterday, asuFrom = addDaysYmd(yesterday, -179);
+        setBusy('asu');
+        try {
+          const data = await callInvsBridge('hosxp_usage_daily', '', { date_from: asuFrom, date_to: asuTo });
+          setAsuData({ from: asuFrom, to: asuTo, series: data.series || {}, fetchedAt: new Date().toISOString(), icodes: data.icode_count || 0 });
+          const index = buildHosxpIndex(ctx.drugs); const ids = new Set(derivedAll.map(r => r.id));
+          Object.keys(data.series || {}).forEach(ic => { const d = index.get(String(ic)); if (d) ids.add(String(d.drug_id)); });
+          const all = [...ids]; const lots = {};
+          for (let i = 0; i < all.length; i += 1000) {
+            const res = await callInvsBridge('invs_lots', '', { drug_ids: all.slice(i, i + 1000), stock_id: safeText(ctx.dept?.invs_stock_id) });
+            Object.assign(lots, res.lots || {});
+          }
+          setInvsLots(lots);
+          ctx.showToast(`คำนวณ ASU 180 วัน: ยอดใช้ ${fmtNum(data.icode_count || 0)} icode · lot INVS ${fmtNum(Object.keys(lots).length)} รายการ`);
+        } catch (e) { ctx.showToast('ดึงยอดใช้รายวัน / lot INVS ไม่สำเร็จ: ' + (e?.message || e) + ' (ต้องใช้ Bridge 2.12.0)', 'error'); }
+        finally { setBusy(''); }
+      };
+      const saveVen = async (drugId, ven) => {
+        try {
+          await db.collection('master_drugs').doc(String(drugId)).update({ ven, ven_updated_at: firebase.firestore.FieldValue.serverTimestamp(), ven_updated_by: safeText(ctx.currentUser.name) });
+          await ctx.reloadMasters(); ctx.showToast(`ตั้งกลุ่ม ${ven} แล้ว`);
+        } catch (e) { ctx.showToast('บันทึก VEN ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+      };
 
       // ----- ดึงยอดใช้ -----
       const fetchFromBridge = async () => {
@@ -1203,7 +1257,10 @@ ORDER BY d.name`;
                 opdRaw: r.opdRaw, ipdRaw: r.ipdRaw, hosxpMultiplier: r.multiplier, hosxpCodes: r.icodes, hosxpUnits: r.hosxpUnits,
                 usage: r.usage, dailyAvg: Math.round(r.dailyAvg * 1000) / 1000, onHand: r.onHand, onHandTouched: r.onHandTouched,
                 stockBefore: r.stockBal, inTransit: r.inTransit, targetQty: r.target, suggestedQty: r.suggested,
-                requestQty: r.dispense, dispenseQty: r.dispense, followSuggest: r.follow, source: r.source, note: r.note, skipReason: r.skipReason || ''
+                requestQty: r.dispense, dispenseQty: r.dispense, followSuggest: r.follow, source: r.source, note: r.note, skipReason: r.skipReason || '',
+                ...(r.asu ? { asu: r.asu, ven: r.ven, ssDays: r.plan?.ssDays ?? null, asuCoverDays: r.plan?.coverDays ?? null, asuTarget: r.plan ? Math.round(r.plan.S * 1000) / 1000 : null,
+                  asuNeed: r.plan ? Math.round(r.plan.need * 1000) / 1000 : null, slowMover: !!r.plan?.slow, clearLot: r.follow ? (r.plan?.clearLot || '') : '', roundUpQty: r.follow ? (r.plan?.roundUp || 0) : 0 } : {}),
+                lotPlan: r.lotPlan || []
               });
               const items = orderRows.map(toItem);
               const zeroRows = derived.filter(r => r.dispense <= 0 && (r.usage > 0 || r.onHandTouched || r.source === 'manual')).map(r => ({
@@ -1228,6 +1285,7 @@ ORDER BY d.name`;
               }));
               return { items, zeroRows, stockOps, multOps, extra: {
                   note: safeText(note), period_from: from, period_to: to, period_days: calcDays, cover_days: coverDays,
+                  formula: asuMode ? 'asu180' : 'legacy', asu_from: asuData?.from || editReq?.asu_from || '', asu_to: asuData?.to || editReq?.asu_to || '', lots_fetched_at: invsLots ? new Date().toISOString() : (editReq?.lots_fetched_at || null),
                   usage_source: usageMeta.source, usage_file: usageMeta.fileName || '', usage_fetched_at: usageMeta.fetchedAt || null,
                   round_days: roundDays, min_order_value: minOrderValue, prev_req_id: prevReq?.id || '', prev_period_to: lastPeriodTo || '', skipped_suggest_count: stats.skip,
                   zero_rows: zeroRows, unmatched: unmatched.slice(0, 300), unmatched_count: unmatched.length,
@@ -1315,6 +1373,12 @@ ORDER BY d.name`;
               <label className="block" title="ถ้ายอดที่ต้องเบิกมีมูลค่าต่ำกว่านี้ และเครดิตยังพอใช้อย่างน้อยครึ่งรอบ ระบบจะแนะนำให้รวบไปเบิกรอบหน้า"><span className="text-xs font-bold text-slate-500">รวบเบิกถ้าน้อยกว่า (บาท)</span>
                 <input type="number" id="min-order-value" min="0" step="50" value={minOrderValue} onChange={e => setMinOrderValue(Math.max(0, toNonNegativeNumber(e.target.value, 0)))} className="block mt-1 p-2.5 border border-slate-300 rounded-xl w-28 text-right" /></label>
               <div className="flex flex-wrap gap-2 lg:justify-end">
+                <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-800 text-sm font-bold cursor-pointer" title="Target = ค่าเฉลี่ยใช้ต่อวัน 180 วัน (เทียบ 60 วันล่าสุด ใช้ค่าที่สูงกว่า) × (รอบ 14 + lead time 3 + safety stock ตาม VEN)">
+                  <input type="checkbox" id="asu-mode" checked={asuMode} onChange={e => toggleAsu(e.target.checked)} />สูตร ASU 180 วัน
+                </label>
+                {asuMode && <button id="asu-fetch" onClick={fetchAsu} disabled={!!busy} className="px-4 py-2.5 rounded-xl bg-indigo-600 text-white font-bold shadow hover:bg-indigo-700 disabled:opacity-40">
+                  {busy === 'asu' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-chart-line mr-2"></i>}ยอดใช้ 180 วัน + lot INVS
+                </button>}
                 <button onClick={fetchFromBridge} disabled={!!busy || !!editReq} className="px-4 py-2.5 rounded-xl bg-teal-600 text-white font-bold shadow hover:bg-teal-700 disabled:opacity-40">
                   {busy === 'bridge' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-database mr-2"></i>}ดึงยอดใช้จาก HOSxP
                 </button>
@@ -1336,6 +1400,7 @@ ORDER BY d.name`;
                   {usageMeta.combinedOnly && ' · ไฟล์มีแต่ยอดรวม (ไม่แยก OPD/IPD)'}
                 </span>
               ) : <span className="text-slate-400"><i className="fa-regular fa-circle mr-1"></i>ยังไม่ได้ดึงยอดใช้</span>}
+              {asuMode && <span id="asu-status" className={asuData || storedAsu.size ? 'text-indigo-700' : 'text-slate-400'}><i className="fa-solid fa-chart-line mr-1"></i>{asuData ? `ASU ${formatThaiDate(asuData.from)} – ${formatThaiDate(asuData.to)} · เป้า = d̄ × (14 + 3 + SS: V7/E3/N1 วัน)${invsLots ? ' · lot INVS พร้อม' : ''}` : storedAsu.size ? 'ใช้ค่า ASU ที่บันทึกไว้ในใบนี้' : 'ยังไม่ได้ดึงยอดใช้ 180 วัน (ใช้สูตรเดิมไปก่อน)'}</span>}
               {overlapReq && <span className="text-red-600 font-bold"><i className="fa-solid fa-triangle-exclamation mr-1"></i>ทับช่วงกับใบ {overlapReq.doc_no || overlapReq.id}</span>}
             </div>
           </div>
@@ -1406,14 +1471,15 @@ ORDER BY d.name`;
                     <th className="p-2 text-right bg-slate-100">เฉลี่ย/วัน</th>
                     <th className="p-2 text-right bg-slate-100" title="คงเหลือจากใบก่อน − ยอดใช้รอบนี้">เครดิต</th>
                     <th className="p-2 text-right bg-slate-100">ค้างรับ</th>
-                    <th className="p-2 text-right bg-slate-100">เป้า {coverDays} วัน</th>
+                    <th className="p-2 text-right bg-slate-100">{asuMode ? 'เป้า (14+3+SS)' : `เป้า ${coverDays} วัน`}</th>
                     <th className="p-2 text-right bg-slate-100">แนะนำ</th>
                     <th className="p-2 text-right bg-slate-100">เบิกจริง</th>
+                    <th className="p-2 text-left bg-indigo-50 min-w-[12rem]">Lot ที่หยิบ · เหลือหลังหยิบ</th>
                     <th className="p-2 text-right bg-slate-100">มูลค่า</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.length === 0 && <tr><td colSpan="12" className="p-10 text-center text-slate-400">{usageMeta ? 'ไม่มีรายการตามตัวกรอง' : 'เลือกช่วงวันที่แล้วกด "ดึงยอดใช้จาก HOSxP" หรือ "นำเข้าไฟล์"'}</td></tr>}
+                  {visible.length === 0 && <tr><td colSpan="13" className="p-10 text-center text-slate-400">{usageMeta ? 'ไม่มีรายการตามตัวกรอง' : 'เลือกช่วงวันที่แล้วกด "ดึงยอดใช้จาก HOSxP" หรือ "นำเข้าไฟล์"'}</td></tr>}
                   {visible.slice(0, 800).map(r => {
                     const pack = safePackSize(r.base.packSize);
                     const hint = !r.follow ? dispenseStepHint(r.dispense, r.base) : null;
@@ -1426,6 +1492,8 @@ ORDER BY d.name`;
                             {r.icodes.length > 0 && <span className="text-purple-500">HOSxP {r.icodes.join(',')}</span>}
                             <span>{r.base.unit}{pack > 1 ? ` ×${pack}` : ''}</span>
                             {r.hosxpUnits && r.hosxpUnits !== r.base.unit && <span className="text-amber-600">HOSxP หน่วย: {r.hosxpUnits}</span>}
+                            {asuMode && (isAdmin && r.drug ? <select aria-label={`VEN ${r.base.name}`} value={r.ven} onChange={e => saveVen(r.id, e.target.value)} className={`text-[10px] font-bold rounded border px-0.5 ${r.ven === 'V' ? 'text-red-700 border-red-300' : r.ven === 'E' ? 'text-amber-700 border-amber-300' : 'text-slate-500 border-slate-300'}`}><option value="V">V</option><option value="E">E</option><option value="N">N</option></select>
+                              : <span className={`font-bold ${r.ven === 'V' ? 'text-red-600' : r.ven === 'E' ? 'text-amber-600' : 'text-slate-400'}`}>VEN {r.ven}</span>)}
                             {r.source === 'manual' && <span className="text-teal-600 font-bold">เพิ่มเอง</span>}
                             {r.source === 'history' && <span>เคยเบิก</span>}
                             {r.blocked && <span className="text-red-500 font-bold">{String(r.base.type) === '6' ? 'วัคซีน (ไม่ส่ง INVS)' : 'ยกเลิกใช้'}</span>}
@@ -1436,7 +1504,7 @@ ORDER BY d.name`;
                         <td className="p-2 text-right"><NumCell value={r.multiplier} touched={r.multiplierChanged} ariaLabel={`ตัวคูณ ${r.base.name}`} className="w-16"
                           onCommit={v => patchRow(r.id, { multiplier: v === null || v <= 0 ? getHosxpMultiplier(r.drug) : v })} /></td>
                         <td className="p-2 text-right tnum font-semibold">{r.usage ? fmtNum(r.usage) : '-'}</td>
-                        <td className="p-2 text-right tnum">{r.dailyAvg ? fmtNum(r.dailyAvg, 1) : '-'}</td>
+                        <td className="p-2 text-right tnum" title={r.asu ? `เฉลี่ย 180 วัน ${fmtNum(r.asu.d180, 2)} · 60 วัน ${fmtNum(r.asu.d60, 2)} · σ ${fmtNum(r.asu.sigma, 2)} · วันที่มีการจ่าย ${r.asu.activeDays}${r.asu.adi ? ` · ADI ${r.asu.adi}` : ''}` : ''}>{r.dailyAvg ? fmtNum(r.dailyAvg, r.dailyAvg < 10 ? 2 : 1) : '-'}{r.asu && <div className="text-[10px] text-indigo-500">{r.asu.d60 > r.asu.d180 ? '60 วัน' : '180 วัน'}</div>}</td>
                         <td className="p-2 text-right whitespace-nowrap">
                           <NumCell value={r.onHand} touched={r.onHandTouched} ariaLabel={`เครดิต ${r.base.name}`} onCommit={v => patchRow(r.id, { onHand: v })} />
                           {!r.onHandTouched && r.hasStock && r.usage > 0 && <div className="text-[10px] text-slate-400">{fmtNum(r.stockBal)} − {fmtNum(r.usage)}</div>}
@@ -1446,18 +1514,27 @@ ORDER BY d.name`;
                         <td className="p-2 text-right tnum">{r.target ? fmtNum(r.target) : '-'}</td>
                         <td className="p-2 text-right tnum font-bold text-teal-700">{r.suggested ? <QtyWithPack qty={r.suggested} packSize={pack} /> : '-'}
                           {r.skipReason && <div className="mt-0.5"><span className="text-[10px] font-bold text-amber-800 bg-amber-100 rounded px-1.5 py-0.5 whitespace-nowrap">ข้าม: {r.skipReason}</span></div>}
-                          {r.suggested > 0 && r.coverRounds >= 1.9 && <div className="text-[10px] text-slate-400 font-normal">พอ ~{Math.floor(r.coverRounds)} รอบ</div>}</td>
+                          {r.suggested > 0 && r.coverRounds >= 1.9 && <div className="text-[10px] text-slate-400 font-normal">พอ ~{Math.floor(r.coverRounds)} รอบ</div>}
+                          {r.plan && r.suggested > 0 && <div className="text-[10px] font-normal space-y-0.5 mt-0.5">
+                            {r.plan.clearLot && <div className="text-indigo-700 font-bold">เคลียร์ lot {r.plan.clearLot}</div>}
+                            {!r.plan.clearLot && r.plan.roundUp > 0 && <div className="text-slate-400">ปัดจาก {fmtNum(Math.ceil(r.plan.need))}</div>}
+                            {r.plan.slow && <div className="text-amber-700">ใช้น้อย สำรอง ~{r.plan.coverDays} วัน</div>}
+                            {r.plan.lotShort && <div className="text-red-600 font-bold">คลังใหญ่ไม่พอ</div>}
+                          </div>}</td>
                         <td className="p-2 text-right whitespace-nowrap">
                           <NumCell value={r.dispense} touched={!r.follow} disabled={r.blocked} ariaLabel={`เบิกจริง ${r.base.name}`} onCommit={v => patchRow(r.id, { dispenseManual: v === null ? null : v })} />
                           {pack > 1 && r.dispense > 0 && <div className="text-[10px] text-slate-400">= {formatQty(r.dispense, pack)} แพ็ค</div>}
                           {!r.follow && <button onClick={() => patchRow(r.id, { dispenseManual: null })} className="text-[10px] text-teal-600 hover:underline block ml-auto">ใช้ตามแนะนำ</button>}
                           {hint && <button onClick={() => patchRow(r.id, { dispenseManual: hint })} className="text-[10px] text-amber-700 hover:underline block ml-auto">ปัดเป็น {fmtNum(hint)}</button>}
                         </td>
+                        <td className="p-2 text-[11px] bg-indigo-50/40">{r.lotPlan && r.lotPlan.length ? r.lotPlan.map((l, i) => <div key={i} className="whitespace-nowrap"><b className="font-mono">{l.lot_no || '-'}</b> <span className="text-slate-400">{fmtExpShort(l.expiry)}</span> หยิบ <b>{fmtNum(l.qty)}</b> → เหลือ <b className={l.remain > 0 ? 'text-slate-700' : 'text-indigo-700'}>{fmtNum(l.remain)}</b></div>)
+                          : r.dispense > 0 ? <span className="text-slate-400">{asuMode ? (r.lotsLoaded ? 'ไม่มี lot ในคลัง INVS' : 'กด "ยอดใช้ 180 วัน + lot INVS"') : '-'}</span> : ''}
+                          {r.lotShort && <div className="text-red-600 font-bold">คลังมีไม่พอจ่าย</div>}</td>
                         <td className="p-2 text-right tnum">{r.value ? fmtMoney(r.value) : '-'}</td>
                       </tr>
                     );
                   })}
-                  {visible.length > 800 && <tr><td colSpan="12" className="p-4 text-center text-slate-400">แสดง 800 จาก {fmtNum(visible.length)} รายการ — ใช้ตัวกรองหรือค้นหาเพื่อดูรายการอื่น (ทุกรายการยังถูกคำนวณและส่งตามปกติ)</td></tr>}
+                  {visible.length > 800 && <tr><td colSpan="13" className="p-4 text-center text-slate-400">แสดง 800 จาก {fmtNum(visible.length)} รายการ — ใช้ตัวกรองหรือค้นหาเพื่อดูรายการอื่น (ทุกรายการยังถูกคำนวณและส่งตามปกติ)</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -1486,7 +1563,7 @@ ORDER BY d.name`;
             const typesSrc = ctx.drugTypes || DEFAULT_DRUG_TYPES;
             const rows = derived.filter(r => r.usage > 0 || r.dispense > 0 || r.source === 'manual'); // หมวดที่ซ่อน (5/6) ถูกกรองออกแล้วใน derived
             const roundT = (r) => { const pack = safePackSize(r.base.packSize); return roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target; };
-            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source }));
+            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source, lotPlan: r.lotPlan || [] }));
             const cur = effEdit();
             const formNo = estForm.no;
             const formDate = estForm.date;
@@ -1500,7 +1577,7 @@ ORDER BY d.name`;
               sorted.forEach(r => {
                 if (String(r.type) !== lastType) { out.push([typesSrc[r.type] || `หมวด ${r.type}`]); lastType = String(r.type); }
                 const value = Math.round(internalItemValue(r) * 100) / 100; total += value;
-                i += 1; out.push([i, r.name, r.unit, safePackSize(r.packSize), r.usage, r.onHand, r.targetQty, fillQty ? r.dispenseQty : '', toNonNegativeNumber(r.price), fillQty ? value : '', '', r.drugId]);
+                i += 1; out.push([i, r.name, r.unit, safePackSize(r.packSize), r.usage, r.onHand, r.targetQty, fillQty ? r.dispenseQty : '', toNonNegativeNumber(r.price), fillQty ? value : '', '', r.drugId, fillQty ? (r.lotPlan || []).map(l => `${l.lot_no} หยิบ ${l.qty} เหลือ ${l.remain}`).join(' / ') : '']);
               });
               if (fillQty) out.push([], ['', `รวม ${i} รายการ`, '', '', '', '', '', '', '', Math.round(total * 100) / 100]);
               return out;

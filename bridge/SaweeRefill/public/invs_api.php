@@ -28,7 +28,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.11.2';
+const BRIDGE_VERSION = '2.12.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -626,7 +626,7 @@ $raw=(string)file_get_contents('php://input');
 $body=json_decode($raw,true);
 if (!is_array($body)) respondError('JSON_INVALID','Request body ต้องเป็น JSON',400);
 $action=cleanText($body['action'] ?? '');
-if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
+if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send','hosxp_usage_daily','invs_lots'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
 
 // ----------------------------- list_depts (READ-ONLY) -----------------------------
 if ($action==='list_depts') {
@@ -1253,6 +1253,67 @@ if ($action==='hosxp_usage') {
         if (isset($hdb) && $hdb instanceof mysqli) { try { $hdb->close(); } catch (Throwable $ignore) {} }
         logBridge($config,'ERROR','HOSXP_USAGE_FAILED',['uid'=>$actor['uid'] ?? '','error'=>$e->getMessage()]);
         respondError('HOSXP_ERROR','ดึงยอดใช้จาก HOSxP ไม่สำเร็จ: '.$e->getMessage(),500);
+    }
+}
+
+// v2.12.0 ยอดใช้ HOSxP รายวันต่อ icode (อ่านอย่างเดียว) — ห้องยาคำนวณ ASU 180 วัน / σ / ADI · ไม่มีข้อมูลผู้ป่วย มีแค่ยอดรวมต่อวัน
+if ($action==='hosxp_usage_daily') {
+    $actor=requireRoles($config,$body,['admin','pharmacy']);
+    $from=cleanText($body['date_from'] ?? ''); $to=cleanText($body['date_to'] ?? '');
+    if (!validDateYmd($from) || !validDateYmd($to)) respondError('DATE_INVALID','date_from / date_to ต้องเป็นรูปแบบ YYYY-MM-DD',400);
+    if ($from>$to) respondError('DATE_INVALID','วันเริ่มต้องไม่เกินวันสิ้นสุด',400);
+    $days=(int)((strtotime($to)-strtotime($from))/86400)+1;
+    if ($days>400) respondError('DATE_RANGE_TOO_LONG','ช่วงวันที่ยาวเกิน 400 วัน',400);
+    try {
+        $hdb=connectHosxp($config);
+        $customSql=trim((string)($config['hosxp']['daily_sql'] ?? ''));
+        // ต้องคืนคอลัมน์ icode, d (วันที่), qty — ยอดสุทธิ (คืนยาติดลบ) OPD+IPD
+        $sql=$customSql!=='' ? $customSql : "SELECT o.icode, DATE(o.rxdate) AS d, SUM(o.qty) AS qty FROM opitemrece o WHERE o.rxdate BETWEEN ? AND ? GROUP BY o.icode, DATE(o.rxdate)";
+        $dateMode=strtolower(cleanText($config['hosxp']['date_mode'] ?? 'auto')) ?: 'auto';
+        $run=function(string $f,string $t) use ($hdb,$sql) { $st=$hdb->prepare($sql); $st->bind_param('ss',$f,$t); $st->execute(); $res=$st->get_result(); $out=[]; while ($r=$res->fetch_assoc()) $out[]=$r; $st->close(); return $out; };
+        $usedMode='ce';
+        if ($dateMode==='be') { $raw=$run(shiftYears($from,543),shiftYears($to,543)); $usedMode='be'; }
+        else { $raw=$run($from,$to); if (!$raw && $dateMode==='auto') { $raw=$run(shiftYears($from,543),shiftYears($to,543)); if ($raw) $usedMode='be'; } }
+        $series=[]; $n=0;
+        foreach ($raw as $r) {
+            $icode=cleanText($r['icode'] ?? ''); $d=substr(cleanText($r['d'] ?? ''),0,10); if ($icode==='' || !validDateYmd($d)) continue;
+            if ($usedMode==='be') $d=shiftYears($d,-543);
+            $q=finiteNumber($r['qty'] ?? 0); if (abs($q)<1e-9) continue;
+            if (!isset($series[$icode])) $series[$icode]=[];
+            $series[$icode][$d]=($series[$icode][$d] ?? 0)+$q; $n++;
+        }
+        $hdb->close();
+        logBridge($config,'INFO','HOSXP_USAGE_DAILY',['uid'=>$actor['uid'],'from'=>$from,'to'=>$to,'icodes'=>count($series),'points'=>$n]);
+        respond(['ok'=>true,'action'=>'hosxp_usage_daily','date_from'=>$from,'date_to'=>$to,'days'=>$days,'icode_count'=>count($series),'series'=>(object)$series,'date_mode_used'=>$usedMode,'custom_sql'=>$customSql!=='','bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($hdb) && $hdb instanceof mysqli) { try { $hdb->close(); } catch (Throwable $ignore) {} }
+        logBridge($config,'ERROR','HOSXP_USAGE_DAILY_FAILED',['uid'=>$actor['uid'] ?? '','error'=>$e->getMessage()]);
+        respondError('HOSXP_ERROR','ดึงยอดใช้รายวันจาก HOSxP ไม่สำเร็จ: '.$e->getMessage(),500);
+    }
+}
+
+// v2.12.0 lot คงเหลือในคลังจ่าย INVS ของยาที่ระบุ เรียง FEFO (EXP → RECORD_NUMBER) — อ่านอย่างเดียว ใช้วางแผนหยิบ/เคลียร์ lot
+if ($action==='invs_lots') {
+    $actor=requireRoles($config,$body,['admin','pharmacy']);
+    $ids=array_values(array_unique(array_filter(array_map(fn($v)=>cleanText((string)$v),(array)($body['drug_ids'] ?? [])),fn($v)=>$v!=='')));
+    if (count($ids)>1500) respondError('TOO_MANY','ส่งรหัสยาได้ไม่เกิน 1,500 รายการต่อครั้ง',400);
+    $stockId=cleanText($body['stock_id'] ?? ''); if ($stockId==='') $stockId=cleanText(cfg($config,'invs','default_stock_id','10'));
+    try {
+        $db=connectDb($config); $lots=[];
+        foreach (array_chunk($ids,200) as $chunk) {
+            $ph=implode(',',array_fill(0,count($chunk),'?'));
+            $st=$db->prepare("SELECT TRIM(WORKING_CODE) AS WC, RECORD_NUMBER, LOT_NO, EXPIRED_DATE, QTY_ON_HAND FROM inv_md_c WHERE DEPT_ID=? AND TRIM(WORKING_CODE) IN ($ph) AND COALESCE(QTY_ON_HAND,0)>0");
+            $types=str_repeat('s',count($chunk)+1); $args=array_merge([$stockId],$chunk); $st->bind_param($types,...$args); $st->execute(); $res=$st->get_result();
+            while ($r=$res->fetch_assoc()) $lots[cleanText($r['WC'])][]=['lot_no'=>cleanText($r['LOT_NO'] ?? ''),'expiry'=>cleanText($r['EXPIRED_DATE'] ?? ''),'qty'=>finiteNumber($r['QTY_ON_HAND'] ?? 0),'record'=>(int)$r['RECORD_NUMBER']];
+            $st->close();
+        }
+        $db->close();
+        $expKey=function($e){ $v=preg_replace('/\D/','',(string)$e); if (strlen($v)>=8) { $y=(int)substr($v,0,4); if ($y>2400) $y-=543; return sprintf('%04d%s',$y,substr($v,4,4)); } return '99999999'; };
+        foreach ($lots as $k=>$arr) { usort($arr,fn($a,$b)=>strcmp($expKey($a['expiry']),$expKey($b['expiry'])) ?: ($a['record']<=>$b['record'])); $lots[$k]=$arr; }
+        respond(['ok'=>true,'action'=>'invs_lots','stock_id'=>$stockId,'lots'=>(object)$lots,'bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
+        respondError('INVS_ERROR','อ่าน lot จาก INVS ไม่สำเร็จ: '.$e->getMessage(),500);
     }
 }
 

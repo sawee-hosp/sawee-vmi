@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.12.0';
+const APP_VERSION = '6.13.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -985,6 +985,80 @@ const calcPharmacySuggestion = (p) => {
   return { dailyAvg: dailyAvg, target: target, need: need, suggested: suggested, skip: !!skipReason, skipReason: skipReason, roundNeed: roundNeed, coverRounds: coverRounds };
 };
 
+// ===== v6.13 ห้องยา: สูตร ASU (ค่าเฉลี่ยใช้ต่อวัน 180 วัน) + Safety stock ตาม VEN + ยาใช้น้อยสำรองหลายรอบ + เคลียร์ lot + ปัดเลขสวย =====
+// S = d̄ × (รอบ 14 + lead time 3 + SS ตาม VEN)   d̄ = max(เฉลี่ย 180 วัน, เฉลี่ย 60 วันล่าสุด) วันปฏิทิน · ยอดคูณตัวคูณ HOSxP→INVS แล้ว
+// IP = คงเหลือห้องยาวันนี้ + ค้างรับ · Q = max(0, S − IP) → ปัดเต็มแพ็ก → ปัดเลขสวย (เว้นเคลียร์ lot) → ไม่เกิน Maximum
+const PH_REVIEW_DAYS = 14, PH_LEAD_DAYS = 3;
+const PH_SS_DAYS = { V: 7, E: 3, N: 1 };
+const PH_SLOW_MIN_VALUE = 200, PH_SLOW_MAX_DAYS = 60, PH_SLOW_MAX_VALUE = 2000;
+const PH_LOT_TOL_PCT = 0.2, PH_LOT_TOL_DAYS = 7;
+const drugVen = (d) => { const v = String(d?.ven || '').trim().toUpperCase(); return (v === 'V' || v === 'E' || v === 'N') ? v : 'N'; };
+const phNiceStep = (q) => q < 10 ? 1 : q <= 50 ? 5 : q <= 200 ? 10 : q <= 1000 ? 50 : 100;
+const phNiceRound = (q) => { if (!(q > 0)) return 0; const st = phNiceStep(q); return Math.ceil(q / st - 1e-9) * st; };
+// series: { 'YYYY-MM-DD': qty } (หน่วย HOSxP) → สถิติรายวัน (หน่วย INVS)
+const calcAsuStats = (series, fromYmd, toYmd2, multiplier) => {
+  const days = Math.max(1, daysBetweenInclusive(fromYmd, toYmd2) || 1);
+  const mult = toNonNegativeNumber(multiplier, 1) || 1;
+  const vals = []; let d = fromYmd;
+  for (let i = 0; i < days; i++) { vals.push(Math.max(0, toSafeNumber((series || {})[d])) * mult); d = addDaysYmd(d, 1); }
+  const total = vals.reduce((a, b) => a + b, 0);
+  const last60 = vals.slice(-Math.min(60, days)); const d60 = last60.reduce((a, b) => a + b, 0) / last60.length;
+  const d180 = total / days;
+  const mean = d180; const sigma = Math.sqrt(vals.reduce((a, v) => a + (v - mean) * (v - mean), 0) / days);
+  const nz = vals.filter(v => v > 0);
+  const nzMean = nz.length ? nz.reduce((a, b) => a + b, 0) / nz.length : 0;
+  const nzSd = nz.length ? Math.sqrt(nz.reduce((a, v) => a + (v - nzMean) * (v - nzMean), 0) / nz.length) : 0;
+  const r = (x, n) => Math.round(x * Math.pow(10, n)) / Math.pow(10, n);
+  return { days, total: r(total, 3), d180: r(d180, 9), d60: r(d60, 9), dbar: r(Math.max(d180, d60), 9), sigma: r(sigma, 4), activeDays: nz.length,
+    adi: nz.length ? r(days / nz.length, 2) : null, cv2: nzMean > 0 ? r((nzSd / nzMean) * (nzMean > 0 ? nzSd / nzMean : 0), 3) : null };
+};
+// จัดสรรจำนวนลง lot ตาม FEFO → [{lot_no, expiry, qty, lot_qty, remain}]
+const allocatePharmLots = (lots, qty) => {
+  let left = toNonNegativeNumber(qty); const out = [];
+  (lots || []).forEach(l => { if (left <= 1e-9) return; const have = toNonNegativeNumber(l.qty); if (have <= 0) return; const use = Math.min(have, left); left -= use;
+    out.push({ lot_no: safeText(l.lot_no), expiry: safeText(l.expiry), qty: Math.round(use * 1000) / 1000, lot_qty: have, remain: Math.round((have - use) * 1000) / 1000 }); });
+  return out;
+};
+// p: { stats, onHand, inTransit, item, ven, lots (FEFO) | null }
+const calcPharmacyPlanV2 = (p) => {
+  const item = p.item || {}; const pack = safePackSize(item.packSize); const price = toNonNegativeNumber(item.price);
+  const st = p.stats || {}; const dbar = toNonNegativeNumber(st.dbar);
+  const ven = p.ven || 'N'; const ssDays = PH_SS_DAYS[ven] ?? 1;
+  const ip = toNonNegativeNumber(p.onHand) + toNonNegativeNumber(p.inTransit);
+  const roundNeed = dbar * (PH_REVIEW_DAYS + PH_LEAD_DAYS);
+  const unitValue = price / pack;
+  const res = { dbar, ven, ssDays, ip, roundNeed, coverDays: PH_REVIEW_DAYS + PH_LEAD_DAYS + ssDays, slow: false, S: 0, need: 0, base: 0, suggested: 0,
+    reason: '', clearLot: '', roundUp: 0, lotPlan: [], lotShort: false, coverRounds: 0 };
+  if (dbar <= 0) { res.reason = 'ไม่มียอดใช้ 180 วัน'; return res; }
+  let cover = res.coverDays;
+  res.slow = roundNeed < pack || roundNeed * unitValue < PH_SLOW_MIN_VALUE;
+  if (res.slow) {
+    // ยาใช้น้อย: ไม่เบิกจนกว่าจะไม่พอถึงรอบหน้า แล้วเบิกให้พอ ≥ 1 แพ็ก (สูงสุด 60 วัน และมูลค่า ≤ 2,000 บาท)
+    if (ip >= roundNeed) { res.reason = 'ยาใช้น้อย: ยังพอถึงรอบหน้า (สำรองหลายรอบ)'; res.coverRounds = roundNeed > 0 ? ip / roundNeed : 0; return res; }
+    const byPack = Math.ceil(pack / dbar);
+    const byValue = unitValue > 0 ? Math.floor(PH_SLOW_MAX_VALUE / (dbar * unitValue)) : PH_SLOW_MAX_DAYS;
+    cover = Math.max(res.coverDays, Math.min(PH_SLOW_MAX_DAYS, byPack, Math.max(res.coverDays, byValue)));
+  }
+  res.coverDays = cover; res.S = Math.round(dbar * cover * 1e6) / 1e6; res.need = Math.max(0, Math.round((res.S - ip) * 1e6) / 1e6);
+  if (res.need <= 1e-9) { res.reason = 'คงเหลือ + ค้างรับ ≥ เป้า'; res.coverRounds = roundNeed > 0 ? ip / roundNeed : 0; return res; }
+  if (!res.slow && ip >= roundNeed && res.need * unitValue < toNonNegativeNumber(p.minOrderValue, PH_SLOW_MIN_VALUE)) { res.reason = 'ยอดน้อย รวบไปรอบหน้า'; res.coverRounds = ip / roundNeed; return res; }
+  const basePacks = Math.ceil(res.need / pack - 1e-9); res.base = basePacks * pack;
+  let finalQty = phNiceRound(basePacks) * pack;
+  const lots = Array.isArray(p.lots) ? p.lots : null;
+  if (lots && lots.length) {
+    const alloc = allocatePharmLots(lots, res.base); const last = alloc[alloc.length - 1];
+    const tol = Math.max(PH_LOT_TOL_PCT * res.base, pack, PH_LOT_TOL_DAYS * dbar);
+    if (last && last.remain > 1e-9 && last.remain <= tol) { finalQty = res.base + last.remain; res.clearLot = last.lot_no || '-'; }
+  }
+  finalQty = applyMaximumQty(finalQty, item);
+  if (lots) { const avail = lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0); if (finalQty > avail + 1e-9) { res.lotShort = true; finalQty = avail >= pack ? Math.floor(avail / pack) * pack : avail; } }
+  res.suggested = Math.round(finalQty * 1000) / 1000;
+  res.roundUp = Math.max(0, Math.round((res.suggested - res.need) * 1000) / 1000);
+  res.lotPlan = lots ? allocatePharmLots(lots, res.suggested) : [];
+  res.coverRounds = roundNeed > 0 ? (ip + res.suggested) / roundNeed : 0;
+  return res;
+};
+
 const buildInternalReqId = (deptId) => {
   const d = new Date();
   const stamp = d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds());
@@ -1117,6 +1191,13 @@ const buildInternalReqFormHtml = (opts) => {
   // opts.blankQty = เว้นช่องจำนวนจ่าย/มูลค่า/คงเหลือหลังเบิก ไว้เขียนเอง
   const blank = !!opts.blankQty;
   const colCount = isPharmacy ? 12 : 10;
+  // v6.13 ห้องยา: Lot ที่ต้องหยิบ (FEFO) + ยอดเหลือใน lot หลังหยิบ ใต้ชื่อยา
+  const lotExp = function (raw) { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return esc(raw || ''); const y = Number(v.slice(0, 4)); return v.slice(6, 8) + '/' + v.slice(4, 6) + '/' + String(y < 2400 ? y + 543 : y).slice(-2); };
+  const lotPickHtml = function (it) {
+    if (!isPharmacy || blank || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
+    return '<div class="lotpick">' + it.lotPlan.map(function (l) { return 'หยิบ Lot <b>' + esc(l.lot_no || '-') + '</b> (EXP ' + lotExp(l.expiry) + ') ' + fmtLotNum(l.qty) + ' → เหลือ ' + fmtLotNum(l.remain); }).join('<br>') + '</div>';
+  };
+  const fmtLotNum = function (v) { return toSafeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 }); };
   // v6.6.5 หน่วยงาน: มูลค่า = จำนวนเบิก × ราคา (ช่องจำนวนจ่ายเว้นว่างให้ห้องยาเขียน) · ห้องยา: คิดจากจำนวนจ่ายเหมือนเดิม
   const valueOf = function (it) {
     const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
@@ -1143,7 +1224,7 @@ const buildInternalReqFormHtml = (opts) => {
         const tgt = it.targetQty != null ? z(it.targetQty, qty(toNonNegativeNumber(it.targetQty), pack)) : '-';
         return trOpen(li) +
           '<td class="c">' + n + '</td>' +
-          '<td class="name">' + esc(it.name) + '</td>' +
+          '<td class="name">' + esc(it.name) + lotPickHtml(it) + '</td>' +
           '<td class="c muted">' + esc(it.unit) + '</td>' +
           '<td class="c">' + pack + '</td>' +
           '<td class="c">' + z(it.usage, qty(it.usage, pack)) + '</td>' +
@@ -1198,7 +1279,7 @@ const buildInternalReqFormHtml = (opts) => {
     '.items{font-size:10.5px}.items th,.items td{border:1px solid #444;padding:3px 4px;vertical-align:middle}' +
     '.items th{background:#eee;font-weight:700;text-align:center;line-height:1.25}' +
     '.items tr{page-break-inside:avoid}.items thead{display:table-header-group}' +
-    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.muted{color:#333}' +
+    '.c{text-align:center}.r{text-align:right;white-space:nowrap}.b{font-weight:700}.name{font-weight:600}.muted{color:#333}.lotpick{font-weight:400;font-size:9px;color:#1e3a8a;line-height:1.3;margin-top:1px}' +
     ".code{font-family:Consolas,'Courier New',monospace;font-size:9.5px;color:#555}.xs{font-size:8.5px;color:#666;line-height:1.1}" +
     '.grp td{background:#f2f2f2;font-weight:700}.grp .sub{float:right}' +
     '.blue{color:#1d4ed8;font-weight:600}.items td.tgt,.items th.tgt{background:#f1f1f1;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +

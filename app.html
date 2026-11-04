@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.15.0"></script>
+  <script src="shared.js?v=6.16.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.15.0';
+      var need = '6.16.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -572,6 +572,61 @@
         `<div class="note">ยอดคงเหลือคลัง = ยอดในคลังจ่าย INVS (รวมทุก lot) ณ เวลาที่ส่ง หักจำนวนจ่ายในใบนี้ · รายการ lot แสดงยอดเหลือแต่ละ lot (ใบที่ส่งก่อน Bridge 2.11.2 แสดงเฉพาะ lot ที่ตัด) · Lot ที่ตัดคำนวณจาก lot เก่าก่อน (ลำดับเดียวกับ INVS) — ยืนยันจ่ายจริงใน INVS อาจต่างได้${hasStock ? '' : '<br><b>ใบนี้ส่งด้วย Bridge รุ่นเก่า จึงไม่มียอดคงเหลือ (แสดง -)</b>'}</div>` +
         '<div class="sigs"><div>ลงชื่อ ................................ ผู้จ่าย<br>(................................)</div><div>ลงชื่อ ................................ ผู้รับของ<br>(................................)</div></div>' +
         '</body></html>';
+    };
+
+    // ===== v6.16 Slip จัดยา (เครื่องพิมพ์ความร้อน กระดาษต่อเนื่อง เช่น Xprinter XP-420B) — เรียงตามตำแหน่ง · Lot/EXP ที่หยิบ · คงคลังหลังหยิบ =====
+    const SLIP_PAPERS = [{ id: 'a4', label: 'A4 (ใบเบิกพร้อมยอดคงเหลือ)' }, { id: '80', label: 'Slip 80 มม.' }, { id: '58', label: 'Slip 58 มม.' }, { id: '100', label: 'Slip 100 มม.' }];
+    const getSlipPaper = () => { try { const v = localStorage.getItem('rxfill_slip_paper'); return SLIP_PAPERS.some(p => p.id === v) ? v : 'a4'; } catch (e) { return 'a4'; } };
+    const buildPickSlipHtml = ({ req, ctx, unitTitle, widthMm }) => {
+      const W = Math.max(48, Number(widthMm) || 80); const inner = W - 6; const fs = W >= 100 ? 12.5 : W >= 80 ? 11.5 : 10;
+      const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const snap = Array.isArray(req.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length ? req.invs_request_lot_snapshot : (req.invs_items_snapshot || []);
+      const exp = (raw) => { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return esc(raw || '-'); const y = Number(v.slice(0, 4)); return `${v.slice(6, 8)}/${v.slice(4, 6)}/${String(y < 2400 ? y + 543 : y).slice(-2)}`; };
+      const q = (v, pack) => esc(safePackSize(pack) > 1 ? formatQty(Math.round(toSafeNumber(v) * 1000) / 1000, pack) : toSafeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 }));
+      const rows = snap.map(x => {
+        const d = ctx.findDrug(x.drug_id) || {}; const reqItem = (req.items || []).find(it => String(it.drugId) === String(x.drug_id));
+        const pack = safePackSize(d.pack_size ?? reqItem?.packSize ?? x.vmi_pack_size);
+        const unit = (ctx.appDb?.units || []).find(u => String(u.unit_id) === String(d.unit_id))?.unit_name || safeText(reqItem?.unit) || '';
+        const lots = Array.isArray(x.lots_after) && x.lots_after.some(l => toSafeNumber(l.qty_issue) > 0)
+          ? x.lots_after.filter(l => toSafeNumber(l.qty_issue) > 0).map(l => ({ lot: l.lot_no, exp: l.expiry, qty: l.qty_issue }))
+          : (Array.isArray(x.alloc) && x.alloc.length ? x.alloc.map(l => ({ lot: l.lot_no, exp: l.expiry, qty: l.qty })) : [{ lot: x.lot_no, exp: x.expiry, qty: x.qty }]);
+        return { x, d, pack, unit, lots, name: x.drug_name || d.drug_name || reqItem?.name || x.drug_id, loc: normDrugLocation(d.invs_location), type: String(d.type || '1') };
+      }).sort((a, b) => compareByLocation(a.loc, a.name, b.loc, b.name));
+      const at = formatAppDateTime(req.invs_sent_at || new Date());
+      const body = rows.map((r, i) => `<div class="it">
+        <div class="hd"><span class="loc">${esc(r.loc || '—')}</span><span class="no">${i + 1}.</span> <b>${esc(r.name)}</b></div>
+        <div class="ln"><span>เบิก <b class="big">${q(r.x.qty, r.pack)}</b> ${esc(r.unit)}${r.pack > 1 ? ` <span class="sm">(×${r.pack})</span>` : ''}</span><span>เหลือคลัง <b>${r.x.stock_after !== undefined ? q(r.x.stock_after, r.pack) : '-'}</b></span></div>
+        ${r.lots.map(l => `<div class="lot">☐ <b>${esc(l.lot || '-')}</b> <span class="sm">EXP ${exp(l.exp)}</span><span class="lq">${q(l.qty, r.pack)}</span></div>`).join('')}
+        <div class="sm code">${esc(drugCodeLabel(r.x.drug_id, r.d.old_code))}</div></div>`).join('');
+      const title = `${unitTitle} slip ${req.invs_sub_po_no || ''}`.replace(/[\\/:*?"<>|]+/g, '-');
+      return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+        '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
+        `<style id="pg">@page{size:${W}mm 200mm;margin:0}</style><style>` +
+        `*{box-sizing:border-box}html,body{margin:0;padding:0}body{width:${W}mm;padding:2mm 3mm 6mm;font-family:Sarabun,Tahoma,sans-serif;font-size:${fs}px;line-height:1.3;color:#000}` +
+        `.t{text-align:center;font-weight:700;font-size:${fs + 3}px}.m{display:flex;justify-content:space-between;flex-wrap:wrap;gap:0 6px;font-size:${fs - 1}px}` +
+        `.it{border-top:1px dashed #000;padding:1.2mm 0;page-break-inside:avoid}.hd{font-size:${fs + 0.5}px}.loc{display:inline-block;border:1px solid #000;padding:0 3px;margin-right:4px;font-weight:700;font-family:Consolas,monospace}` +
+        `.no{font-weight:700}.ln{display:flex;justify-content:space-between;gap:4px;margin-top:1px}.big{font-size:${fs + 2}px}.lot{display:flex;gap:4px;align-items:baseline;padding-left:2mm;font-family:Consolas,monospace}` +
+        `.lot .lq{margin-left:auto;font-weight:700;font-size:${fs + 1}px}.sm{font-size:${fs - 2}px}.code{text-align:right;color:#000}.end{border-top:1px solid #000;margin-top:2mm;padding-top:1mm}` +
+        `.sig{margin-top:5mm;display:flex;justify-content:space-between;gap:4mm;font-size:${fs - 1}px}.sig div{flex:1;border-top:1px dotted #000;text-align:center;padding-top:1mm}` +
+        '</style></head><body>' +
+        `<div class="t">ใบจัดยา (slip)</div><div class="m"><span>${esc(unitTitle)}</span><span>INVS <b>${esc(req.invs_sub_po_no || '-')}</b></span></div>` +
+        `<div class="m"><span>ส่ง INVS ${esc(at)}</span><span>${rows.length} รายการ</span></div>` + body +
+        `<div class="end sm">เรียงตามตำแหน่งยา · Lot ตามลำดับที่ INVS ตัด (ยืนยันจ่ายจริงใน INVS อาจต่าง) · จำนวน = หน่วยใหญ่(หน่วยย่อย)</div>` +
+        '<div class="sig"><div>ผู้จัด</div><div>ผู้ตรวจ</div></div>' +
+        // ปรับความยาวหน้าให้พอดีเนื้อหา (กระดาษต่อเนื่อง) — วัดหลังฟอนต์โหลด
+        `<script>(function(){function fit(){var h=Math.ceil(document.documentElement.scrollHeight*25.4/96)+4;document.getElementById('pg').textContent='@page{size:${W}mm '+h+'mm;margin:0}';}fit();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);window.addEventListener('load',fit);})();</` + 'script></body></html>';
+    };
+    const printInvsSheet = ({ req, ctx, unitTitle, paper }) => {
+      const p = paper || getSlipPaper();
+      return printHtmlDocument(p === 'a4' ? buildInvsStockSheetHtml({ req, ctx, unitTitle }) : buildPickSlipHtml({ req, ctx, unitTitle, widthMm: Number(p) }));
+    };
+    const InvsSheetPrintButton = ({ req, ctx, unitTitle, small }) => {
+      const [paper, setPaper] = useState(getSlipPaper);
+      const pick = (v) => { setPaper(v); try { localStorage.setItem('rxfill_slip_paper', v); } catch (e) { /* ignore */ } };
+      return <span className="inline-flex items-center gap-1">
+        <select aria-label="ขนาดกระดาษ" id="invs-sheet-paper" value={paper} onChange={e => pick(e.target.value)} className={`border border-cyan-300 rounded-lg bg-white text-cyan-900 font-bold ${small ? 'text-xs px-1 py-1' : 'text-sm px-2 py-2'}`}>{SLIP_PAPERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
+        <button id="print-invs-stock" onClick={() => printInvsSheet({ req, ctx, unitTitle, paper })} className={`rounded-xl bg-cyan-700 text-white font-bold shadow ${small ? 'px-3 py-1 text-xs' : 'px-4 py-2 text-sm'}`}><i className="fa-solid fa-print mr-1"></i>{paper === 'a4' ? 'พิมพ์ใบเบิกพร้อมยอดคงเหลือ' : 'พิมพ์ slip จัดยา'}</button>
+      </span>;
     };
 
     // ===== v6.9 ใบเบิกยาฉุกเฉิน รพ.สต. (ใบ ฉ) — เบิกล่วงหน้า ระบบรวมยอดเข้าใบเบิกหลักรอบถัดไปเอง (emergencyQty) =====
@@ -5323,7 +5378,7 @@ const ViewReqView = ({ ctx }) => {
                   {invsDeliverySummary && <div className="text-[10px] mt-1 text-cyan-800">ขอ {toNonNegativeNumber(invsDeliverySummary.ordered_qty).toLocaleString('th-TH')} • INVS จ่าย {toNonNegativeNumber(invsDeliverySummary.received_qty).toLocaleString('th-TH')} • ต่าง {toNonNegativeNumber(invsDeliverySummary.difference_qty).toLocaleString('th-TH')}</div>}
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                  {isAdmin && <button id="print-invs-stock" onClick={()=>printHtmlDocument(buildInvsStockSheetHtml({ req, ctx, unitTitle: ctx.appDb.hospitals.find(h=>String(h.hospital_id)===String(req.hospitalId))?.hospital_name || req.hospitalId }))} className="px-4 py-2 rounded-xl bg-cyan-700 text-white font-bold text-sm shadow"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบเบิกพร้อมยอดคงเหลือ</button>}
+                  {isAdmin && <InvsSheetPrintButton req={req} ctx={ctx} unitTitle={ctx.appDb.hospitals.find(h=>String(h.hospital_id)===String(req.hospitalId))?.hospital_name || req.hospitalId} />}
                   {req.invs_last_status_sync_at && <div className="text-[10px] text-cyan-700">Sync สถานะล่าสุด {formatAppDateTime(req.invs_last_status_sync_at)}</div>}
                 </div>
               </div>
@@ -8379,6 +8434,9 @@ const AdminConfigView = ({ ctx }) => {
           });
         });
         await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_APPROVE', 'internal_requisitions', req.id, { dept_id: req.deptId, kind: req.kind, invs_sub_po_no: req.invs_sub_po_no || '', total_value: total });
+        // v6.16 ปิดรายการจ่ายล่วงหน้า (รับแล้ว) ที่รวมในใบนี้
+        const pIds = (await ref.get()).data()?.predisp_ids || req.predisp_ids || [];
+        if (pIds.length) { try { await executeBatchChunks(pIds.map(id => ({ type: 'update', ref: db.collection('internal_predispense').doc(id), data: { status: 'Merged', merged_req_id: req.id, merged_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() } }))); } catch (e) { console.warn('[predispense merged]', e); } }
       } catch (e) {
         try {
           await db.runTransaction(async (tx) => {
@@ -8681,6 +8739,29 @@ const AdminConfigView = ({ ctx }) => {
           .then(sn => { if (alive) setUrgents(sn.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.status === 'Active')); }).catch(() => {});
         return () => { alive = false; }; }, [req.id]);
       const sameRound = (u) => !!u.round_id && !!req.round_id && String(u.round_id) === String(req.round_id);
+      // v6.16 จ่ายล่วงหน้า (รับแล้ว) ของหน่วยงานที่ยังไม่อยู่ในใบใด → รวมเข้าใบนี้อัตโนมัติก่อนตรวจ INVS (รอบเร็วที่สุดที่เห็น)
+      const [predisps, setPredisps] = useState([]);
+      useEffect(() => { let alive = true; if (req.kind === 'pharmacy') return;
+        Promise.all([db.collection('internal_predispense').where('deptId', '==', String(req.deptId)).get(), db.collection('internal_requisitions').where('deptId', '==', String(req.deptId)).get()])
+          .then(([pd, rq]) => { if (!alive) return; const claimed = new Set(); rq.docs.forEach(d => { const r = d.data(); if (r.status !== 'Cancelled') (r.predisp_ids || []).forEach(x => claimed.add(x)); });
+            setPredisps(pd.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.status === 'Active' && !claimed.has(p.id))); }).catch(() => {});
+        return () => { alive = false; }; }, [req.id]);
+      const mergePredisps = async (list, baseItems) => {
+        if (!list.length) return baseItems || items;
+        const merged = (baseItems || items).map(it => ({ ...it }));
+        list.forEach(pd => (pd.items || []).forEach(pi => {
+          const q = toNonNegativeNumber(pi.qty); if (!q) return;
+          const idx = merged.findIndex(it => String(it.drugId) === String(pi.drugId));
+          if (idx >= 0) { const it = merged[idx]; merged[idx] = { ...it, requestQty: toNonNegativeNumber(it.requestQty) + q, dispenseQty: toNonNegativeNumber(it.dispenseQty) + q, predispQty: toNonNegativeNumber(it.predispQty) + q }; }
+          else { const d = ctx.findDrug(pi.drugId); merged.push({ drugId: String(pi.drugId), name: pi.name || d?.drug_name || '', unit: pi.unit || '', packSize: safePackSize(pi.packSize ?? d?.pack_size), price: toNonNegativeNumber(pi.price ?? d?.price), type: String(pi.type || d?.type || '1'), requestQty: q, dispenseQty: q, predispQty: q, source: 'predispense' }); }
+        }));
+        await saveEdits(merged);
+        await db.collection('internal_requisitions').doc(req.id).update({ predisp_ids: firebase.firestore.FieldValue.arrayUnion(...list.map(p => p.id)), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+        await writeAuditLog(ctx.currentUser, 'INTERNAL_PREDISPENSE_MERGE', 'internal_requisitions', req.id, { predisp_ids: list.map(p => p.id) });
+        setItems(merged); setPredisps([]);
+        ctx.showToast(`รวมรายการรับแล้ว (จ่ายล่วงหน้า) ${list.length} ใบเข้าใบนี้แล้ว`);
+        return merged;
+      };
       const mergeUrgents = async (list) => {
         if (!list.length) return items;
         const merged = items.map(it => ({ ...it }));
@@ -8688,7 +8769,7 @@ const AdminConfigView = ({ ctx }) => {
           const q = toNonNegativeNumber(ui.requestQty ?? ui.dispenseQty); if (!q) return;
           const idx = merged.findIndex(it => String(it.drugId) === String(ui.drugId));
           if (idx >= 0) { const it = merged[idx]; merged[idx] = { ...it, requestQty: toNonNegativeNumber(it.requestQty) + q, dispenseQty: toNonNegativeNumber(it.dispenseQty) + q, urgentQty: toNonNegativeNumber(it.urgentQty) + q }; }
-          else { const d = ctx.findDrug(ui.drugId); merged.push({ drugId: String(ui.drugId), name: ui.name || d?.drug_name || '', unit: ui.unit || ctx.findUnitName?.(d?.unit_id) || '', packSize: safePackSize(ui.packSize ?? d?.pack_size), price: toNonNegativeNumber(ui.price ?? d?.price), type: String(ui.type || d?.type || '1'), requestQty: q, dispenseQty: q, urgentQty: q, source: 'urgent' }); }
+          else { const d = ctx.findDrug(ui.drugId); merged.push({ drugId: String(ui.drugId), name: ui.name || d?.drug_name || '', unit: ui.unit || (d ? ctx.findUnitName?.(d) : '') || '', packSize: safePackSize(ui.packSize ?? d?.pack_size), price: toNonNegativeNumber(ui.price ?? d?.price), type: String(ui.type || d?.type || '1'), requestQty: q, dispenseQty: q, urgentQty: q, source: 'urgent' }); }
         }));
         const withNote = merged.map(it => it.urgentQty ? { ...it, note: /รวมเบิกด่วน/.test(it.note || '') ? it.note : `${it.note ? it.note + ' · ' : ''}รวมเบิกด่วน ${toNonNegativeNumber(it.urgentQty).toLocaleString('th-TH')} ${it.unit || ''}`.trim() } : it);
         await saveEdits(withNote);
@@ -8728,7 +8809,10 @@ const AdminConfigView = ({ ctx }) => {
 
       const doPreflight = () => run('preflight', async () => {
         const autoMerge = editable ? urgents.filter(sameRound) : [];
-        if (autoMerge.length) { await mergeUrgents(autoMerge); await reload(); }
+        let mergedItems = null;
+        if (autoMerge.length) mergedItems = await mergeUrgents(autoMerge);
+        if (editable && predisps.length) mergedItems = await mergePredisps(predisps, mergedItems || undefined);
+        if (mergedItems) await reload();
         else if (dirty) { await saveEdits(); await reload(); }
         try {
           const data = await callInvsBridge('preflight', req.id, { source: 'internal' });
@@ -8755,8 +8839,8 @@ const AdminConfigView = ({ ctx }) => {
         rxTaskDone('adm_internal');
         await reload(); onBack();
         // v6.9 พิมพ์ใบเบิกพร้อมยอดคงเหลือคลัง + Lot/EXP ที่ตัด
-        if (!data.already_sent) ctx.setConfirmDialog({ title: 'พิมพ์ใบเบิกพร้อมยอดคงเหลือ?', message: `INVS เลข ${data.sub_po_no} — พิมพ์ใบที่มี Lot/EXP ที่ตัดจ่าย และยอดคงเหลือคลัง (รวมทุก lot)`, icon: 'fa-print', iconColor: 'text-cyan-600', confirmBtnClass: 'bg-cyan-700 hover:bg-cyan-800', confirmText: 'พิมพ์',
-          onConfirm: () => printHtmlDocument(buildInvsStockSheetHtml({ req: sent, ctx, unitTitle: req.dept_name || '' })) });
+        if (!data.already_sent) ctx.setConfirmDialog({ title: 'พิมพ์ใบเบิกพร้อมยอดคงเหลือ?', message: `INVS เลข ${data.sub_po_no} — พิมพ์ใบที่มี Lot/EXP ที่ตัดจ่าย และยอดคงเหลือคลัง (รวมทุก lot) · กระดาษ: ${(SLIP_PAPERS.find(p => p.id === getSlipPaper()) || SLIP_PAPERS[0]).label} (เปลี่ยนได้ที่ปุ่มพิมพ์ในใบ)`, icon: 'fa-print', iconColor: 'text-cyan-600', confirmBtnClass: 'bg-cyan-700 hover:bg-cyan-800', confirmText: 'พิมพ์',
+          onConfirm: () => printInvsSheet({ req: sent, ctx, unitTitle: req.dept_name || '' }) });
       }));
 
       const doApproveOnly = () => confirmOrder(() => ctx.setConfirmDialog({
@@ -8804,12 +8888,16 @@ const AdminConfigView = ({ ctx }) => {
                 <div className="text-xs text-slate-500">มูลค่าที่จะจ่าย</div>
                 <div className="text-3xl font-extrabold tabular-nums">{iqMoney(total)}</div>
                 <div className="text-xs text-slate-400">ขอ {iqMoney(req.total_value)} บาท · {items.filter(i => i.dispenseQty > 0).length}/{items.length} รายการ</div>
-                {invsSent && <div className="mt-1 text-sm font-bold text-indigo-700">INVS {req.invs_sub_po_no} <button onClick={() => printHtmlDocument(buildInvsStockSheetHtml({ req, ctx, unitTitle: req.dept_name || '' }))} className="ml-2 px-3 py-1 rounded-lg bg-cyan-700 text-white text-xs font-bold"><i className="fa-solid fa-print mr-1"></i>พิมพ์ใบเบิกพร้อมยอดคงเหลือ</button></div>}
+                {invsSent && <div className="mt-1 text-sm font-bold text-indigo-700">INVS {req.invs_sub_po_no} <span className="ml-2"><InvsSheetPrintButton req={req} ctx={ctx} unitTitle={req.dept_name || ''} small /></span></div>}
               </div>
             </div>
             {req.note && <div className="mt-4 bg-slate-50 rounded-xl p-3 text-sm"><b>หมายเหตุจากผู้เบิก:</b> {req.note}</div>}
             {req.approval_error && <div className="mt-3 bg-red-50 text-red-700 rounded-xl p-3 text-sm"><b>อนุมัติไม่สำเร็จครั้งก่อน:</b> {req.approval_error} — กดอนุมัติอีกครั้งได้ (ยอดสต็อกที่บวกไปแล้วจะไม่ถูกบวกซ้ำ)</div>}
             {ahead.length > 0 && actionable && <div className="mt-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-sm"><i className="fa-solid fa-list-ol mr-2"></i>มี {ahead.length} ใบที่ส่งก่อนใบนี้ยังรอ — แนะนำอนุมัติตามลำดับเพื่อให้ INVS ตัด lot ตามลำดับ</div>}
+            {editable && predisps.length > 0 && <div id="iq-predisp-banner" className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-800">
+              <i className="fa-solid fa-hand-holding-medical mr-1"></i><b>มีรายการจ่ายล่วงหน้า (รับแล้ว) ที่ยังไม่รวม {predisps.length} ใบ</b> — จะรวมเข้าใบนี้อัตโนมัติเมื่อกดตรวจ INVS
+              <button onClick={() => run('merge', async () => { await mergePredisps(predisps); await reload(); })} disabled={!!busy} className="ml-2 px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold text-xs disabled:opacity-40">รวมตอนนี้</button>
+            </div>}
             {editable && urgents.length > 0 && <div id="iq-urgent-banner" className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-800">
               <div className="font-bold"><i className="fa-solid fa-truck-medical mr-1"></i>มีใบเบิกด่วนของหน่วยงานนี้ที่ยังไม่รวม {urgents.length} ใบ{urgents.some(sameRound) ? ' — ใบรอบเดียวกันจะรวมให้อัตโนมัติเมื่อกดตรวจ INVS' : ''}</div>
               {urgents.map(u => <div key={u.id} className="mt-1 flex flex-wrap items-center gap-2"><span>{formatThaiDate(u.form_date || u.round_date)} · รอบที่ {u.round_no || '-'}{u.round_date ? ` (${formatThaiDate(u.round_date)})` : ''} · {(u.items || []).length} รายการ{sameRound(u) ? ' (รอบเดียวกับใบนี้)' : ''}</span>
@@ -8843,7 +8931,7 @@ const AdminConfigView = ({ ctx }) => {
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.onHand)}</td>}
                       {isPharmacy && <td className="p-2 text-right tabular-nums text-teal-700">{iqNum(it.suggestedQty)}</td>}
                       <td className="p-2 text-right tabular-nums">{pack > 1 && req0 > 0 ? <><b>{formatQty(req0, pack)}</b> <span className="text-[10px] text-slate-400">แพ็ค</span><div className="text-[10px] text-slate-400">= {iqNum(req0)} {it.unit}{it.requestMode === 'unit' ? ' (ขอหน่วยย่อย)' : ''}</div></> : iqNum(req0)}</td>
-                      <td className="p-2 text-right">{editable ? <IqNumCell value={it.dispenseQty} touched={changed} ariaLabel={`อนุมัติจ่าย ${it.name}`} onCommit={v => setQty(it.drugId, v)} /> : <b className="tabular-nums">{iqNum(it.dispenseQty)}</b>}
+                      <td className="p-2 text-right">{editable ? <IqNumCell value={it.dispenseQty} touched={changed} ariaLabel={`อนุมัติจ่าย ${it.name}`} onCommit={v => setQty(it.drugId, v)} /> : <b className="tabular-nums">{iqNum(it.dispenseQty)}</b>}{receivedQtyOf(it) > 0 && <div className="text-[10px] font-bold text-emerald-700 whitespace-nowrap">{qtyWithReceivedText(it, it.dispenseQty)}</div>}
                         {pack > 1 && it.dispenseQty > 0 && <div className="text-[10px] text-slate-400">{formatQty(it.dispenseQty, pack)} แพ็ค</div>}</td>
                       <td className="p-2 text-right tabular-nums">{iqMoney(internalItemValue(it))}</td>
                       <td className="p-2">{editable ? <input value={it.adminNote || ''} onChange={e => setNote(it.drugId, e.target.value)} placeholder="-" aria-label={`หมายเหตุห้องยา ${it.name}`} className="w-full min-w-[7rem] px-2 py-1 border border-slate-200 rounded-lg text-xs" /> : <span className="text-xs text-slate-500">{it.adminNote}</span>}</td>
@@ -8919,6 +9007,82 @@ const AdminConfigView = ({ ctx }) => {
       return rxSync({ uid: ctx.currentUser.uid, col: 'internal_requisitions', scope: 'ALL', query: db.collection('internal_requisitions'), tombs });
     };
 
+    // ===== v6.16 จ่ายล่วงหน้า "รับแล้ว" (เช่น น้ำเกลือ) — แอดมินบันทึกเป็นระยะ ระบบรวมมูลค่าเข้าใบเบิกหน่วยงานรอบเร็วที่สุดที่เห็น =====
+    const PredispenseAdminView = ({ ctx }) => {
+      const depts = (ctx.appDb.depts || []).filter(d => (d.kind || 'dept') === 'dept' && d.active !== false);
+      const [deptId, setDeptId] = useState(depts[0]?.dept_id || '');
+      const [date, setDate] = useState(toYmd(new Date()));
+      const [note, setNote] = useState('');
+      const [rows, setRows] = useState([]);
+      const [code, setCode] = useState(''); const [cand, setCand] = useState(null); const [qty, setQty] = useState(''); const [mode, setMode] = useState('unit');
+      const [docs, setDocs] = useState([]); const [claimed, setClaimed] = useState(new Map()); const [busy, setBusy] = useState('');
+      const load = async () => {
+        try {
+          const [pd, rq] = await Promise.all([db.collection('internal_predispense').get(), db.collection('internal_requisitions').where('kind', '==', 'dept').get()]);
+          const m = new Map(); rq.docs.forEach(d => { const r = d.data(); if (r.status !== 'Cancelled') (r.predisp_ids || []).forEach(x => m.set(x, { id: d.id, ...r })); });
+          setClaimed(m); setDocs(pd.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.given_date || '').localeCompare(String(a.given_date || '')) || tsToMillis(b.created_at) - tsToMillis(a.created_at)));
+        } catch (e) { ctx.showToast('โหลดรายการจ่ายล่วงหน้าไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+      };
+      useEffect(() => { load(); }, []);
+      const pick = () => {
+        const d = ctx.findDrug(safeText(code)) || ctx.appDb.drugs.find(x => safeText(x.drug_name).toLowerCase() === safeText(code).toLowerCase());
+        if (!d) return ctx.showToast('ไม่พบยา — เลือกจากรายการ', 'error');
+        const c = { drugId: String(d.drug_id), name: d.drug_name, unit: ctx.findUnitName ? ctx.findUnitName(d) : (d.unit_id || ''), packSize: safePackSize(d.pack_size), isUnpacked: !!d.unpacked, price: toNonNegativeNumber(d.price), type: String(d.type || '1') };
+        setCand(c); setMode(defaultPackMode(c)); setQty('');
+      };
+      const addRow = () => { const q = packModeQty(qty, mode, cand); if (!(q > 0)) return ctx.showToast('ใส่จำนวน', 'error');
+        setRows(prev => { const i = prev.findIndex(r => r.drugId === cand.drugId); if (i >= 0) { const n = [...prev]; n[i] = { ...n[i], qty: n[i].qty + q }; return n; } return [...prev, { ...cand, qty: q }]; });
+        setCand(null); setCode(''); setQty(''); };
+      const save = async () => {
+        const dept = depts.find(d => d.dept_id === deptId); if (!dept) return ctx.showToast('เลือกหน่วยงาน', 'error');
+        if (!rows.length) return ctx.showToast('ยังไม่มีรายการ', 'error');
+        setBusy('save');
+        try {
+          const id = `PD-${dept.dept_id}-${date.replace(/-/g, '')}-${Date.now().toString(36)}`;
+          const total = rows.reduce((a, r) => a + (r.qty / safePackSize(r.packSize)) * r.price, 0);
+          await db.collection('internal_predispense').doc(id).set({ id, deptId: String(dept.dept_id), dept_name: safeText(dept.dept_name), given_date: date, note: safeText(note), status: 'Active',
+            items: rows.map(r => ({ drugId: r.drugId, name: safeText(r.name), unit: safeText(r.unit), packSize: r.packSize, price: r.price, type: r.type, qty: r.qty })), item_count: rows.length, total_value: Math.round(total * 100) / 100,
+            created_by_uid: ctx.currentUser.uid, created_by_name: safeText(ctx.currentUser.name), created_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+          await writeAuditLog(ctx.currentUser, 'INTERNAL_PREDISPENSE_CREATE', 'internal_predispense', id, { dept_id: dept.dept_id, items: rows.length, total });
+          ctx.showToast('บันทึกแล้ว — จะรวมเข้าใบเบิกรอบถัดไปของหน่วยงานนี้อัตโนมัติ'); setRows([]); setNote(''); await load();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); } finally { setBusy(''); }
+      };
+      const cancel = (d) => ctx.setConfirmDialog({ title: 'ยกเลิกรายการจ่ายล่วงหน้านี้?', message: 'ยอดนี้จะไม่ถูกรวมเข้าใบเบิก', icon: 'fa-ban', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700', confirmText: 'ยกเลิกรายการ',
+        onConfirm: async () => { try { await db.collection('internal_predispense').doc(d.id).update({ status: 'Cancelled', cancelled_at: firebase.firestore.FieldValue.serverTimestamp(), cancelled_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() }); await writeAuditLog(ctx.currentUser, 'INTERNAL_PREDISPENSE_CANCEL', 'internal_predispense', d.id, {}); await load(); } catch (e) { ctx.showToast(e?.message || String(e), 'error'); } } });
+      const statusOf = (d) => d.status === 'Cancelled' ? ['ยกเลิก', 'bg-slate-100 text-slate-500'] : d.status === 'Merged' ? ['รวมแล้ว (อนุมัติ)', 'bg-emerald-100 text-emerald-800'] : claimed.has(d.id) ? [`อยู่ในใบ ${claimed.get(d.id).form_no || claimed.get(d.id).doc_no || claimed.get(d.id).id}`, 'bg-sky-100 text-sky-800'] : ['รอรวมเข้าใบเบิก', 'bg-amber-100 text-amber-800'];
+      return (
+        <div className="space-y-5" id="predisp-admin">
+          <div className="bg-white rounded-2xl border shadow-sm p-5 space-y-3">
+            <div className="font-black text-lg"><i className="fa-solid fa-hand-holding-medical text-emerald-600 mr-2"></i>บันทึกจ่ายล่วงหน้า (รับแล้ว) เช่น น้ำเกลือ</div>
+            <p className="text-sm text-slate-500">หน่วยงานรับของไปแล้ว — ระบบจะรวมยอด/มูลค่าเข้าใบเบิกรอบถัดไปของหน่วยงาน (รอบเร็วที่สุดที่เห็นยอดนี้) แสดงในใบเป็น "เบิก+รับแล้ว" เช่น 3+2(รับแล้ว) · หน่วยงานแก้/ลบไม่ได้</p>
+            <div className="flex flex-wrap gap-3 items-end">
+              <label className="text-xs font-bold text-slate-500">หน่วยงาน<select id="pd-dept" value={deptId} onChange={e => setDeptId(e.target.value)} className="block mt-1 p-2.5 border rounded-xl">{depts.map(d => <option key={d.dept_id} value={d.dept_id}>{d.dept_name}</option>)}</select></label>
+              <label className="text-xs font-bold text-slate-500">วันที่จ่าย<input type="date" value={date} onChange={e => setDate(e.target.value)} className="block mt-1 p-2.5 border rounded-xl" /></label>
+              <label className="text-xs font-bold text-slate-500 flex-1 min-w-[14rem]">ยา<span className="flex gap-2 mt-1"><input id="pd-drug" list="pd-drugs" value={code} onChange={e => setCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') pick(); }} placeholder="รหัส / ชื่อยา" className="flex-1 p-2.5 border rounded-xl" />
+                <datalist id="pd-drugs">{ctx.appDb.drugs.map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name}</option>)}</datalist>
+                <button onClick={pick} className="px-4 rounded-xl bg-slate-800 text-white font-bold">เลือก</button></span></label>
+            </div>
+            {cand && <div className="border-2 border-emerald-300 rounded-xl p-3 space-y-2"><div className="font-bold">{cand.name} <span className="text-xs text-slate-400 font-mono">{cand.drugId}</span></div>
+              <PackUnitQtyField item={cand} mode={mode} onMode={setMode} value={qty} onChange={setQty} onEnter={addRow} idPrefix="pd-add" />
+              <div className="text-right"><button id="pd-add-row" onClick={addRow} className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold">เพิ่มรายการ</button></div></div>}
+            {rows.length > 0 && <table className="w-full text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-2 text-left">ยา</th><th className="p-2 text-right">จำนวน</th><th className="p-2 text-right">มูลค่า</th><th></th></tr></thead>
+              <tbody>{rows.map(r => <tr key={r.drugId} className="border-t"><td className="p-2">{r.name}</td><td className="p-2 text-right">{formatQty(r.qty, r.packSize)} <span className="text-xs text-slate-400">{r.unit}</span></td><td className="p-2 text-right">{((r.qty / safePackSize(r.packSize)) * r.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td className="p-2 text-right"><button onClick={() => setRows(prev => prev.filter(x => x.drugId !== r.drugId))} className="text-red-500"><i className="fa-solid fa-xmark"></i></button></td></tr>)}</tbody></table>}
+            <div className="flex gap-3 items-end"><input value={note} onChange={e => setNote(e.target.value)} placeholder="หมายเหตุ (ไม่บังคับ)" className="flex-1 p-2.5 border rounded-xl" />
+              <button id="pd-save" onClick={save} disabled={!!busy || !rows.length} className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-40">{busy === 'save' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-floppy-disk mr-2"></i>}บันทึก</button></div>
+          </div>
+          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+            <table className="w-full text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-3 text-left">วันที่จ่าย</th><th className="p-3 text-left">หน่วยงาน</th><th className="p-3 text-left">รายการ</th><th className="p-3 text-right">มูลค่า</th><th className="p-3 text-left">สถานะ</th><th></th></tr></thead>
+              <tbody>{docs.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-400">ยังไม่มีรายการ</td></tr>}
+                {docs.slice(0, 200).map(d => { const [t, c] = statusOf(d); return <tr key={d.id} className="border-t align-top"><td className="p-3">{formatThaiDate(d.given_date)}</td><td className="p-3">{d.dept_name}</td>
+                  <td className="p-3 text-xs">{(d.items || []).map(i => <div key={i.drugId}>{i.name} · {formatQty(i.qty, i.packSize)} {i.unit}</div>)}{d.note && <div className="text-slate-400">{d.note}</div>}</td>
+                  <td className="p-3 text-right">{toNonNegativeNumber(d.total_value).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+                  <td className="p-3"><span className={`px-2 py-1 rounded-lg text-xs font-bold ${c}`}>{t}</span></td>
+                  <td className="p-3 text-right">{d.status === 'Active' && !claimed.has(d.id) && <button onClick={() => cancel(d)} className="px-3 py-1 rounded-lg border border-red-200 text-red-600 text-xs font-bold">ยกเลิก</button>}</td></tr>; })}</tbody></table>
+          </div>
+        </div>
+      );
+    };
+
     const InternalQueueView = ({ ctx }) => {
       const [queue, setQueue] = useState([]);
       const [recent, setRecent] = useState([]);
@@ -8965,11 +9129,12 @@ const AdminConfigView = ({ ctx }) => {
             <div className="bg-white rounded-xl border p-4"><div className="text-xs font-bold text-slate-500">มูลค่ารอจ่าย</div><div className="text-2xl font-extrabold tabular-nums">{iqMoney(pendingValue)}</div></div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {[['queue', `คิว (${queue.length})`], ['done', 'ดำเนินการแล้ว']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-xl font-bold text-sm ${tab === k ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600'}`}>{l}</button>)}
+            {[['queue', `คิว (${queue.length})`], ['done', 'ดำเนินการแล้ว'], ['predispense', 'จ่ายล่วงหน้า (รับแล้ว)']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-xl font-bold text-sm ${tab === k ? 'bg-slate-800 text-white' : 'bg-white border text-slate-600'}`}>{l}</button>)}
             <div className="w-px bg-slate-200 mx-1"></div>
             {[['all', 'ทั้งหมด'], ['pharmacy', 'ห้องยา'], ['dept', 'หน่วยงาน']].map(([k, l]) => <button key={k} onClick={() => setKindFilter(k)} className={`px-3 py-2 rounded-xl text-sm font-bold ${kindFilter === k ? 'bg-teal-600 text-white' : 'bg-white border text-slate-600'}`}>{l}</button>)}
           </div>
-          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+          {tab === 'predispense' && <PredispenseAdminView ctx={ctx} />}
+          <div className={`bg-white rounded-2xl border shadow-sm overflow-x-auto ${tab === 'predispense' ? 'hidden' : ''}`}>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs text-slate-500"><tr>
                 {tab === 'queue' && <th className="p-3 text-left w-12">คิว</th>}<th className="p-3 text-left">หน่วยเบิก</th><th className="p-3 text-left">เลขที่</th><th className="p-3 text-left">ส่งเมื่อ</th>

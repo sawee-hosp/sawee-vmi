@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.15.0';
+const APP_VERSION = '6.16.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1081,6 +1081,19 @@ const pharmUsageSince = (series, seriesFrom, seriesTo, initialYmd, multiplier) =
   return sum * (toNonNegativeNumber(multiplier, 1) || 1);
 };
 
+// ===== v6.16 ยอด "รับแล้ว" ในใบเบิกหน่วยงาน: ใบเบิกด่วน (urgentQty) + จ่ายล่วงหน้าโดยแอดมิน เช่น น้ำเกลือ (predispQty) =====
+// requestQty/dispenseQty = ยอดรวม (เบิกปกติ + รับแล้ว) · แสดง "3+2(รับแล้ว)"
+const receivedQtyOf = (it) => toNonNegativeNumber(it && it.urgentQty) + toNonNegativeNumber(it && it.predispQty);
+const regularQtyOf = (it, total) => Math.max(0, Math.round((toNonNegativeNumber(total != null ? total : (it && (it.requestQty != null ? it.requestQty : it.dispenseQty))) - receivedQtyOf(it)) * 1000) / 1000);
+const qtyWithReceivedText = (it, total, pack) => {
+  const rcv = receivedQtyOf(it); const p = pack || (it && it.packSize);
+  const fq = (v) => safePackSize(p) > 1 ? formatQty(v, p) : toNonNegativeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+  const tot = toNonNegativeNumber(total != null ? total : (it && (it.requestQty != null ? it.requestQty : it.dispenseQty)));
+  if (!(rcv > 0)) return fq(tot);
+  const reg = Math.max(0, tot - rcv);
+  return (reg > 0 ? fq(reg) + '+' : '') + fq(rcv) + '(รับแล้ว)';
+};
+
 const buildInternalReqId = (deptId) => {
   const d = new Date();
   const stamp = d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds());
@@ -1264,7 +1277,7 @@ const buildInternalReqFormHtml = (opts) => {
         '<td class="name">' + esc(it.name) + '</td>' +
         '<td class="c muted">' + esc(it.unit) + '</td>' +
         '<td class="c">' + pack + '</td>' +
-        '<td class="c b">' + qty(req0, pack) + '</td>' +
+        '<td class="c b">' + (receivedQtyOf(it) > 0 ? esc(qtyWithReceivedText(it, req0, pack)) : qty(req0, pack)) + '</td>' + // v6.16 "3+2(รับแล้ว)"
         '<td class="c"></td>' + // v6.6.5 จำนวนจ่าย: เว้นว่างให้ห้องยาเขียน
         '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
         '<td class="r b">' + money(valueOf(it)) + '</td>' +

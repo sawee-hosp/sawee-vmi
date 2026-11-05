@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.18.0 · Bridge v2.14.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.19.0 · Bridge v2.14.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -203,4 +203,9 @@
 - แอดมิน เมนู "กระดานจัดสรรยา" (`AllocationBoardView`): ใบ Pending/ApprovalFailed ที่ยังไม่ส่ง INVS ทั้ง รพ.สต.+หน่วยงาน+ห้องยา → แสดงเฉพาะยาที่ เหลือหลังจ่ายทุกใบ < N บรรจุ (localStorage `rxfill_alloc_threshold`, 0 = ไม่พอจ่าย) · จำนวนแห่งที่รอเบิก · ยอดแนะนำตามสัดส่วน (ปัดลงเต็มบรรจุ, แนะนำเท่านั้น) · ปุ่มเปิดใบ (ภายในผ่าน sessionStorage `rxfill_open_internal_req`)
 - ใบภายในส่ง `request_date` = round_date || form_date (ช่อง "วันที่เบิก (INVS)" ในหน้าตรวจ แก้ได้) — เดิมไม่ส่ง INVS ใช้วันจริง · Bridge รับย้อนหลังไม่เกิน 120 วัน
 - tests/v618.js · ตัวอย่าง `docs/blueprint/screens/S03-pick-slip-plan-v618.png`
+
+## v6.19 ห้องยา (PharmacyReqView) — คงคลังรวมทุก lot
+- คอลัมน์ "เหลือหลังหยิบ (รวมทุก lot) · Lot ที่หยิบ": บรรทัดแรก "เหลือรวม X (แพ็ค) · n lot / คลัง Y" (n = lot ที่ยังเหลือหลังหยิบ FEFO, นับได้เมื่อดึง lot INVS แล้ว) · บรรทัดถัดไป lot ที่หยิบ "LOT EXP [จำนวน]"
+- `lotTotal` = รวมทุก lot ของคลังใหญ่ (invs_lots) หรือจากที่บันทึกในใบ (lotStockAfter + dispenseQty) · **เบิกจริงห้ามเกิน lotTotal**: `NumCell` prop `max`/`onOverMax` ตัดเป็นค่าสูงสุด + แจ้งเตือน · ยอดแนะนำที่เกินก็ถูกจำกัด (`dispenseCapped` "จำกัดตามคงคลัง") · ไม่มีข้อมูล lot = ไม่จำกัด
+- lotStockAfter = lotTotal − เบิกจริง (คิดใหม่ทุกครั้งที่แก้) · tests/v613.js
 

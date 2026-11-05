@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.18.0"></script>
+  <script src="shared.js?v=6.19.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.18.0';
+      var need = '6.19.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -165,7 +165,7 @@
     };
 
     // ช่องตัวเลขที่ commit ตอน blur/Enter — กัน re-render ทั้งตารางทุกครั้งที่พิมพ์
-    const NumCell = ({ value, onCommit, disabled, touched, className, ariaLabel, min }) => {
+    const NumCell = ({ value, onCommit, disabled, touched, className, ariaLabel, min, max, onOverMax }) => {
       const [text, setText] = useState(value === null || value === undefined ? '' : String(value));
       useEffect(() => { setText(value === null || value === undefined ? '' : String(value)); }, [value]);
       const commit = () => {
@@ -173,6 +173,8 @@
         if (raw === '') { onCommit(null); return; }
         const n = Number(raw);
         if (!Number.isFinite(n) || n < (min ?? 0)) { setText(value === null || value === undefined ? '' : String(value)); return; }
+        // v6.19 จำกัดไม่เกิน max (เช่น คงคลังรวมทุก lot)
+        if (max !== null && max !== undefined && n > max + 1e-9) { setText(String(max)); if (onOverMax) onOverMax(n, max); if (Number(max) !== Number(value)) onCommit(max); return; }
         if (n !== Number(value)) onCommit(n);
       };
       return (
@@ -1290,13 +1292,19 @@ ORDER BY d.name`;
             : calcPharmacySuggestion({ usage, days: calcDays, coverDays, roundDays, minOrderValue, onHand, inTransit, item: base });
           const suggested = blocked ? 0 : sug.suggested;
           const follow = st.dispenseManual === null || st.dispenseManual === undefined;
-          const dispense = follow ? suggested : toNonNegativeNumber(st.dispenseManual);
+          // v6.19 คงคลังใหญ่รวมทุก lot (ดึง lot แล้ว หรือคำนวณจากที่บันทึกในใบ) — เบิกจริงห้ามเกินยอดนี้
+          const lotTotal = lots ? Math.round(lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) * 1000) / 1000
+            : (sAsu && sAsu.stockAfter !== null && sAsu.stockAfter !== undefined ? Math.round((toNonNegativeNumber(sAsu.stockAfter) + toNonNegativeNumber(sAsu.dispense)) * 1000) / 1000 : null);
+          const rawDispense = follow ? suggested : toNonNegativeNumber(st.dispenseManual);
+          const dispenseCapped = lotTotal !== null && rawDispense > lotTotal + 1e-9;
+          const dispense = dispenseCapped ? lotTotal : rawDispense;
           // Lot ที่ต้องหยิบ + เหลือหลังหยิบ (ตามจำนวนเบิกจริง) — ไม่มี lot ใหม่ใช้ของที่บันทึกไว้ถ้าจำนวนเท่าเดิม
-          const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan ? plan.lotPlan : allocatePharmLots(lots, dispense))
+          const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan && !dispenseCapped ? plan.lotPlan : allocatePharmLots(lots, dispense))
             : (sAsu && Math.abs(sAsu.dispense - dispense) < 1e-9 ? sAsu.lotPlan : []);
           // v6.15 คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (ใช้ในช่องคงเหลือของใบพิมพ์)
-          const lotStockAfter = lots ? Math.max(0, Math.round((lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) - dispense) * 1000) / 1000)
-            : (sAsu && Math.abs(sAsu.dispense - dispense) < 1e-9 ? sAsu.stockAfter : null);
+          const lotStockAfter = lotTotal !== null ? Math.max(0, Math.round((lotTotal - dispense) * 1000) / 1000) : null;
+          // จำนวน lot ที่ยังเหลือหลังหยิบ (นับได้เมื่อดึง lot INVS แล้ว)
+          const lotsLeftCount = lots ? (() => { let left = dispense; return lots.filter(l => { const q = toNonNegativeNumber(l.qty); const use = Math.min(q, Math.max(0, left)); left -= use; return q - use > 1e-9; }).length; })() : null;
           const source = u ? 'usage' : (st.source || (historyIds.has(id) ? 'history' : 'manual'));
           out.push({
             id, base, drug, multiplier, multiplierChanged: !!drug && Math.abs(multiplier - getHosxpMultiplier(drug)) > 1e-9,
@@ -1305,7 +1313,7 @@ ORDER BY d.name`;
             stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit,
             dailyAvg: sug.dailyAvg, target: sug.target, suggested, follow, dispense, blocked, source,
             skipReason: blocked ? '' : sug.skipReason, coverRounds: sug.coverRounds,
-            asu: asuStats, plan, lotPlan, lotStockAfter, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
+            asu: asuStats, plan, lotPlan, lotStockAfter, lotTotal, dispenseCapped, lotsLeftCount, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
             value: internalItemValue({ dispenseQty: dispense, packSize: base.packSize, price: base.price }),
             note: st.note || ''
           });
@@ -1677,7 +1685,7 @@ ORDER BY d.name`;
                     <th className="p-2 text-right bg-slate-100">{asuMode ? 'เป้า (14+3+SS)' : `เป้า ${coverDays} วัน`}</th>
                     <th className="p-2 text-right bg-slate-100">แนะนำ</th>
                     <th className="p-2 text-right bg-slate-100">เบิกจริง</th>
-                    <th className="p-2 text-left bg-indigo-50 min-w-[12rem]">Lot ที่หยิบ · เหลือหลังหยิบ</th>
+                    <th className="p-2 text-left bg-indigo-50 min-w-[12rem]">เหลือหลังหยิบ (รวมทุก lot) · Lot ที่หยิบ</th>
                     <th className="p-2 text-right bg-slate-100">มูลค่า</th>
                   </tr>
                 </thead>
@@ -1727,13 +1735,18 @@ ORDER BY d.name`;
                             {r.plan.lotShort && <div className="text-red-600 font-bold">คลังใหญ่ไม่พอ</div>}
                           </div>}</td>
                         <td className="p-2 text-right whitespace-nowrap">
-                          <NumCell value={r.dispense} touched={!r.follow} disabled={r.blocked} ariaLabel={`เบิกจริง ${r.base.name}`} onCommit={v => patchRow(r.id, { dispenseManual: v === null ? null : v })} />
+                          <NumCell value={r.dispense} touched={!r.follow} disabled={r.blocked} ariaLabel={`เบิกจริง ${r.base.name}`} max={r.lotTotal} onOverMax={(n, m) => ctx.showToast(`${r.base.name}: เบิกได้ไม่เกินคงคลังรวมทุก lot ${fmtNum(m)} (กรอก ${fmtNum(n)})`, 'warn')} onCommit={v => patchRow(r.id, { dispenseManual: v === null ? null : v })} />
+                          {r.dispenseCapped && <div className="text-[10px] font-bold text-red-600">จำกัดตามคงคลัง {fmtNum(r.lotTotal)}</div>}
                           {pack > 1 && r.dispense > 0 && <div className="text-[10px] text-slate-400">= {formatQty(r.dispense, pack)} แพ็ค</div>}
                           {!r.follow && <button onClick={() => patchRow(r.id, { dispenseManual: null })} className="text-[10px] text-teal-600 hover:underline block ml-auto">ใช้ตามแนะนำ</button>}
                           {hint && <button onClick={() => patchRow(r.id, { dispenseManual: hint })} className="text-[10px] text-amber-700 hover:underline block ml-auto">ปัดเป็น {fmtNum(hint)}</button>}
                         </td>
-                        <td className="p-2 text-[11px] bg-indigo-50/40">{r.lotPlan && r.lotPlan.length ? r.lotPlan.map((l, i) => <div key={i} className="whitespace-nowrap"><b className="font-mono">{l.lot_no || '-'}</b> <span className="text-slate-400">{fmtExpShort(l.expiry)}</span> หยิบ <b>{fmtNum(l.qty)}</b> → เหลือ <b className={l.remain > 0 ? 'text-slate-700' : 'text-indigo-700'}>{fmtNum(l.remain)}</b></div>)
-                          : r.dispense > 0 ? <span className="text-slate-400">{asuMode ? (r.lotsLoaded ? 'ไม่มี lot ในคลัง INVS' : 'กด "ยอดใช้ 180 วัน + lot INVS"') : '-'}</span> : ''}
+                        <td className="p-2 text-[11px] bg-indigo-50/40">
+                          {/* v6.19 เหลือรวมทุก lot หลังหยิบ (+จำนวน lot ที่เหลือ) แล้วตามด้วย lot ที่หยิบ */}
+                          {r.lotStockAfter !== null && r.lotStockAfter !== undefined
+                            ? <div className="whitespace-nowrap" data-lot-left={r.lotStockAfter}>เหลือรวม <b className="text-sm text-indigo-800">{fmtNum(r.lotStockAfter)}</b>{pack > 1 && <span className="text-slate-500"> ({formatQty(r.lotStockAfter, pack)} แพ็ค)</span>}{r.lotsLeftCount !== null && r.lotsLeftCount !== undefined && <span className="text-slate-500"> · {r.lotsLeftCount} lot</span>}<span className="text-slate-400"> / คลัง {fmtNum(r.lotTotal)}</span></div>
+                            : r.dispense > 0 ? <span className="text-slate-400">{asuMode ? (r.lotsLoaded ? 'ไม่มี lot ในคลัง INVS' : 'กด "ยอดใช้ 180 วัน + lot INVS"') : '-'}</span> : ''}
+                          {r.lotPlan && r.lotPlan.length > 0 && <div className="text-slate-600">{r.lotPlan.map((l, i) => <span key={i} className="whitespace-nowrap mr-2"><b className="font-mono">{l.lot_no || '-'}</b> <span className="text-slate-400">{fmtExpShort(l.expiry)}</span> [{fmtNum(l.qty)}]</span>)}</div>}
                           {r.lotShort && <div className="text-red-600 font-bold">คลังมีไม่พอจ่าย</div>}</td>
                         <td className="p-2 text-right tnum">{r.value ? fmtMoney(r.value) : '-'}</td>
                       </tr>

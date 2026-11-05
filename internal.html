@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.19.0"></script>
+  <script src="shared.js?v=6.20.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.19.0';
+      var need = '6.20.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1164,6 +1164,8 @@ ORDER BY d.name`;
       const toggleAsu = (v) => { setAsuMode(v); try { localStorage.setItem('rxfill_ph_asu', v ? '1' : '0'); } catch (e) { /* ignore */ } };
       const [asuData, setAsuData] = useState(null);   // { from, to, series: { icode: { ymd: qty } } }
       const [invsLots, setInvsLots] = useState(null); // { drugId: [{lot_no, expiry, qty}] } เรียง FEFO
+      const [lotsAt, setLotsAt] = useState(null); // v6.20 เวลาที่ดึง lot INVS ล่าสุด
+      const [lotsErr, setLotsErr] = useState('');
       const [storedAsu] = useState(() => { const m = new Map(); if (editReq) (editReq.items || []).forEach(it => { if (it.asu) m.set(String(it.drugId), { stats: it.asu, lotPlan: it.lotPlan || [], dispense: toNonNegativeNumber(it.dispenseQty), stockAfter: it.lotStockAfter ?? null }); }); return m; });
       // v6.13 รวมยอดรายวันของ icode ทุกตัวที่ผูกกับยา INVS
       const asuSeriesByDrug = useMemo(() => {
@@ -1286,7 +1288,7 @@ ORDER BY d.name`;
           const blocked = String(base.type) === '6' || !!base.isDiscontinued;
           const sAsu = storedAsu.get(id);
           const asuStats = asuMode ? (asuSeriesByDrug ? calcAsuStats(asuSeriesByDrug.get(id) || {}, addDaysYmd(asuData.to, -179), asuData.to, multiplier) : (sAsu ? sAsu.stats : null)) : null;
-          const lots = asuMode && invsLots ? (invsLots[id] || []) : null;
+          const lots = invsLots ? (invsLots[id] || []) : null; // v6.20 ใช้ lot INVS ล่าสุดทั้งสูตร ASU และสูตรเดิม
           const plan = asuStats ? calcPharmacyPlanV2({ stats: asuStats, onHand, inTransit, item: base, ven: drugVen(drug), lots, minOrderValue }) : null;
           const sug = plan ? { dailyAvg: plan.dbar, target: plan.S > 0 ? Math.ceil(plan.S / safePackSize(base.packSize) - 1e-9) * safePackSize(base.packSize) : 0, suggested: plan.suggested, skipReason: plan.suggested > 0 ? '' : plan.reason, coverRounds: plan.coverRounds }
             : calcPharmacySuggestion({ usage, days: calcDays, coverDays, roundDays, minOrderValue, onHand, inTransit, item: base });
@@ -1371,11 +1373,28 @@ ORDER BY d.name`;
             const res = await callInvsBridge('invs_lots', '', { drug_ids: all.slice(i, i + 1000), stock_id: safeText(ctx.dept?.invs_stock_id) });
             Object.assign(lots, res.lots || {});
           }
-          setInvsLots(lots);
+          setInvsLots(lots); setLotsAt(new Date()); setLotsErr('');
           ctx.showToast(`คำนวณ ASU 180 วัน: ยอดใช้ ${fmtNum(data.icode_count || 0)} icode · lot INVS ${fmtNum(Object.keys(lots).length)} รายการ`);
         } catch (e) { ctx.showToast('ดึงยอดใช้รายวัน / lot INVS ไม่สำเร็จ: ' + (e?.message || e) + ' (ต้องใช้ Bridge 2.12.0)', 'error'); }
         finally { setBusy(''); }
       };
+      // v6.20 ดึงเฉพาะ lot คลังใหญ่ INVS ล่าสุด (เร็ว ไม่ดึงยอดใช้ใหม่) — แก้ใบเดิมแล้วคลังเปลี่ยน (เช่น รับของใหม่) ปรับเบิกจริงได้ทันที
+      const fetchLatestLots = async (silent) => {
+        const all = [...new Set(derivedAll.map(r => r.id))];
+        if (!all.length) return;
+        if (!silent) setBusy('lots');
+        try {
+          const lots = {};
+          for (let i = 0; i < all.length; i += 1000) Object.assign(lots, (await callInvsBridge('invs_lots', '', { drug_ids: all.slice(i, i + 1000), stock_id: safeText(ctx.dept?.invs_stock_id) })).lots || {});
+          setInvsLots(prev => ({ ...(prev || {}), ...Object.fromEntries(all.map(id => [id, lots[id] || []])) }));
+          setLotsAt(new Date()); setLotsErr('');
+          if (!silent) ctx.showToast(`อัปเดตคงคลัง lot INVS ล่าสุด ${fmtNum(Object.keys(lots).length)} รายการ`);
+        } catch (e) { setLotsErr(e?.message || String(e)); if (!silent) ctx.showToast('ดึง lot INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { if (!silent) setBusy(''); }
+      };
+      // เปิดแก้ใบเดิม → ดึง lot ล่าสุดอัตโนมัติ 1 ครั้ง (ไม่ต้องเริ่มใหม่)
+      const autoLotsRef = useRef(false);
+      useEffect(() => { if (editReq && !autoLotsRef.current && derivedAll.length) { autoLotsRef.current = true; fetchLatestLots(true); } }, [editReq, derivedAll.length]);
       const saveVen = async (drugId, ven) => {
         try {
           await db.collection('master_drugs').doc(String(drugId)).update({ ven, ven_updated_at: firebase.firestore.FieldValue.serverTimestamp(), ven_updated_by: safeText(ctx.currentUser.name) });
@@ -1590,6 +1609,9 @@ ORDER BY d.name`;
                 {asuMode && <button id="asu-fetch" onClick={fetchAsu} disabled={!!busy} className="px-4 py-2.5 rounded-xl bg-indigo-600 text-white font-bold shadow hover:bg-indigo-700 disabled:opacity-40">
                   {busy === 'asu' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-chart-line mr-2"></i>}ยอดใช้ 180 วัน + lot INVS
                 </button>}
+                <button id="lots-refresh" onClick={() => fetchLatestLots(false)} disabled={!!busy || !derivedAll.length} title={lotsErr ? 'ครั้งล่าสุดไม่สำเร็จ: ' + lotsErr : 'ดึงคงคลังทุก lot ของคลังใหญ่ INVS ณ ตอนนี้ (ไม่ดึงยอดใช้ใหม่)'} className={`px-4 py-2.5 rounded-xl border font-bold shadow-sm disabled:opacity-40 ${lotsErr ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white border-indigo-300 text-indigo-700 hover:bg-indigo-50'}`}>
+                  {busy === 'lots' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-boxes-stacked mr-2"></i>}คงคลัง lot INVS ล่าสุด{lotsAt && <span className="ml-1 text-[11px] font-normal text-slate-500">({pad2(lotsAt.getHours())}:{pad2(lotsAt.getMinutes())})</span>}
+                </button>
                 <button onClick={fetchFromBridge} disabled={!!busy || !!editReq} className="px-4 py-2.5 rounded-xl bg-teal-600 text-white font-bold shadow hover:bg-teal-700 disabled:opacity-40">
                   {busy === 'bridge' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-database mr-2"></i>}ดึงยอดใช้จาก HOSxP
                 </button>
@@ -1743,7 +1765,9 @@ ORDER BY d.name`;
                         </td>
                         <td className="p-2 text-[11px] bg-indigo-50/40">
                           {/* v6.19 เหลือรวมทุก lot หลังหยิบ (+จำนวน lot ที่เหลือ) แล้วตามด้วย lot ที่หยิบ */}
-                          {r.lotStockAfter !== null && r.lotStockAfter !== undefined
+                          {r.dispense <= 0 && r.lotTotal !== null && r.lotTotal !== undefined
+                            ? <div className="whitespace-nowrap text-slate-600" data-lot-left={r.lotTotal}>คลัง <b className="text-sm text-indigo-800">{fmtNum(r.lotTotal)}</b>{pack > 1 && <span className="text-slate-500"> ({formatQty(r.lotTotal, pack)} แพ็ค)</span>}{r.lotsLeftCount !== null && r.lotsLeftCount !== undefined && <span className="text-slate-500"> · {r.lotsLeftCount} lot</span>}</div>
+                            : r.lotStockAfter !== null && r.lotStockAfter !== undefined
                             ? <div className="whitespace-nowrap" data-lot-left={r.lotStockAfter}>เหลือรวม <b className="text-sm text-indigo-800">{fmtNum(r.lotStockAfter)}</b>{pack > 1 && <span className="text-slate-500"> ({formatQty(r.lotStockAfter, pack)} แพ็ค)</span>}{r.lotsLeftCount !== null && r.lotsLeftCount !== undefined && <span className="text-slate-500"> · {r.lotsLeftCount} lot</span>}<span className="text-slate-400"> / คลัง {fmtNum(r.lotTotal)}</span></div>
                             : r.dispense > 0 ? <span className="text-slate-400">{asuMode ? (r.lotsLoaded ? 'ไม่มี lot ในคลัง INVS' : 'กด "ยอดใช้ 180 วัน + lot INVS"') : '-'}</span> : ''}
                           {r.lotPlan && r.lotPlan.length > 0 && <div className="text-slate-600">{r.lotPlan.map((l, i) => <span key={i} className="whitespace-nowrap mr-2"><b className="font-mono">{l.lot_no || '-'}</b> <span className="text-slate-400">{fmtExpShort(l.expiry)}</span> [{fmtNum(l.qty)}]</span>)}</div>}

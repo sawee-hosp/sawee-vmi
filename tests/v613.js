@@ -48,7 +48,7 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
   await p.evaluate(()=>{ window.print=()=>{}; });
   await p.click('#ph-est-print'); await p.waitForTimeout(800);
   const html=await p.evaluate(()=>{ const f=[...document.querySelectorAll('iframe')].pop(); try{ return f?f.contentWindow.document.documentElement.outerHTML:''; }catch(e){ return ''; } });
-  check('print: remaining column = stock after (big unit) + lots to pick', /<b>260<\/b><div class="lotpick">A \[40\]<\/div>/.test(html) && /<b>4\(500\)<\/b><div class="lotpick">L1 \[1\(500\)\], L2 \[\(500\)\]<\/div>/.test(html), html.length+' chars');
+  check('print: remaining column = stock after (big unit) + lots to pick', html.includes('<td class="c b">260</td><td class="lotcell"><span class="lp">A [40]</span></td>') && html.includes('<td class="c b">4(500)</td><td class="lotcell"><span class="lp">L1 [1(500)]</span> <span class="lp">L2 [(500)]</span></td>'), html.length+' chars');
   check('no errors', !errs.length, errs.join(' | '));
   console.log(res.join('\n')); await b.close();
 })().catch(e=>{console.error('HARNESS',e.message); console.log(res.join('\n')); process.exit(1);});

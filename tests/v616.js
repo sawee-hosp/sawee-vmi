@@ -23,7 +23,7 @@ const newPage=async(b,uid,extra,file)=>{ seed(uid,extra); const p=await (await b
         { drug_id: 'D2', qty: 25, stock_before: 45, stock_after: 20, lots_after: [{ lot_no: 'N1', expiry: '20270501', qty_issue: 25, qty_after: 20 }] } ] } })));
     const iD2=html.indexOf('NSS 1000 ml'), iD1=html.indexOf('Syringe 5 ml');
     check('slip: sorted by location (7/… before 12/…)', iD2>0 && iD1>iD2);
-    check('slip: qty / lots / EXP / stock after in big units', /เบิก <b class="big">3\(50\)<\/b>/.test(html) && /<b>S1<\/b> <span class="sm">EXP 01\/01\/70<\/span><span class="lq">2\(50\)<\/span>/.test(html) && /เหลือคงคลัง <b>9<\/b>/.test(html) && html.includes('รหัส D1') && /เบิก <b class="big">2\(5\)<\/b>/.test(html));
+    check('slip: qty / lots / EXP / stock after in big units', /เบิก <b class="big">3\(50\)<\/b>/.test(html) && /<b>S1<\/b> <span class="sm">EXP 01\/01\/70<\/span><span class="lq">2\(50\)<\/span>/.test(html) && /เหลือ <b>9<\/b>/.test(html) && html.includes('<span class="sm">D1</span>') && /เบิก <b class="big">2\(5\)<\/b>/.test(html));
     check('slip: 80 mm page + auto height script', html.includes('@page{size:80mm') && html.includes('scrollHeight'));
     // 2) แอดมินบันทึกจ่ายล่วงหน้า
     await p.click('text=คิวใบเบิกภายใน รพ.'); await p.waitForTimeout(500);
@@ -89,7 +89,7 @@ const newPage=async(b,uid,extra,file)=>{ seed(uid,extra); const p=await (await b
     await p.click('tr:has-text("ตึกผู้ป่วยหญิง")'); await p.waitForTimeout(700);
     await p.click('#print-pick-slip'); await p.waitForTimeout(800);
     const html=await p.evaluate(()=>{ const f=[...document.querySelectorAll('iframe')].pop(); try{ return f?f.contentWindow.document.documentElement.outerHTML:''; }catch(e){ return ''; } });
-    check('reprint: from pick_slips (PO55, lot N7, stock 2(5))', html.includes('PO55') && html.includes('<b>N7</b>') && html.includes('เหลือคงคลัง <b>2(5)</b>'), html.length+' chars');
+    check('reprint: from pick_slips (PO55, lot N7, stock 2(5))', html.includes('PO55') && html.includes('<b>N7</b>') && html.includes('เหลือ <b>2(5)</b>'), html.length+' chars');
     check('reprint: no errors', !errs.length, errs.join(' | '));
   }
   console.log(res.join('\n')); await b.close();

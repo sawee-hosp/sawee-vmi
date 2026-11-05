@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.17.0 · Bridge v2.13.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.18.0 · Bridge v2.14.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -190,3 +190,17 @@
 - ข้อมูล slip เก็บแยก `pick_slips/{rpst|internal}__{reqId}` (`buildPickSlipData`/`savePickSlip`) ตอนส่ง INVS จากผลที่ Bridge ตอบกลับ (`data.items`) → หลังส่งถาม "พิมพ์ slip จัดยา?" (`saveAndPromptPickSlip`, ใบ รพ.สต. ด้วย) · พิมพ์ย้อนหลัง `loadPickSlip`: pick_slips → snapshot INVS ในใบ (บันทึกเก็บด้วย) → ยังไม่ส่ง INVS = รายการในใบ เว้น Lot/คงคลังให้เขียน
 - เหตุ: ใบที่อ่านฟิลด์ INVS กลับจาก Firestore/แคชไม่ได้ slip ขึ้น "ไม่มีข้อมูล INVS" ทั้งที่เพิ่งส่ง
 - rules v6.17: `pick_slips` แอดมินเท่านั้น · tests v616 (ข้อ 6 พิมพ์ย้อนหลัง) / v615 / v612 · ตัวอย่าง `docs/blueprint/screens/S02-pick-slip-80mm-v617.png`
+
+## v6.18 วางแผนจัดยาก่อนส่ง INVS · กระดานจัดสรร · วันที่เบิกใบภายใน (Bridge 2.14.0)
+- Flow: ใบรอจัด → (กระดานจัดสรร) → "วางแผน + พิมพ์ slip จัดยา" (ใบ = กำลังจัด, จองยอด) → คนจัดหยิบ/เขียนแก้ → แอดมินแก้ยอดจริงในเว็บ → ส่ง INVS ครั้งเดียว → ยืนยันใน INVS · **ไม่มีการเขียน INVS ก่อนขั้นส่ง** (วางแผน/กระดาน อ่านอย่างเดียว)
+- Bridge 2.14.0 `pendingInvsByDrug`: ยอดค้าง = sm_po_c ของ sm_po คลังเดียวกัน (STOCK_ID) ที่หัว+บรรทัด CONFIRM_FLAG<>'Y', CANCEL_DISP ว่าง, QTY_ORDER>0, SYSDATE ไม่เกิน `invs.pending_lookback_days` (120) · ผู้ใช้ไม่ทดสอบลบเอกสารใน INVS (INVS ให้แก้จำนวนเป็น 0 = ไม่นับอยู่แล้ว)
+  - preflight: `pending_qty`, `pending_docs`, `available` · stock_after/alloc/lots_after คิดหลังหักยอดค้าง (`consumeLots`, ลำดับ RECORD_NUMBER) · เตือนเมื่อค้างทำให้ไม่พอ
+  - action `stock_projection` {drug_ids} (admin, อ่านอย่างเดียว) → {on_hand, pending_qty, pending_docs, available, pack_ratio, lots หลังหักยอดค้าง}
+- `pick_slips.state`: PLANNED (พิมพ์ slip แล้ว ยังไม่ส่ง = ยอดจอง) → SENT (`markPickSlipSent` ตอนส่ง INVS ทั้ง รพ.สต./ภายใน, เก็บ invs_items) / CANCELLED · `loadPickReservations` ตรวจใบจริง: ส่งแล้ว/ปิด/ยกเลิก = ปิดแผนเอง, ค้าง >30 วันไม่นับ
+  - `planPickSlip`: ดึง INVS ใหม่ทุกครั้ง → ใช้ได้ = available − ยอดจองใบอื่น → หักส่วนรับแล้ว (predisp/urgent/ใบ ฉ) ออกจาก lot ก่อน → จัดส่วนที่ต้องหยิบ FEFO → เหลือ = ใช้ได้ − ทั้งใบ (ติดลบ = "ขาด") · รวม invs_extra_items ของ รพ.สต.
+  - `PickSlipButton`: ยังไม่ส่ง = "วางแผน + พิมพ์ slip จัดยา" (คิวใบภายใน + หน้าใบ รพ.สต. แอดมิน) · ส่งแล้ว = พิมพ์ slip เดิม · หลังส่งไม่ถามพิมพ์ (slip ใบเดียว) · `PickPlanBadge` "กำลังจัด"
+- slip กระชับ: บรรทัด 1 ตำแหน่ง+ชื่อ+เหลือ (มุมขวา) · บรรทัด 2 รหัสตัวเล็ก+เบิก (×บรรจุ)+รับแล้ว→หยิบ · lot ละบรรทัด · เส้นคั่นบาง
+- แอดมิน เมนู "กระดานจัดสรรยา" (`AllocationBoardView`): ใบ Pending/ApprovalFailed ที่ยังไม่ส่ง INVS ทั้ง รพ.สต.+หน่วยงาน+ห้องยา → แสดงเฉพาะยาที่ เหลือหลังจ่ายทุกใบ < N บรรจุ (localStorage `rxfill_alloc_threshold`, 0 = ไม่พอจ่าย) · จำนวนแห่งที่รอเบิก · ยอดแนะนำตามสัดส่วน (ปัดลงเต็มบรรจุ, แนะนำเท่านั้น) · ปุ่มเปิดใบ (ภายในผ่าน sessionStorage `rxfill_open_internal_req`)
+- ใบภายในส่ง `request_date` = round_date || form_date (ช่อง "วันที่เบิก (INVS)" ในหน้าตรวจ แก้ได้) — เดิมไม่ส่ง INVS ใช้วันจริง · Bridge รับย้อนหลังไม่เกิน 120 วัน
+- tests/v618.js · ตัวอย่าง `docs/blueprint/screens/S03-pick-slip-plan-v618.png`
+

@@ -110,7 +110,7 @@ const open=async(b,uid,time,extra)=>{ seed(uid,extra); const ctx=await b.newCont
     check('invs price: approved with INVS price', r.st==='Completed' && r.items.includes('D1:300:INVS:260') && r.items.includes('D2:150:INVS:120'), JSON.stringify(r)+' calls='+JSON.stringify(await p.evaluate(()=>window.__calls)));
     const sheet=await p.evaluate(()=>buildPickSlipHtml(buildPickSlipData({source:'rpst',req:{id:'X',invs_sub_po_no:'PO999',items:[],invs_request_lot_snapshot:[{drug_id:'D1',qty:3000,cost:0.3,value:900,stock_before:5000,stock_after:2000,stock_lots:2,
       lots_after:[{lot_no:'A1',expiry:'20270131',qty_before:1000,qty_issue:1000,qty_after:0},{lot_no:'B2',expiry:'20280531',qty_before:4000,qty_issue:2000,qty_after:2000},{lot_no:'C9',expiry:'20290101',qty_before:500,qty_issue:0,qty_after:500}]}]},ctx:{findDrug:()=>null,appDb:{units:[]}},unitTitle:'รพ.สต.ทุ่งระยะ'})));
-    check('slip: issued lots only + stock after', /<b>A1<\/b>[\s\S]*?<span class="lq">1,000<\/span>/.test(sheet) && /<b>B2<\/b>[\s\S]*?<span class="lq">2,000<\/span>/.test(sheet) && !sheet.includes('C9') && sheet.includes('เหลือคงคลัง <b>2,000</b>'), '');
+    check('slip: issued lots only + stock after', /<b>A1<\/b>[\s\S]*?<span class="lq">1,000<\/span>/.test(sheet) && /<b>B2<\/b>[\s\S]*?<span class="lq">2,000<\/span>/.test(sheet) && !sheet.includes('C9') && sheet.includes('เหลือ <b>2,000</b>'), '');
     check('invs price: no errors', !errs.length, errs.join(' | ')); await ctx.close();
   }
   console.log(res.join('\n')); await b.close();

@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.17.0"></script>
+  <script src="shared.js?v=6.18.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.17.0';
+      var need = '6.18.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -525,96 +525,157 @@
     };
     const notifyLineDispensed = (reqId) => { callLineApi('/api/line-notify', { action: 'dispensed', reqId }).catch(e => console.warn('LINE notify:', e.message)); };
 
-    // ===== v6.17 Slip จัดยา 80 มม. (ฟอร์มเดียว แทนใบเบิกพร้อมยอดคงเหลือ A4 / ใบจัดยาตามตำแหน่ง) =====
-    // ข้อมูล slip เก็บแยกที่ pick_slips/{source}__{reqId} ตอนส่ง INVS (จากผลที่ Bridge ตอบกลับ) → พิมพ์ย้อนหลังได้แม้อ่านฟิลด์ INVS จากใบไม่ได้
+    // ===== v6.18 Slip จัดยา 80 มม. ฟอร์มเดียว + วางแผนก่อนส่ง INVS =====
+    // pick_slips/{rpst|internal}__{reqId}: state PLANNED (พิมพ์ slip แล้ว ยังไม่ส่ง INVS = ยอดจอง) → SENT (ส่ง INVS แล้ว) / CANCELLED
+    // ยอดใช้ได้ = คลัง INVS − เอกสาร INVS ที่ยังไม่ยืนยัน (Bridge stock_projection) − ยอดจองของใบอื่นที่ PLANNED · ดึงจาก INVS ใหม่ทุกครั้ง
     const PICK_SLIP_WIDTH_MM = 80;
+    const PICK_PLAN_MAX_DAYS = 30; // แผนที่ค้างนานกว่านี้ไม่นับเป็นยอดจอง
+    const PICK_OPEN_STATUSES = ['Draft', 'Pending', 'Approving', 'ApprovalFailed'];
     const pickSlipDocId = (source, reqId) => `${source}__${reqId}`;
-    const reqHasInvsSnapshot = (req) => (Array.isArray(req?.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length > 0) || (Array.isArray(req?.invs_items_snapshot) && req.invs_items_snapshot.length > 0);
+    const pickSlipQtyOf = (it, source) => toNonNegativeNumber(it.dispenseQty ?? it.requestQty) + (source === 'rpst' ? toNonNegativeNumber(it.emergencyQty) : 0);
+    const pickSlipReceivedOf = (it, source) => !it ? 0 : (source === 'rpst' ? toNonNegativeNumber(it.emergencyQty) : receivedQtyOf(it));
+    // รายการที่จะส่ง INVS (รวม invs_extra_items ของใบ รพ.สต.) → [{drugId, qty, received, item}]
+    const pickSlipLines = (req, source) => {
+      const m = new Map();
+      (req.items || []).forEach(it => { const q = pickSlipQtyOf(it, source); if (q > 0 && String(it.type || '') !== '6') m.set(String(it.drugId), { drugId: String(it.drugId), qty: q, received: pickSlipReceivedOf(it, source), item: it }); });
+      (Array.isArray(req.invs_extra_items) ? req.invs_extra_items : []).forEach(ex => { const id = String(ex?.drugId || ''); const q = toNonNegativeNumber(ex?.qty); if (!id || q <= 0) return;
+        const cur = m.get(id); if (cur) cur.qty += q; else m.set(id, { drugId: id, qty: q, received: 0, item: { drugId: id, name: ex.name } }); });
+      return [...m.values()];
+    };
+    const pickSlipRow = (ctx, drugId, item) => {
+      const d = ctx.findDrug(drugId) || {};
+      return { drug_id: String(drugId), name: safeText(d.drug_name || item?.name || drugId), loc: normDrugLocation(d.invs_location), code: drugCodeLabel(drugId, d.old_code),
+        pack: safePackSize(d.pack_size ?? item?.packSize), unit: safeText(item?.unit) || (d.drug_id && ctx.findUnitName ? ctx.findUnitName(d) : '') || '' };
+    };
+    const consumePickLots = (lots, qty) => { let left = toNonNegativeNumber(qty); const out = []; (lots || []).forEach(l => { const use = Math.min(toSafeNumber(l.qty), Math.max(0, left)); left -= use; const rest = toSafeNumber(l.qty) - use; if (rest > 1e-9) out.push({ ...l, qty: rest }); }); return out; };
+    const allocPickLots = (lots, qty) => { let left = toNonNegativeNumber(qty); const out = []; for (const l of (lots || [])) { if (left <= 1e-9) break; const use = Math.min(toSafeNumber(l.qty), left); if (use > 0) { out.push({ lot_no: safeText(l.lot_no), expiry: safeText(l.expiry), qty: use }); left -= use; } } return out; };
+    // slip จากผล INVS (ส่งแล้ว ไม่มีแผน) หรือรายการในใบ (ไม่มีข้อมูล) — ใช้พิมพ์ย้อนหลัง/สำรอง
     const buildPickSlipData = ({ req, ctx, unitTitle, source, invsItems, subPoNo, sentAt }) => {
       const snap = Array.isArray(invsItems) && invsItems.length ? invsItems
         : (Array.isArray(req.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length ? req.invs_request_lot_snapshot : (req.invs_items_snapshot || []));
       const hasInvs = snap.length > 0;
-      const reqItems = req.items || [];
-      const findItem = (id) => reqItems.find(it => String(it.drugId) === String(id));
-      const receivedOf = (it) => !it ? 0 : (source === 'rpst' ? toNonNegativeNumber(it.emergencyQty) : receivedQtyOf(it));
-      const unitOf = (d, it) => safeText(it?.unit) || (d && ctx.findUnitName ? ctx.findUnitName(d) : '') || '';
+      const findItem = (id) => (req.items || []).find(it => String(it.drugId) === String(id));
       const lotsOf = (x) => {
         if (Array.isArray(x.lots_after) && x.lots_after.some(l => toSafeNumber(l.qty_issue) > 0)) return x.lots_after.filter(l => toSafeNumber(l.qty_issue) > 0).map(l => ({ lot_no: safeText(l.lot_no), expiry: safeText(l.expiry), qty: toSafeNumber(l.qty_issue) }));
         if (Array.isArray(x.alloc) && x.alloc.length) return x.alloc.map(l => ({ lot_no: safeText(l.lot_no), expiry: safeText(l.expiry), qty: toSafeNumber(l.qty) }));
         return x.lot_no ? [{ lot_no: safeText(x.lot_no), expiry: safeText(x.expiry), qty: toSafeNumber(x.qty) }] : [];
       };
       const rows = hasInvs
-        ? snap.map(x => {
-            const d = ctx.findDrug(x.drug_id) || {}; const it = findItem(x.drug_id);
-            return { drug_id: String(x.drug_id), name: safeText(d.drug_name || x.drug_name || it?.name || x.drug_id), loc: normDrugLocation(d.invs_location), code: drugCodeLabel(x.drug_id, d.old_code),
-              pack: safePackSize(d.pack_size ?? it?.packSize ?? x.vmi_pack_size ?? x.pack_ratio), unit: unitOf(d.drug_id ? d : null, it), qty: toSafeNumber(x.qty), received: receivedOf(it),
-              lots: lotsOf(x), stock_after: x.stock_after === undefined || x.stock_after === null ? null : toSafeNumber(x.stock_after) };
-          })
-        : reqItems.map(it => {
-            const d = ctx.findDrug(it.drugId) || {};
-            const qty = toNonNegativeNumber(it.dispenseQty ?? it.requestQty) + (source === 'rpst' ? toNonNegativeNumber(it.emergencyQty) : 0);
-            return { drug_id: String(it.drugId), name: safeText(it.name || d.drug_name || it.drugId), loc: normDrugLocation(d.invs_location), code: drugCodeLabel(it.drugId, d.old_code),
-              pack: safePackSize(it.packSize ?? d.pack_size), unit: unitOf(d.drug_id ? d : null, it), qty, received: receivedOf(it), lots: [], stock_after: null };
-          }).filter(r => r.qty > 0);
+        ? snap.map(x => { const it = findItem(x.drug_id); return { ...pickSlipRow(ctx, x.drug_id, it || { name: x.drug_name, packSize: x.vmi_pack_size || x.pack_ratio }), qty: toSafeNumber(x.qty), received: pickSlipReceivedOf(it, source), lots: lotsOf(x), stock_after: x.stock_after === undefined || x.stock_after === null ? null : toSafeNumber(x.stock_after) }; })
+        : pickSlipLines(req, source).map(l => ({ ...pickSlipRow(ctx, l.drugId, l.item), qty: l.qty, received: l.received, lots: [], stock_after: null }));
       rows.sort((a, b) => compareByLocation(a.loc, a.name, b.loc, b.name));
-      return { source, req_id: String(req.id || ''), unit_title: safeText(unitTitle), has_invs: hasInvs, invs_sub_po_no: safeText(subPoNo || req.invs_sub_po_no),
+      return { source, req_id: String(req.id || ''), unit_title: safeText(unitTitle), state: hasInvs ? 'SENT' : 'NONE', has_invs: hasInvs, invs_sub_po_no: safeText(subPoNo || req.invs_sub_po_no),
         sent_at: hasInvs ? (sentAt || (req.invs_sent_at ? new Date(tsToMillis(req.invs_sent_at)).toISOString() : new Date().toISOString())) : '', items: rows };
     };
-    const savePickSlip = (ctx, slip) => db.collection('pick_slips').doc(pickSlipDocId(slip.source, slip.req_id)).set({ ...slip,
-      created_at: firebase.firestore.FieldValue.serverTimestamp(), created_by_uid: ctx.currentUser?.uid || '', created_by_name: safeText(ctx.currentUser?.name) });
+    // ยอดจองของใบอื่นที่พิมพ์ slip แล้วแต่ยังไม่ส่ง INVS (ตรวจสถานะใบจริง — ใบที่ส่ง/ปิด/ยกเลิกแล้วไม่นับ และปิดแผนให้)
+    const loadPickReservations = async (ctx, excludeId) => {
+      const snap = await db.collection('pick_slips').where('state', '==', 'PLANNED').get();
+      const list = (snap.docs || []).filter(d => d.id !== excludeId).map(d => ({ id: d.id, ...d.data() }));
+      const out = [];
+      for (const r of list) {
+        const age = Date.now() - tsToMillis(r.planned_at || r.created_at);
+        let reqDoc = null;
+        try { const s = await db.collection(r.source === 'rpst' ? 'requisitions' : 'internal_requisitions').doc(r.req_id).get(); reqDoc = s.exists ? s.data() : null; } catch (e) { reqDoc = undefined; }
+        const open = reqDoc === undefined || (reqDoc && PICK_OPEN_STATUSES.includes(reqDoc.status) && !reqDoc.invs_sub_po_no);
+        if (!open) { db.collection('pick_slips').doc(r.id).update({ state: reqDoc && reqDoc.invs_sub_po_no ? 'SENT' : 'CANCELLED', closed_reason: 'req_' + (reqDoc ? reqDoc.status : 'missing') }).catch(() => {}); continue; }
+        if (age > PICK_PLAN_MAX_DAYS * 86400000) continue;
+        out.push(r);
+      }
+      return out;
+    };
+    const reservedByDrug = (reservations) => { const m = {}; reservations.forEach(r => (r.items || []).forEach(it => { m[it.drug_id] = (m[it.drug_id] || 0) + toNonNegativeNumber(it.qty); })); return m; };
+    // วางแผนหยิบก่อนส่ง INVS: lot หลังหักเอกสารค้าง + ยอดจองใบอื่น → หยิบส่วนที่รับแล้วออกก่อน แล้วจัดส่วนที่ต้องหยิบ
+    const planPickSlip = async ({ req, ctx, unitTitle, source }) => {
+      const id = pickSlipDocId(source, req.id);
+      const lines = pickSlipLines(req, source);
+      let proj = null, projErr = '';
+      try { proj = (await callInvsBridge('stock_projection', '', { drug_ids: lines.map(l => l.drugId) })).drugs || {}; } catch (e) { projErr = e?.message || String(e); }
+      let reservations = [];
+      try { reservations = await loadPickReservations(ctx, id); } catch (e) { console.warn('pick reservations:', e.message); }
+      const reserved = reservedByDrug(reservations);
+      const rows = lines.map(l => {
+        const base = pickSlipRow(ctx, l.drugId, l.item); const p = proj ? proj[l.drugId] : null;
+        if (!p) return { ...base, qty: l.qty, received: l.received, lots: [], stock_after: null };
+        const res = toNonNegativeNumber(reserved[l.drugId]);
+        const avail = toSafeNumber(p.available) - res;
+        const lotsLeft = consumePickLots(p.lots, res);
+        const toPick = Math.max(0, l.qty - l.received);
+        return { ...base, qty: l.qty, received: l.received, lots: allocPickLots(consumePickLots(lotsLeft, l.received), toPick),
+          stock_after: avail - l.qty, available: avail, on_hand: toSafeNumber(p.on_hand), pending_qty: toSafeNumber(p.pending_qty), reserved_qty: res,
+          reserved_by: reservations.filter(r => (r.items || []).some(it => it.drug_id === l.drugId)).map(r => r.unit_title).slice(0, 5) };
+      }).sort((a, b) => compareByLocation(a.loc, a.name, b.loc, b.name));
+      const slip = { source, req_id: String(req.id), unit_title: safeText(unitTitle), state: 'PLANNED', has_invs: false, has_projection: !!proj, projection_error: projErr,
+        invs_sub_po_no: '', sent_at: '', planned_at: new Date().toISOString(), items: rows };
+      try { await db.collection('pick_slips').doc(id).set({ ...slip, created_at: firebase.firestore.FieldValue.serverTimestamp(), created_by_uid: ctx.currentUser?.uid || '', created_by_name: safeText(ctx.currentUser?.name) }); }
+      catch (e) { ctx.showToast('บันทึกแผนจัดยาไม่สำเร็จ (ยังไม่จองยอด): ' + (e?.message || e), 'warn'); }
+      if (projErr) ctx.showToast('อ่านยอดคงคลัง INVS ไม่ได้ — slip เว้น Lot/คงคลังให้เขียน: ' + projErr, 'warn');
+      return slip;
+    };
     const buildPickSlipHtml = (slip, widthMm) => {
       const W = Math.max(48, Number(widthMm) || PICK_SLIP_WIDTH_MM); const fs = W >= 100 ? 12.5 : W >= 80 ? 11.5 : 10;
       const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
       const exp = (raw) => { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return esc(raw || '-'); const y = Number(v.slice(0, 4)); return `${v.slice(6, 8)}/${v.slice(4, 6)}/${String(y < 2400 ? y + 543 : y).slice(-2)}`; };
       const q = (v, pack) => esc(safePackSize(pack) > 1 ? formatQty(Math.round(toSafeNumber(v) * 1000) / 1000, pack) : toSafeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 }));
       const rows = slip.items || [];
+      const left = (r) => r.stock_after === null || r.stock_after === undefined ? '<span class="rt sm">เหลือ ......</span>'
+        : r.stock_after < -1e-9 ? `<span class="rt">ขาด <b>${q(-r.stock_after, r.pack)}</b></span>` : `<span class="rt">เหลือ <b>${q(r.stock_after, r.pack)}</b></span>`;
       const body = rows.map((r, i) => `<div class="it">
-        <div class="hd"><span class="loc">${esc(r.loc || '—')}</span><span class="no">${i + 1}.</span> <b>${esc(r.name)}</b></div>
-        <div class="sm code">รหัส ${esc(r.code)}</div>
-        <div class="ln">เบิก <b class="big">${q(r.qty, r.pack)}</b> ${r.pack > 1 ? `<span class="sm">(×${r.pack} ${esc(r.unit)})</span>` : esc(r.unit)}${r.received > 0 ? ` <span class="sm">· รับแล้ว ${q(r.received, r.pack)} → หยิบ <b>${q(Math.max(0, r.qty - r.received), r.pack)}</b></span>` : ''}</div>
-        ${(r.lots || []).length ? r.lots.map(l => `<div class="lot">☐ <b>${esc(l.lot_no || '-')}</b> <span class="sm">EXP ${exp(l.expiry)}</span><span class="lq">${q(l.qty, r.pack)}</span></div>`).join('') : '<div class="lot">☐ Lot ............ EXP ........</div>'}
-        <div class="ln end2">เหลือคงคลัง <b>${r.stock_after === null || r.stock_after === undefined ? '........' : q(r.stock_after, r.pack)}</b></div></div>`).join('');
-      const at = slip.sent_at ? formatAppDateTime(slip.sent_at) : '';
+        <div class="hd"><span class="loc">${esc(r.loc || '—')}</span><span class="nm"><span class="no">${i + 1}.</span> <b>${esc(r.name)}</b></span>${left(r)}</div>
+        <div class="ln"><span class="sm">${esc(r.code)}</span> เบิก <b class="big">${q(r.qty, r.pack)}</b> ${r.pack > 1 ? `<span class="sm">(×${r.pack} ${esc(r.unit)})</span>` : esc(r.unit)}${r.received > 0 ? ` <span class="sm">· รับแล้ว ${q(r.received, r.pack)} → หยิบ <b>${q(Math.max(0, r.qty - r.received), r.pack)}</b></span>` : ''}</div>
+        ${(r.lots || []).length ? r.lots.map(l => `<div class="lot">☐ <b>${esc(l.lot_no || '-')}</b> <span class="sm">EXP ${exp(l.expiry)}</span><span class="lq">${q(l.qty, r.pack)}</span></div>`).join('') : '<div class="lot">☐ Lot ............ EXP ........</div>'}</div>`).join('');
+      const head = slip.state === 'PLANNED' ? `วางแผน ${esc(formatAppDateTime(slip.planned_at))} · ยังไม่ส่ง INVS` : slip.has_invs ? `ส่ง INVS ${esc(formatAppDateTime(slip.sent_at))}` : `ยังไม่ส่ง INVS · พิมพ์ ${esc(formatAppDateTime(new Date()))}`;
+      const note = slip.state === 'PLANNED' && slip.has_projection ? 'เหลือ = คลัง INVS − เอกสารค้างยืนยัน − ใบที่พิมพ์ slip แล้ว − ใบนี้' : slip.has_invs ? 'Lot ตามลำดับที่ INVS ตัด (ยืนยันจ่ายจริงใน INVS อาจต่าง)' : 'ไม่มีข้อมูล Lot/คงคลังจาก INVS ให้เขียนเอง';
       const title = `${slip.unit_title || ''} slip ${slip.invs_sub_po_no || ''}`.replace(/[\\/:*?"<>|]+/g, '-');
       return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
         '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
         `<style id="pg">@page{size:${W}mm 200mm;margin:0}</style><style>` +
-        `*{box-sizing:border-box}html,body{margin:0;padding:0}body{width:${W}mm;padding:2mm 3mm 6mm;font-family:Sarabun,Tahoma,sans-serif;font-size:${fs}px;line-height:1.3;color:#000}` +
+        `*{box-sizing:border-box}html,body{margin:0;padding:0}body{width:${W}mm;padding:2mm 3mm 6mm;font-family:Sarabun,Tahoma,sans-serif;font-size:${fs}px;line-height:1.25;color:#000}` +
         `.t{text-align:center;font-weight:700;font-size:${fs + 3}px}.m{display:flex;justify-content:space-between;flex-wrap:wrap;gap:0 6px;font-size:${fs - 1}px}` +
-        `.it{border-top:1px dashed #000;padding:1.2mm 0;page-break-inside:avoid}.hd{font-size:${fs + 0.5}px}.loc{display:inline-block;border:1px solid #000;padding:0 3px;margin-right:4px;font-weight:700;font-family:Consolas,monospace}` +
-        `.no{font-weight:700}.ln{margin-top:1px}.end2{text-align:right}.big{font-size:${fs + 2}px}.lot{display:flex;gap:4px;align-items:baseline;padding-left:2mm;font-family:Consolas,monospace}` +
-        `.lot .lq{margin-left:auto;font-weight:700;font-size:${fs + 1}px}.sm{font-size:${fs - 2}px}.code{color:#000}.end{border-top:1px solid #000;margin-top:2mm;padding-top:1mm}` +
+        `.it{border-top:0.5px dashed #000;padding:0.6mm 0;page-break-inside:avoid}.hd{display:flex;align-items:baseline;gap:3px;font-size:${fs + 0.5}px}.nm{flex:1;min-width:0}.rt{white-space:nowrap;font-size:${fs}px}` +
+        `.loc{display:inline-block;border:1px solid #000;padding:0 3px;font-weight:700;font-family:Consolas,monospace;white-space:nowrap}` +
+        `.no{font-weight:700}.ln{margin:0}.big{font-size:${fs + 2}px}.lot{display:flex;gap:4px;align-items:baseline;padding-left:2mm;font-family:Consolas,monospace}` +
+        `.lot .lq{margin-left:auto;font-weight:700;font-size:${fs + 1}px}.sm{font-size:${fs - 2}px}.end{border-top:1px solid #000;margin-top:1.5mm;padding-top:1mm}` +
         `.sig{margin-top:5mm;display:flex;justify-content:space-between;gap:4mm;font-size:${fs - 1}px}.sig div{flex:1;border-top:1px dotted #000;text-align:center;padding-top:1mm}` +
         '</style></head><body>' +
         `<div class="t">ใบจัดยา (slip)</div><div class="m"><span>${esc(slip.unit_title)}</span><span>INVS <b>${esc(slip.invs_sub_po_no || '-')}</b></span></div>` +
-        `<div class="m"><span>${slip.has_invs ? 'ส่ง INVS ' + esc(at) : 'ยังไม่ส่ง INVS · พิมพ์ ' + esc(formatAppDateTime(new Date()))}</span><span>${rows.length} รายการ</span></div>` + body +
-        `<div class="end sm">เรียงตามตำแหน่งยา · ${slip.has_invs ? 'Lot ตามลำดับที่ INVS ตัด (ยืนยันจ่ายจริงใน INVS อาจต่าง) · ' : 'ยังไม่มีข้อมูล Lot/คงคลังจาก INVS ให้เขียนเอง · '}จำนวน = หน่วยใหญ่(หน่วยย่อย)</div>` +
+        `<div class="m"><span>${head}</span><span>${rows.length} รายการ</span></div>` + body +
+        `<div class="end sm">เรียงตามตำแหน่งยา · ${note} · จำนวน = หน่วยใหญ่(หน่วยย่อย)</div>` +
         '<div class="sig"><div>ผู้จัด</div><div>ผู้ตรวจ</div></div>' +
         // ปรับความยาวหน้าให้พอดีเนื้อหา (กระดาษต่อเนื่อง) — วัดหลังฟอนต์โหลด
         `<script>(function(){function fit(){var h=Math.ceil(document.documentElement.scrollHeight*25.4/96)+4;document.getElementById('pg').textContent='@page{size:${W}mm '+h+'mm;margin:0}';}fit();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);window.addEventListener('load',fit);})();</` + 'script></body></html>';
     };
-    // พิมพ์ย้อนหลัง: pick_slips ก่อน → snapshot INVS ในใบ (บันทึกเก็บไว้ด้วย) → ยังไม่ส่ง INVS = รายการในใบ เว้น Lot/คงคลัง
+    // ปุ่มพิมพ์: ยังไม่ส่ง INVS = วางแผนใหม่ทุกครั้ง (ดึง INVS จริง) · ส่งแล้ว = พิมพ์ slip เดิม (แผน) หรือสร้างจากผล INVS
     const loadPickSlip = async ({ req, ctx, unitTitle, source }) => {
+      const sent = !!req.invs_sub_po_no || String(req.invs_status || '').toUpperCase() === 'SENT';
+      if (!sent && PICK_OPEN_STATUSES.includes(req.status)) return planPickSlip({ req, ctx, unitTitle, source });
       let saved = null;
       try { const s = await db.collection('pick_slips').doc(pickSlipDocId(source, req.id)).get(); if (s.exists) saved = s.data(); } catch (e) { console.warn('pick_slips:', e.message); }
       if (saved && Array.isArray(saved.items) && saved.items.length) return saved;
-      const slip = buildPickSlipData({ req, ctx, unitTitle, source });
-      if (slip.has_invs) savePickSlip(ctx, slip).catch(e => console.warn('save pick_slips:', e.message));
-      return slip;
+      return buildPickSlipData({ req, ctx, unitTitle, source });
     };
     const printPickSlip = async (args) => printHtmlDocument(buildPickSlipHtml(await loadPickSlip(args)));
     const PickSlipButton = ({ req, ctx, unitTitle, source, small }) => {
       const [busy, setBusy] = useState(false);
+      const sent = !!req.invs_sub_po_no || String(req.invs_status || '').toUpperCase() === 'SENT';
+      const planning = !sent && PICK_OPEN_STATUSES.includes(req.status);
       const go = async () => { setBusy(true); try { await printPickSlip({ req, ctx, unitTitle, source }); } catch (e) { ctx.showToast('พิมพ์ slip ไม่สำเร็จ: ' + (e?.message || e), 'error'); } finally { setBusy(false); } };
-      return <button id="print-pick-slip" disabled={busy} onClick={go} className={`rounded-xl bg-cyan-700 text-white font-bold shadow disabled:opacity-60 ${small ? 'px-3 py-1 text-xs' : 'px-4 py-2 text-sm'}`}><i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-receipt'} mr-1`}></i>พิมพ์ slip จัดยา (80 มม.)</button>;
+      return <button id="print-pick-slip" disabled={busy} onClick={go} title={planning ? 'ดึงยอด INVS จริง หักเอกสารค้างยืนยันและใบที่พิมพ์ slip แล้ว → พิมพ์ slip และจองยอด (ยังไม่ส่ง INVS)' : 'พิมพ์ slip เดิมย้อนหลัง'} className={`rounded-xl bg-cyan-700 text-white font-bold shadow disabled:opacity-60 ${small ? 'px-3 py-1 text-xs' : 'px-4 py-2 text-sm'}`}><i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-receipt'} mr-1`}></i>{planning ? 'วางแผน + พิมพ์ slip จัดยา' : 'พิมพ์ slip จัดยา'}</button>;
     };
-    // หลังส่ง INVS สำเร็จ: บันทึก slip จากผล Bridge → ถามพิมพ์
-    const saveAndPromptPickSlip = async ({ ctx, req, unitTitle, source, data }) => {
-      const slip = buildPickSlipData({ req, ctx, unitTitle, source, invsItems: data.items, subPoNo: data.sub_po_no, sentAt: new Date().toISOString() });
-      try { await savePickSlip(ctx, slip); } catch (e) { ctx.showToast('บันทึก slip จัดยาไม่สำเร็จ (ยังพิมพ์ได้): ' + (e?.message || e), 'warn'); }
-      if (data.already_sent) return;
-      ctx.setConfirmDialog({ title: 'พิมพ์ slip จัดยา?', message: `INVS เลข ${data.sub_po_no} — ${slip.items.length} รายการ · Lot/EXP ที่หยิบ และยอดเหลือคงคลัง (กระดาษ 80 มม.) · พิมพ์ย้อนหลังได้ที่ปุ่ม "พิมพ์ slip จัดยา" ในใบ`, icon: 'fa-receipt', iconColor: 'text-cyan-600', confirmBtnClass: 'bg-cyan-700 hover:bg-cyan-800', confirmText: 'พิมพ์',
-        onConfirm: () => printHtmlDocument(buildPickSlipHtml(slip)) });
+    // ส่ง INVS สำเร็จ: แผนเดิม → SENT (เลิกจอง) · ไม่มีแผน → เก็บ slip จากผล Bridge ไว้พิมพ์ย้อนหลัง · ไม่ถามพิมพ์ (slip มีใบเดียว)
+    const markPickSlipSent = async ({ ctx, req, unitTitle, source, data }) => {
+      const id = pickSlipDocId(source, req.id);
+      const invsItems = Array.isArray(data.items) ? data.items.map(x => ({ drug_id: x.drug_id, qty: x.qty, lot_no: x.lot_no, expiry: x.expiry, stock_after: x.stock_after, alloc: x.alloc || [] })) : [];
+      try {
+        const s = await db.collection('pick_slips').doc(id).get();
+        if (s.exists && s.data().state === 'PLANNED') await db.collection('pick_slips').doc(id).update({ state: 'SENT', invs_sub_po_no: safeText(data.sub_po_no), sent_at: new Date().toISOString(), invs_items: invsItems });
+        else if (!s.exists) await db.collection('pick_slips').doc(id).set({ ...buildPickSlipData({ req, ctx, unitTitle, source, invsItems: data.items, subPoNo: data.sub_po_no, sentAt: new Date().toISOString() }), created_at: firebase.firestore.FieldValue.serverTimestamp(), created_by_uid: ctx.currentUser?.uid || '', created_by_name: safeText(ctx.currentUser?.name) });
+      } catch (e) { ctx.showToast('บันทึกสถานะ slip ไม่สำเร็จ: ' + (e?.message || e), 'warn'); }
+    };
+    const PickPlanBadge = ({ source, reqId }) => {
+      const [st, setSt] = useState(null);
+      useEffect(() => { let on = true; db.collection('pick_slips').doc(pickSlipDocId(source, reqId)).get().then(s => { if (on && s.exists) setSt(s.data()); }).catch(() => {}); return () => { on = false; }; }, [source, reqId]);
+      if (!st || st.state !== 'PLANNED') return null;
+      return <span className="inline-flex items-center gap-1 text-xs font-black text-amber-800 bg-amber-100 border border-amber-300 rounded-full px-2 py-0.5"><i className="fa-solid fa-dolly"></i>กำลังจัด · พิมพ์ slip {formatAppDateTime(st.planned_at)}</span>;
     };
 
     // ===== v6.9 ใบเบิกยาฉุกเฉิน รพ.สต. (ใบ ฉ) — เบิกล่วงหน้า ระบบรวมยอดเข้าใบเบิกหลักรอบถัดไปเอง (emergencyQty) =====
@@ -4911,10 +4972,9 @@ const ViewReqView = ({ ctx }) => {
             .catch(e => ctx.showToast('ตัดคลังย่อย INVS ตามยอดใช้ไม่สำเร็จ: ' + (e?.message || e) + ' — ทำซ้ำได้ที่เมนู คลังย่อย รพ.สต. → INVS', 'error'));
           await ctx.refreshData();
           setShowInvsModal(false);
-          // v6.17 slip จัดยา 80 มม. — บันทึกจากผล Bridge (pick_slips) แล้วถามพิมพ์
-          const slipPrompt = () => saveAndPromptPickSlip({ ctx, req, unitTitle: ctx.appDb.hospitals.find(h => String(h.hospital_id) === String(req.hospitalId))?.hospital_name || req.hospitalId, source: 'rpst', data });
-          if (approveAfterInvs) { setApproveAfterInvs(false); setIsInvsBusy(false); await handleApprove({ invsItems: data.items }); await slipPrompt(); return; }
-          await slipPrompt();
+          // v6.18 slip จัดยา: แผนที่พิมพ์ไว้ → SENT (เลิกจองยอด) · ไม่มีแผน = เก็บ slip จากผล INVS ไว้พิมพ์ย้อนหลัง (ไม่ถามพิมพ์ — slip มีใบเดียว)
+          await markPickSlipSent({ ctx, req: { ...req, items: editableItems }, unitTitle: ctx.appDb.hospitals.find(h => String(h.hospital_id) === String(req.hospitalId))?.hospital_name || req.hospitalId, source: 'rpst', data });
+          if (approveAfterInvs) { setApproveAfterInvs(false); setIsInvsBusy(false); await handleApprove({ invsItems: data.items }); return; }
         } catch(e) {
           if (e?.payload) setInvsPreflight(e.payload);
           ctx.showToast('ส่งเข้า INVS ไม่สำเร็จ: ' + (e?.message || e), 'error');
@@ -5351,6 +5411,7 @@ const ViewReqView = ({ ctx }) => {
                  </button>
               )}
               
+              {canApproveReq && !invsSent && <span className="inline-flex items-center gap-2"><PickPlanBadge source="rpst" reqId={req.id} /><PickSlipButton req={{ ...req, items: editableItems }} ctx={ctx} source="rpst" unitTitle={hosp?.hospital_name || req.hospitalId} /></span>}
               {canApproveReq && (
                  <>
                     {isPending && <button onClick={() => ctx.setConfirmDialog({ title: 'ยืนยันไม่อนุมัติ', message: 'คุณต้องการไม่อนุมัติใบเบิกนี้ใช่หรือไม่?', icon: 'fa-xmark', iconColor: 'text-red-500', confirmBtnClass: 'bg-red-600 hover:bg-red-700', confirmText: 'ไม่อนุมัติ', onConfirm: handleRejectReq })} disabled={isApproving} className="bg-white border-2 border-red-500 text-red-600 px-6 py-2 rounded-xl font-bold shadow hover:bg-red-50 transition">ไม่อนุมัติ</button>}
@@ -5669,7 +5730,7 @@ const ViewReqView = ({ ctx }) => {
                 <div className="overflow-auto max-h-[52vh] border rounded-xl">
                   <table className="w-full text-xs whitespace-nowrap">
                     <thead className="bg-slate-100 sticky top-0"><tr><th className="p-2 text-left">ยา</th><th className="p-2 text-right">จำนวน</th><th className="p-2">Lot</th><th className="p-2">หมดอายุ</th><th className="p-2 text-right">เหลือใน Lot</th><th className="p-2 text-right bg-sky-50">คงคลังรวมทุก lot</th><th className="p-2 text-right bg-sky-50">เหลือหลังเบิก</th><th className="p-2 text-right">Pack</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">ราคา/Pack</th><th className="p-2 text-right">มูลค่า</th></tr></thead>
-                    <tbody>{(invsPreflight.items || []).map((x,i)=><tr key={`${x.drug_id||x.WORKING_CODE}-${i}`} className="border-t"><td className="p-2"><div className="font-bold">{x.drug_name || ''}{x.extra ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">ส่ง INVS เพิ่ม</span> : x.extra_qty > 0 ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">+{toNonNegativeNumber(x.extra_qty).toLocaleString('th-TH')} ส่งเพิ่ม</span> : null}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE}</div></td><td className="p-2 text-right font-black">{toNonNegativeNumber(x.qty ?? x.QTY_ORDER).toLocaleString()}</td><td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td><td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td><td className="p-2 text-right">{x.lot_qty_on_hand !== undefined ? toNonNegativeNumber(x.lot_qty_on_hand).toLocaleString() : '-'}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className={`p-2 text-right font-black bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty ?? x.QTY_ORDER) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className="p-2 text-right">{toNonNegativeNumber(x.pack_ratio ?? x.PACK_RATIO).toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(x.cost ?? x.COST)}</td><td className="p-2 text-right">{formatUnitPrice(x.pack_cost ?? x.PACK_COST)}</td><td className="p-2 text-right font-black text-indigo-700">฿{toNonNegativeNumber(x.value ?? x.VALUE).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>)}</tbody>
+                    <tbody>{(invsPreflight.items || []).map((x,i)=><tr key={`${x.drug_id||x.WORKING_CODE}-${i}`} className="border-t"><td className="p-2"><div className="font-bold">{x.drug_name || ''}{x.extra ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">ส่ง INVS เพิ่ม</span> : x.extra_qty > 0 ? <span className="ml-1 text-[10px] font-black text-cyan-800 bg-cyan-100 border border-cyan-300 rounded px-1">+{toNonNegativeNumber(x.extra_qty).toLocaleString('th-TH')} ส่งเพิ่ม</span> : null}</div><div className="font-mono text-[10px] text-slate-400">{x.drug_id || x.WORKING_CODE}</div></td><td className="p-2 text-right font-black">{toNonNegativeNumber(x.qty ?? x.QTY_ORDER).toLocaleString()}</td><td className="p-2 font-mono">{x.lot_no || x.LOT_NO || '-'}</td><td className="p-2">{x.expiry || x.EXPIRED_DATE || '-'}</td><td className="p-2 text-right">{x.lot_qty_on_hand !== undefined ? toNonNegativeNumber(x.lot_qty_on_hand).toLocaleString() : '-'}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, x.vmi_pack_size || x.pack_ratio) : '-'}{toSafeNumber(x.pending_qty) > 0 && <div className="text-[10px] font-bold text-amber-700" title={(x.pending_docs || []).map(d => d.sub_po_no + ' ' + d.dept_id + ' ' + d.qty).join('\n')}>ค้างยืนยัน −{formatQty(x.pending_qty, x.vmi_pack_size || x.pack_ratio)} ({(x.pending_docs || []).length} ใบ)</div>}</td><td className={`p-2 text-right font-black bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.available ?? x.stock_before) < toSafeNumber(x.qty ?? x.QTY_ORDER) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className="p-2 text-right">{toNonNegativeNumber(x.pack_ratio ?? x.PACK_RATIO).toLocaleString()}</td><td className="p-2 text-right">{formatUnitPrice(x.cost ?? x.COST)}</td><td className="p-2 text-right">{formatUnitPrice(x.pack_cost ?? x.PACK_COST)}</td><td className="p-2 text-right font-black text-indigo-700">฿{toNonNegativeNumber(x.value ?? x.VALUE).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>)}</tbody>
                   </table>
                 </div>
 
@@ -8692,6 +8753,9 @@ const AdminConfigView = ({ ctx }) => {
       const [rejectReason, setRejectReason] = useState('');
       const dirty = JSON.stringify(items.map(i => [i.drugId, i.dispenseQty, i.adminNote || ''])) !== JSON.stringify((req.items || []).map(i => [i.drugId, toNonNegativeNumber(i.dispenseQty ?? i.requestQty), i.adminNote || ''])) || adminNote !== (req.admin_note || '');
       const invsSent = String(req.invs_status || '').toUpperCase() === 'SENT' || !!req.invs_sub_po_no;
+      // v6.18 วันที่เบิกที่ส่ง INVS = วันที่รอบเบิก (หรือวันที่ในใบ) ไม่ใช่วันจริง — ยืนยันย้อนหลังใน INVS แล้วยังอยู่เดือนเดิม
+      const [invsReqDate, setInvsReqDate] = useState(() => safeText(req.round_date) || safeText(req.form_date) || toYmd(new Date()));
+      const invsReqDateArg = () => String(invsReqDate || '').replace(/-/g, '');
       const editable = ['Pending', 'ApprovalFailed'].includes(req.status) && !invsSent;
       const actionable = ['Pending', 'ApprovalFailed'].includes(req.status);
       const pos = queue.findIndex(q => q.id === req.id);
@@ -8789,7 +8853,7 @@ const AdminConfigView = ({ ctx }) => {
         if (mergedItems) await reload();
         else if (dirty) { await saveEdits(); await reload(); }
         try {
-          const data = await callInvsBridge('preflight', req.id, { source: 'internal' });
+          const data = await callInvsBridge('preflight', req.id, { source: 'internal', request_date: invsReqDateArg() });
           setPreflight(data);
         } catch (e) {
           if (e?.payload && (Array.isArray(e.payload.items) || Array.isArray(e.payload.errors))) setPreflight(e.payload);
@@ -8798,7 +8862,7 @@ const AdminConfigView = ({ ctx }) => {
       });
 
       const doSendAndApprove = () => confirmOrder(() => run('send', async () => {
-        const data = await callInvsBridge('send', req.id, { source: 'internal' });
+        const data = await callInvsBridge('send', req.id, { source: 'internal', request_date: invsReqDateArg() });
         ctx.showToast(data.already_sent ? `ใบนี้มีใน INVS แล้ว: ${data.sub_po_no}` : `ส่งเข้า INVS สำเร็จ เลข ${data.sub_po_no}`);
         setPreflight(null);
         const fresh = (await db.collection('internal_requisitions').doc(req.id).get()).data() || {};
@@ -8812,8 +8876,8 @@ const AdminConfigView = ({ ctx }) => {
         ctx.showToast('อนุมัติแล้ว' + (isPharmacy ? ' และบวกยอดเข้าสต็อกห้องยา' : ''));
         rxTaskDone('adm_internal');
         await reload(); onBack();
-        // v6.17 slip จัดยา 80 มม. — บันทึกจากผล Bridge (pick_slips) แล้วถามพิมพ์
-        await saveAndPromptPickSlip({ ctx, req: { ...sent, items: fresh.items || items }, unitTitle: req.dept_name || '', source: 'internal', data: { ...data, items: Array.isArray(data.items) && data.items.length ? data.items : sent.invs_request_lot_snapshot } });
+        // v6.18 slip จัดยา: แผนที่พิมพ์ไว้ → SENT · ไม่มีแผน = เก็บ slip จากผล INVS (ไม่ถามพิมพ์ — slip มีใบเดียว)
+        await markPickSlipSent({ ctx, req: { ...sent, items: fresh.items || items }, unitTitle: req.dept_name || '', source: 'internal', data: { ...data, items: Array.isArray(data.items) && data.items.length ? data.items : sent.invs_request_lot_snapshot } });
       }));
 
       const doApproveOnly = () => confirmOrder(() => ctx.setConfirmDialog({
@@ -8881,6 +8945,7 @@ const AdminConfigView = ({ ctx }) => {
           <div className="flex flex-wrap gap-2 justify-end">
             <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 cursor-pointer mr-auto"><input type="checkbox" checked={sortByLoc} onChange={e => setSortByLoc(e.target.checked)} className="w-4 h-4" /> เรียงตามตำแหน่งยา (INVS)</label>
             <button onClick={() => setShowForm(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 font-bold text-sm"><i className="fa-solid fa-file-lines mr-2"></i>พิมพ์ใบเบิก</button>
+            {!invsSent && <PickPlanBadge source="internal" reqId={req.id} />}
             <PickSlipButton req={invsSent ? req : { ...req, items }} ctx={ctx} source="internal" unitTitle={req.dept_name || ''} />
           </div>
           <div className="bg-white rounded-2xl border shadow-sm overflow-auto max-h-[65vh]">
@@ -8940,6 +9005,13 @@ const AdminConfigView = ({ ctx }) => {
                   <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">รายการ</div><b>{preflight.item_count}</b></div>
                   <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">มูลค่า INVS</div><b>{iqMoney(preflight.total_value)}</b></div>
                 </div>
+                {!preflight.already_sent && <div className="flex flex-wrap items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-sm">
+                  <label className="font-bold text-indigo-800" htmlFor="iq-invs-req-date">วันที่เบิก (INVS)</label>
+                  <input id="iq-invs-req-date" type="date" value={invsReqDate} onChange={e => setInvsReqDate(e.target.value)} disabled={!!busy} className="p-1.5 border border-indigo-300 rounded-lg bg-white" />
+                  <span className="text-indigo-700">{thaiDateLong(invsReqDate)}</span>
+                  {preflight.request_date && String(preflight.request_date) !== invsReqDateArg() && <span className="text-xs font-bold text-red-600">Bridge ใช้ {preflight.request_date} (ย้อนหลังเกิน 120 วัน หรือ Bridge รุ่นเก่า) — กดตรวจ INVS ใหม่หลังแก้วันที่</span>}
+                  <span className="text-xs text-slate-500">ค่าเริ่มต้น = วันที่รอบเบิก/วันที่ในใบ — ยืนยันย้อนหลังใน INVS แล้วยังเป็นเดือนเดิม</span>
+                </div>}
                 {(preflight.errors || []).length > 0 && <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700"><b>ต้องแก้ก่อนส่ง:</b><ul className="list-disc ml-5 mt-1">{preflight.errors.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
                 {(preflight.warnings || []).length > 0 && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800"><ul className="list-disc ml-5">{preflight.warnings.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
                 {preflight.live_send_enabled === false && <div className="bg-slate-100 rounded-xl p-3 text-sm">Bridge ตั้ง allow_live_send=false — ตรวจได้แต่ยังส่งจริงไม่ได้</div>}
@@ -8947,7 +9019,7 @@ const AdminConfigView = ({ ctx }) => {
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 sticky top-0"><tr><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">ชื่อ</th><th className="p-2 text-right">จำนวน</th><th className="p-2 text-left">Lot / หมดอายุ</th><th className="p-2 text-right">คงคลัง lot</th><th className="p-2 text-right bg-sky-50">คงคลังรวมทุก lot</th><th className="p-2 text-right bg-sky-50">เหลือหลังเบิก</th><th className="p-2 text-right">มูลค่า</th></tr></thead>
                     <tbody>{(preflight.items || []).map(x => (
-                      <tr key={x.drug_id} className="border-t"><td className="p-2 font-mono">{x.drug_id}</td><td className="p-2">{x.drug_name}</td><td className="p-2 text-right">{iqNum(x.qty)}</td><td className="p-2">{x.lot_no} · {x.expiry}</td><td className="p-2 text-right">{iqNum(x.lot_qty_on_hand)}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className={`p-2 text-right font-bold bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className="p-2 text-right">{iqMoney(x.value)}</td></tr>
+                      <tr key={x.drug_id} className="border-t"><td className="p-2 font-mono">{x.drug_id}</td><td className="p-2">{x.drug_name}</td><td className="p-2 text-right">{iqNum(x.qty)}</td><td className="p-2">{x.lot_no} · {x.expiry}</td><td className="p-2 text-right">{iqNum(x.lot_qty_on_hand)}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, x.vmi_pack_size || x.pack_ratio) : '-'}{toSafeNumber(x.pending_qty) > 0 && <div className="text-[10px] font-bold text-amber-700" title={(x.pending_docs || []).map(d => d.sub_po_no + ' ' + d.dept_id + ' ' + d.qty).join('\n')}>ค้างยืนยัน −{formatQty(x.pending_qty, x.vmi_pack_size || x.pack_ratio)} ({(x.pending_docs || []).length} ใบ)</div>}</td><td className={`p-2 text-right font-bold bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.available ?? x.stock_before) < toSafeNumber(x.qty) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className="p-2 text-right">{iqMoney(x.value)}</td></tr>
                     ))}</tbody>
                   </table>
                 </div>
@@ -9056,11 +9128,112 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+    // ===== v6.18 กระดานจัดสรรยา — ยาที่เหลือน้อยเมื่อจ่ายทุกใบที่รอ (รพ.สต. + หน่วยงาน + ห้องยา) · ระบบแนะนำเท่านั้น แอดมินตัดสินใจและแก้ยอดในใบเอง =====
+    const AllocationBoardView = ({ ctx }) => {
+      const [loading, setLoading] = useState(false);
+      const [err, setErr] = useState('');
+      const [rows, setRows] = useState(null);
+      const [meta, setMeta] = useState(null);
+      const [threshold, setThreshold] = useState(() => { try { return Number(localStorage.getItem('rxfill_alloc_threshold') || 0) || 0; } catch (e) { return 0; } });
+      const [open, setOpen] = useState({});
+      const saveTh = (v) => { setThreshold(v); try { localStorage.setItem('rxfill_alloc_threshold', String(v)); } catch (e) { /* ignore */ } };
+      const load = async () => {
+        setLoading(true); setErr('');
+        try {
+          await ctx.refreshData?.();
+          const rpst = (ctx.appDb.requisitions || []).filter(r => ['Pending', 'ApprovalFailed'].includes(r.status) && !r.invs_sub_po_no && String(r.invs_status || '').toUpperCase() !== 'SENT')
+            .map(r => ({ source: 'rpst', req: r, unit: ctx.findHospital(r.hospitalId)?.hospital_name || r.hospitalId, kindLabel: 'รพ.สต.' }));
+          const internal = (await loadAllInternalReqs(ctx)).filter(r => ['Pending', 'ApprovalFailed'].includes(r.status) && !r.invs_sub_po_no && String(r.invs_status || '').toUpperCase() !== 'SENT')
+            .map(r => ({ source: 'internal', req: r, unit: r.dept_name || r.deptId, kindLabel: r.kind === 'pharmacy' ? 'ห้องยา' : 'หน่วยงาน' }));
+          const reqs = [...rpst, ...internal];
+          let planned = {};
+          try { (await loadPickReservations(ctx, null)).forEach(p => { planned[p.id] = p; }); } catch (e) { console.warn(e); }
+          const byDrug = new Map();
+          reqs.forEach(x => pickSlipLines(x.req, x.source).forEach(l => {
+            if (!byDrug.has(l.drugId)) byDrug.set(l.drugId, { drugId: l.drugId, item: l.item, demand: [] });
+            byDrug.get(l.drugId).demand.push({ ...x, qty: l.qty, received: l.received, planned: !!planned[pickSlipDocId(x.source, x.req.id)] });
+          }));
+          const ids = [...byDrug.keys()]; const proj = {};
+          for (let i = 0; i < ids.length; i += 1000) Object.assign(proj, (await callInvsBridge('stock_projection', '', { drug_ids: ids.slice(i, i + 1000) })).drugs || {});
+          const out = [...byDrug.values()].map(g => {
+            const p = proj[g.drugId] || { on_hand: 0, pending_qty: 0, available: 0, pending_docs: [] };
+            const base = pickSlipRow(ctx, g.drugId, g.item);
+            const total = g.demand.reduce((s, d) => s + d.qty, 0);
+            const avail = toSafeNumber(p.available);
+            // คำแนะนำ: แบ่งตามสัดส่วนยอดขอ ปัดลงเป็นเต็มบรรจุ (ระบบแนะนำเท่านั้น)
+            const pack = base.pack > 1 ? base.pack : 1;
+            const demand = g.demand.map(d => ({ ...d, suggest: total > avail ? Math.floor((avail * d.qty / Math.max(total, 1)) / pack) * pack : d.qty }))
+              .sort((a, b) => tsToMillis(a.req.submitted_at || a.req.created_at) - tsToMillis(b.req.submitted_at || b.req.created_at));
+            return { ...base, on_hand: toSafeNumber(p.on_hand), pending_qty: toSafeNumber(p.pending_qty), pending_docs: p.pending_docs || [], available: avail, total, remain: avail - total, demand };
+          }).sort((a, b) => (a.remain / Math.max(a.pack, 1)) - (b.remain / Math.max(b.pack, 1)));
+          setRows(out); setMeta({ at: new Date(), reqCount: reqs.length, drugCount: out.length, plannedCount: Object.keys(planned).length });
+        } catch (e) { setErr(e?.message || String(e)); }
+        finally { setLoading(false); }
+      };
+      const shown = (rows || []).filter(r => r.remain < threshold * Math.max(r.pack, 1) - 1e-9);
+      const fq = (v, pack) => formatQty(Math.round(toSafeNumber(v) * 1000) / 1000, pack);
+      const openReq = (d) => {
+        if (d.source === 'rpst') { ctx.setCurrentReqId(d.req.id); ctx.setCurrentView('view_req'); return; }
+        try { sessionStorage.setItem('rxfill_open_internal_req', d.req.id); } catch (e) { /* ignore */ }
+        ctx.setCurrentView('internal_queue');
+      };
+      return (
+        <div className="space-y-4 animate-fade-in">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-extrabold text-slate-800"><i className="fa-solid fa-scale-balanced text-teal-600 mr-2"></i>กระดานจัดสรรยา</h2>
+              <p className="text-sm text-slate-500">ใบที่รอจัดทุกระบบ (ยังไม่ส่ง INVS) เทียบกับคลังจ่าย INVS ที่ใช้ได้จริง (หักเอกสาร INVS ค้างยืนยัน) · ดึงจาก INVS ใหม่ทุกครั้งที่กด · ยอดแนะนำ = แบ่งตามสัดส่วนเท่านั้น แก้ยอดจริงในแต่ละใบ</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <label className="font-bold text-slate-600">แสดงยาที่เหลือหลังจ่ายทุกใบน้อยกว่า</label>
+              <input id="alloc-threshold" type="number" min="0" step="1" value={threshold} onChange={e => saveTh(Math.max(0, Number(e.target.value) || 0))} className="w-20 border rounded-lg px-2 py-1.5 text-right font-bold" />
+              <span className="font-bold text-slate-600">บรรจุ {threshold === 0 ? '(= ไม่พอจ่าย)' : ''}</span>
+              <button id="alloc-load" onClick={load} disabled={loading} className="px-4 py-2 rounded-xl bg-teal-600 text-white font-bold disabled:opacity-50"><i className={`fa-solid fa-rotate mr-2 ${loading ? 'fa-spin' : ''}`}></i>ดึงยอด INVS + คำนวณ</button>
+            </div>
+          </div>
+          {err && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">{err}</div>}
+          {!rows && !loading && <div className="bg-white border rounded-2xl p-10 text-center text-slate-400">กด "ดึงยอด INVS + คำนวณ" เพื่อดูยาที่อาจไม่พอ</div>}
+          {meta && <div className="text-xs text-slate-500">คำนวณเมื่อ {formatAppDateTime(meta.at)} · ใบรอจัด {meta.reqCount} ใบ (พิมพ์ slip แล้ว {meta.plannedCount}) · ยา {meta.drugCount} รายการ · มีปัญหา <b className="text-red-600">{shown.length}</b> รายการ</div>}
+          {rows && <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-2 text-left">ตำแหน่ง</th><th className="p-2 text-left">ยา</th><th className="p-2 text-right">คลัง INVS</th><th className="p-2 text-right">ค้างยืนยัน</th><th className="p-2 text-right">ใช้ได้</th><th className="p-2 text-right">ขอรวม</th><th className="p-2 text-right">เหลือหลังจ่ายทุกใบ</th><th className="p-2 text-center">รอเบิก</th></tr></thead>
+              <tbody>
+                {shown.map(r => <React.Fragment key={r.drug_id}>
+                  <tr className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => setOpen(o => ({ ...o, [r.drug_id]: !o[r.drug_id] }))}>
+                    <td className="p-2 font-mono text-xs">{r.loc || '-'}</td>
+                    <td className="p-2"><div className="font-bold">{r.name}</div><div className="text-[10px] text-slate-400 font-mono">{r.code} · บรรจุ {r.pack}</div></td>
+                    <td className="p-2 text-right">{fq(r.on_hand, r.pack)}</td>
+                    <td className="p-2 text-right text-amber-700" title={r.pending_docs.map(d => d.sub_po_no + ' ' + d.dept_id + ' ' + d.qty).join('\n')}>{r.pending_qty > 0 ? '−' + fq(r.pending_qty, r.pack) + ` (${r.pending_docs.length})` : '-'}</td>
+                    <td className="p-2 text-right font-bold">{fq(r.available, r.pack)}</td>
+                    <td className="p-2 text-right font-bold">{fq(r.total, r.pack)}</td>
+                    <td className={`p-2 text-right font-black ${r.remain < 0 ? 'text-red-600' : 'text-amber-600'}`}>{r.remain < 0 ? 'ขาด ' + fq(-r.remain, r.pack) : fq(r.remain, r.pack)}</td>
+                    <td className="p-2 text-center"><span className="inline-block bg-slate-800 text-white rounded-full px-2 py-0.5 text-xs font-black">{r.demand.length} แห่ง</span> <i className={`fa-solid fa-chevron-${open[r.drug_id] ? 'up' : 'down'} text-slate-400 ml-1`}></i></td>
+                  </tr>
+                  {open[r.drug_id] && <tr className="bg-slate-50/60"><td></td><td colSpan="7" className="p-2">
+                    <table className="w-full text-xs"><thead className="text-slate-500"><tr><th className="p-1 text-left">หน่วยเบิก</th><th className="p-1 text-left">ใบ</th><th className="p-1 text-right">ขอ</th><th className="p-1 text-right">แนะนำ (ตามสัดส่วน)</th><th className="p-1"></th></tr></thead>
+                      <tbody>{r.demand.map(d => <tr key={d.source + d.req.id} className="border-t">
+                        <td className="p-1 font-bold">{d.unit} <span className="text-[10px] font-normal text-slate-500">{d.kindLabel}</span>{d.planned && <span className="ml-1 text-[10px] font-black text-amber-800 bg-amber-100 rounded px-1">พิมพ์ slip แล้ว</span>}</td>
+                        <td className="p-1 text-slate-500">{d.req.form_no || d.req.id} · ส่ง {formatAppDateTime(d.req.submitted_at || d.req.created_at)}</td>
+                        <td className="p-1 text-right font-bold">{fq(d.qty, r.pack)}{d.received > 0 && <span className="text-[10px] text-slate-500"> (รับแล้ว {fq(d.received, r.pack)})</span>}</td>
+                        <td className="p-1 text-right font-black text-teal-700">{fq(d.suggest, r.pack)}</td>
+                        <td className="p-1 text-right"><button onClick={() => openReq(d)} className="px-2 py-1 rounded-lg bg-white border font-bold text-slate-700">เปิดใบ</button></td>
+                      </tr>)}</tbody></table>
+                  </td></tr>}
+                </React.Fragment>)}
+                {shown.length === 0 && <tr><td colSpan="8" className="p-8 text-center text-emerald-600 font-bold">ไม่มียาที่เหลือน้อยกว่าเกณฑ์ — จ่ายได้ครบทุกใบ</td></tr>}
+              </tbody>
+            </table>
+          </div>}
+        </div>
+      );
+    };
+
     const InternalQueueView = ({ ctx }) => {
       const [queue, setQueue] = useState([]);
       const [recent, setRecent] = useState([]);
       const [loading, setLoading] = useState(true);
-      const [selectedId, setSelectedId] = useState(null);
+      // v6.18 เปิดใบจากกระดานจัดสรร (sessionStorage rxfill_open_internal_req)
+      const [selectedId, setSelectedId] = useState(() => { try { const v = sessionStorage.getItem('rxfill_open_internal_req'); if (v) sessionStorage.removeItem('rxfill_open_internal_req'); return v || null; } catch (e) { return null; } });
       const [kindFilter, setKindFilter] = useState('all');
       const [tab, setTab] = useState('queue');
 
@@ -11090,6 +11263,7 @@ const AdminConfigView = ({ ctx }) => {
               {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('my_stock')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='my_stock'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> {normalizeUserRole(currentUser?.role)==='admin'?'คลังยา รพ.สต.':'ชั้นยาของฉัน'}</button>}
               {['hospital','admin'].includes(normalizeUserRole(currentUser?.role)) && <button onClick={() => requestView('emergency_req')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='emergency_req'?'bg-red-600 text-white shadow-lg shadow-red-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-truck-medical w-6 text-center mr-2"></i> เบิกยาฉุกเฉิน (ใบ ฉ)</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('internal_queue')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='internal_queue'?'bg-teal-600 text-white shadow-lg shadow-teal-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-list-ol w-6 text-center mr-2"></i> คิวใบเบิกภายใน รพ.{appDb.internalPendingCount ? <span className="ml-auto text-[11px] bg-amber-400 text-slate-900 rounded-full px-2 py-0.5">{appDb.internalPendingCount}</span> : null}</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('alloc_board')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='alloc_board'?'bg-teal-600 text-white shadow-lg shadow-teal-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-scale-balanced w-6 text-center mr-2"></i> กระดานจัดสรรยา</button>}
               {currentUser?.role === 'admin' && <a href="internal.html" className="w-full text-left p-4 rounded-xl font-bold transition flex items-center hover:bg-slate-800 text-slate-300"><i className="fa-solid fa-prescription-bottle-medical w-6 text-center mr-2"></i> เบิกยาห้องยา/หน่วยงาน</a>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('req_summary')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='req_summary'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-table-list w-6 text-center mr-2"></i> สรุปการเบิก</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('map_dashboard')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='map_dashboard'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-map-location-dot w-6 text-center mr-2"></i> VMI Map Dashboard</button>}
@@ -11138,6 +11312,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'drug_history' && <DrugHistoryView ctx={ctx} />}
               {currentView === 'vaccine_req' && <VaccineReqView ctx={ctx} />}
               {currentView === 'internal_queue' && currentUser?.role === 'admin' && <InternalQueueView ctx={{ ...ctx, refreshData }} />}
+              {currentView === 'alloc_board' && currentUser?.role === 'admin' && <AllocationBoardView ctx={{ ...ctx, refreshData }} />}
               <SupportFooter />
             </div>
           </div>

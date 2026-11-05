@@ -68,5 +68,17 @@ const newPage=async(b,uid,extra,file)=>{ seed(uid,extra); const p=await (await b
     check('admin: approved (INVS value 600) + predispense Merged', st.r==='Completed' && st.v===600 && st.p==='Merged', JSON.stringify(st));
     check('admin: no errors', !errs.length, errs.join(' | '));
   }
+  // 5) ใบที่อนุมัติโดยไม่มีเลข INVS → ยังพิมพ์ slip ได้ (ใช้รายการในใบ · เว้น Lot/EXP)
+  {
+    const IR={deptId:'WARD',dept_name:'ตึกผู้ป่วยหญิง',kind:'dept',status:'Completed',form_no:'3/2570',submitted_at:'2026-10-28T01:00:00Z',items:[{drugId:'D1',name:'Syringe 5 ml',unit:'ชิ้น',packSize:100,price:100,type:'2',requestQty:200,dispenseQty:200},{drugId:'D2',name:'NSS 1000 ml',unit:'ขวด',packSize:10,price:250,type:'2',requestQty:20,dispenseQty:20}],total_value:200};
+    const {p,errs}=await newPage(b,'a1',{internal_requisitions:{IR9:IR}},'t_app.html');
+    await p.click('text=คิวใบเบิกภายใน รพ.'); await p.waitForTimeout(500); await p.click('button:has-text("ดำเนินการแล้ว")'); await p.waitForTimeout(300);
+    await p.click('tr:has-text("ตึกผู้ป่วยหญิง")'); await p.waitForTimeout(700);
+    check('no-INVS req: slip button shown (slip sizes only)', await p.isVisible('button:has-text("พิมพ์ slip จัดยา")') && (await p.locator('#invs-sheet-paper option').count())===3);
+    const html=await p.evaluate(()=>buildPickSlipHtml({ widthMm: 80, unitTitle: 'ตึก', ctx: { findDrug: (id) => ({ D1: { pack_size: 100, invs_location: '12/1/1', drug_name: 'Syringe 5 ml' }, D2: { pack_size: 10, invs_location: '7/1/2-1', drug_name: 'NSS 1000 ml' } })[id], appDb: { units: [] } },
+      req: { items: [{ drugId: 'D1', name: 'Syringe 5 ml', packSize: 100, dispenseQty: 200 }, { drugId: 'D2', name: 'NSS 1000 ml', packSize: 10, dispenseQty: 20 }, { drugId: 'D3', name: 'X', dispenseQty: 0 }] } }));
+    check('no-INVS slip: items by location + blank lot line', html.indexOf('NSS 1000 ml')<html.indexOf('Syringe 5 ml') && /เบิก <b class="big">2<\/b>/.test(html) && html.includes('Lot ............ EXP') && !html.includes('>X<') && html.includes('ไม่มีข้อมูล INVS'));
+    check('no-INVS: no errors', !errs.length, errs.join(' | '));
+  }
   console.log(res.join('\n')); await b.close();
 })().catch(e=>{console.error('HARNESS',e.message); console.log(res.join('\n')); process.exit(1);});

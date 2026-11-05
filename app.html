@@ -580,23 +580,26 @@
     const buildPickSlipHtml = ({ req, ctx, unitTitle, widthMm }) => {
       const W = Math.max(48, Number(widthMm) || 80); const inner = W - 6; const fs = W >= 100 ? 12.5 : W >= 80 ? 11.5 : 10;
       const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-      const snap = Array.isArray(req.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length ? req.invs_request_lot_snapshot : (req.invs_items_snapshot || []);
+      const snapInvs = Array.isArray(req.invs_request_lot_snapshot) && req.invs_request_lot_snapshot.length ? req.invs_request_lot_snapshot : (req.invs_items_snapshot || []);
+      // ใบที่ไม่มีข้อมูล INVS (อนุมัติโดยไม่ส่ง INVS) → ใช้รายการในใบ · เว้นช่อง Lot/EXP ให้เขียน
+      const noInvs = !snapInvs.length;
+      const snap = noInvs ? (req.items || []).map(it => ({ drug_id: it.drugId, drug_name: it.name, qty: toSafeNumber(it.dispenseQty ?? it.requestQty), vmi_pack_size: it.packSize, blank: true })).filter(x => x.qty > 0) : snapInvs;
       const exp = (raw) => { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return esc(raw || '-'); const y = Number(v.slice(0, 4)); return `${v.slice(6, 8)}/${v.slice(4, 6)}/${String(y < 2400 ? y + 543 : y).slice(-2)}`; };
       const q = (v, pack) => esc(safePackSize(pack) > 1 ? formatQty(Math.round(toSafeNumber(v) * 1000) / 1000, pack) : toSafeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 }));
       const rows = snap.map(x => {
         const d = ctx.findDrug(x.drug_id) || {}; const reqItem = (req.items || []).find(it => String(it.drugId) === String(x.drug_id));
         const pack = safePackSize(d.pack_size ?? reqItem?.packSize ?? x.vmi_pack_size);
         const unit = (ctx.appDb?.units || []).find(u => String(u.unit_id) === String(d.unit_id))?.unit_name || safeText(reqItem?.unit) || '';
-        const lots = Array.isArray(x.lots_after) && x.lots_after.some(l => toSafeNumber(l.qty_issue) > 0)
+        const lots = x.blank ? [] : Array.isArray(x.lots_after) && x.lots_after.some(l => toSafeNumber(l.qty_issue) > 0)
           ? x.lots_after.filter(l => toSafeNumber(l.qty_issue) > 0).map(l => ({ lot: l.lot_no, exp: l.expiry, qty: l.qty_issue }))
           : (Array.isArray(x.alloc) && x.alloc.length ? x.alloc.map(l => ({ lot: l.lot_no, exp: l.expiry, qty: l.qty })) : [{ lot: x.lot_no, exp: x.expiry, qty: x.qty }]);
         return { x, d, pack, unit, lots, name: x.drug_name || d.drug_name || reqItem?.name || x.drug_id, loc: normDrugLocation(d.invs_location), type: String(d.type || '1') };
       }).sort((a, b) => compareByLocation(a.loc, a.name, b.loc, b.name));
-      const at = formatAppDateTime(req.invs_sent_at || new Date());
+      const at = formatAppDateTime(req.invs_sent_at || req.approved_at || new Date());
       const body = rows.map((r, i) => `<div class="it">
         <div class="hd"><span class="loc">${esc(r.loc || '—')}</span><span class="no">${i + 1}.</span> <b>${esc(r.name)}</b></div>
-        <div class="ln"><span>เบิก <b class="big">${q(r.x.qty, r.pack)}</b> ${esc(r.unit)}${r.pack > 1 ? ` <span class="sm">(×${r.pack})</span>` : ''}</span><span>เหลือคลัง <b>${r.x.stock_after !== undefined ? q(r.x.stock_after, r.pack) : '-'}</b></span></div>
-        ${r.lots.map(l => `<div class="lot">☐ <b>${esc(l.lot || '-')}</b> <span class="sm">EXP ${exp(l.exp)}</span><span class="lq">${q(l.qty, r.pack)}</span></div>`).join('')}
+        <div class="ln"><span>เบิก <b class="big">${q(r.x.qty, r.pack)}</b> ${esc(r.unit)}${r.pack > 1 ? ` <span class="sm">(×${r.pack})</span>` : ''}</span>${r.x.blank ? '' : `<span>เหลือคลัง <b>${r.x.stock_after !== undefined ? q(r.x.stock_after, r.pack) : '-'}</b></span>`}</div>
+        ${r.x.blank ? '<div class="lot">☐ Lot ............ EXP ........</div>' : ''}${r.lots.map(l => `<div class="lot">☐ <b>${esc(l.lot || '-')}</b> <span class="sm">EXP ${exp(l.exp)}</span><span class="lq">${q(l.qty, r.pack)}</span></div>`).join('')}
         <div class="sm code">${esc(drugCodeLabel(r.x.drug_id, r.d.old_code))}</div></div>`).join('');
       const title = `${unitTitle} slip ${req.invs_sub_po_no || ''}`.replace(/[\\/:*?"<>|]+/g, '-');
       return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
@@ -610,7 +613,7 @@
         `.sig{margin-top:5mm;display:flex;justify-content:space-between;gap:4mm;font-size:${fs - 1}px}.sig div{flex:1;border-top:1px dotted #000;text-align:center;padding-top:1mm}` +
         '</style></head><body>' +
         `<div class="t">ใบจัดยา (slip)</div><div class="m"><span>${esc(unitTitle)}</span><span>INVS <b>${esc(req.invs_sub_po_no || '-')}</b></span></div>` +
-        `<div class="m"><span>ส่ง INVS ${esc(at)}</span><span>${rows.length} รายการ</span></div>` + body +
+        `<div class="m"><span>${noInvs ? 'ไม่มีข้อมูล INVS · ' : 'ส่ง INVS '}${esc(at)}</span><span>${rows.length} รายการ</span></div>` + body +
         `<div class="end sm">เรียงตามตำแหน่งยา · Lot ตามลำดับที่ INVS ตัด (ยืนยันจ่ายจริงใน INVS อาจต่าง) · จำนวน = หน่วยใหญ่(หน่วยย่อย)</div>` +
         '<div class="sig"><div>ผู้จัด</div><div>ผู้ตรวจ</div></div>' +
         // ปรับความยาวหน้าให้พอดีเนื้อหา (กระดาษต่อเนื่อง) — วัดหลังฟอนต์โหลด
@@ -620,11 +623,12 @@
       const p = paper || getSlipPaper();
       return printHtmlDocument(p === 'a4' ? buildInvsStockSheetHtml({ req, ctx, unitTitle }) : buildPickSlipHtml({ req, ctx, unitTitle, widthMm: Number(p) }));
     };
-    const InvsSheetPrintButton = ({ req, ctx, unitTitle, small }) => {
-      const [paper, setPaper] = useState(getSlipPaper);
+    const InvsSheetPrintButton = ({ req, ctx, unitTitle, small, slipOnly }) => {
+      const [paper, setPaper] = useState(() => { const v = getSlipPaper(); return slipOnly && v === 'a4' ? '80' : v; });
+      const papers = slipOnly ? SLIP_PAPERS.filter(p => p.id !== 'a4') : SLIP_PAPERS;
       const pick = (v) => { setPaper(v); try { localStorage.setItem('rxfill_slip_paper', v); } catch (e) { /* ignore */ } };
       return <span className="inline-flex items-center gap-1">
-        <select aria-label="ขนาดกระดาษ" id="invs-sheet-paper" value={paper} onChange={e => pick(e.target.value)} className={`border border-cyan-300 rounded-lg bg-white text-cyan-900 font-bold ${small ? 'text-xs px-1 py-1' : 'text-sm px-2 py-2'}`}>{SLIP_PAPERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
+        <select aria-label="ขนาดกระดาษ" id="invs-sheet-paper" value={paper} onChange={e => pick(e.target.value)} className={`border border-cyan-300 rounded-lg bg-white text-cyan-900 font-bold ${small ? 'text-xs px-1 py-1' : 'text-sm px-2 py-2'}`}>{papers.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
         <button id="print-invs-stock" onClick={() => printInvsSheet({ req, ctx, unitTitle, paper })} className={`rounded-xl bg-cyan-700 text-white font-bold shadow ${small ? 'px-3 py-1 text-xs' : 'px-4 py-2 text-sm'}`}><i className="fa-solid fa-print mr-1"></i>{paper === 'a4' ? 'พิมพ์ใบเบิกพร้อมยอดคงเหลือ' : 'พิมพ์ slip จัดยา'}</button>
       </span>;
     };
@@ -8909,6 +8913,7 @@ const AdminConfigView = ({ ctx }) => {
             <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 cursor-pointer mr-auto"><input type="checkbox" checked={sortByLoc} onChange={e => setSortByLoc(e.target.checked)} className="w-4 h-4" /> เรียงตามตำแหน่งยา (INVS)</label>
             <button onClick={() => setShowForm(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 font-bold text-sm"><i className="fa-solid fa-file-lines mr-2"></i>พิมพ์ใบเบิก</button>
             <button onClick={() => printPickingList(req, items, ctx.findDrug)} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold text-sm"><i className="fa-solid fa-print mr-2"></i>พิมพ์ใบจัดยา (เรียงตามตำแหน่ง)</button>
+            {!invsSent && <InvsSheetPrintButton req={{ ...req, items }} ctx={ctx} unitTitle={req.dept_name || ''} slipOnly />}
           </div>
           <div className="bg-white rounded-2xl border shadow-sm overflow-auto max-h-[65vh]">
             <table className="w-full text-sm">

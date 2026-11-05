@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.19.0';
+const APP_VERSION = '6.20.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1225,13 +1225,17 @@ const buildInternalReqFormHtml = (opts) => {
   // v6.5 ห้องยา: คอลัมน์แบบใบเบิก รพ.สต. — ยอดใช้ · คงเหลือ(น้ำเงิน) · Target Stock(เทา) · จำนวนจ่าย(หนา)
   // opts.blankQty = เว้นช่องจำนวนจ่าย/มูลค่า/คงเหลือหลังเบิก ไว้เขียนเอง
   const blank = !!opts.blankQty;
-  const colCount = isPharmacy ? 12 : 10;
+  const colCount = isPharmacy ? 13 : 10;
   // v6.13 ห้องยา: Lot ที่ต้องหยิบ (FEFO) + ยอดเหลือใน lot หลังหยิบ ใต้ชื่อยา
   // v6.15 ช่องคงเหลือ: "10(3)" = คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (หน่วยใหญ่) แล้วตามด้วย lot ที่ต้องหยิบ "43831 [7], 48NVSFSD [3(150)]"
+  // v6.20 แยกเป็น 2 ช่อง: คงเหลือคลัง (หน่วยใหญ่) · Lot ที่จ่าย [จำนวน] (ตัวอักษรแคบ ไม่ตัดกลาง lot)
+  const stockAfterHtml = function (it, pack) {
+    if (!isPharmacy || blank || it.lotStockAfter == null || it.lotStockAfter === '' || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
+    return esc(formatQty(Math.round(toSafeNumber(it.lotStockAfter)), pack));
+  };
   const lotPickHtml = function (it, pack) {
     if (!isPharmacy || blank || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
-    const after = it.lotStockAfter != null && it.lotStockAfter !== '' ? '<b>' + esc(formatQty(Math.round(toSafeNumber(it.lotStockAfter) * 1000) / 1000, pack)) + '</b>' : '';
-    return after + '<div class="lotpick">' + it.lotPlan.map(function (l) { return esc(l.lot_no || '-') + ' [' + esc(formatQty(Math.round(toSafeNumber(l.qty) * 1000) / 1000, pack)) + ']'; }).join(', ') + '</div>';
+    return it.lotPlan.map(function (l) { return '<span class="lp">' + esc(l.lot_no || '-') + ' [' + esc(formatQty(Math.round(toSafeNumber(l.qty) * 1000) / 1000, pack)) + ']</span>'; }).join(' ');
   };
   // v6.6.5 หน่วยงาน: มูลค่า = จำนวนเบิก × ราคา (ช่องจำนวนจ่ายเว้นว่างให้ห้องยาเขียน) · ห้องยา: คิดจากจำนวนจ่ายเหมือนเดิม
   const valueOf = function (it) {
@@ -1252,7 +1256,9 @@ const buildInternalReqFormHtml = (opts) => {
       const req0 = toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty);
       const disp = toNonNegativeNumber(it.dispenseQty != null ? it.dispenseQty : req0);
       if (isPharmacy) {
-        const onHand = Math.max(0, toNonNegativeNumber(it.onHand));
+        // v6.20 ยอดใช้ปัดขึ้นเป็นจำนวนเต็ม · ยอดเหลือปัดเป็นจำนวนเต็ม (กันทศนิยมยาวดันคอลัมน์)
+        const onHand = Math.max(0, Math.round(toNonNegativeNumber(it.onHand)));
+        const usage = Math.ceil(toNonNegativeNumber(it.usage) - 1e-9);
         // รายการเพิ่มเอง (เช่น เวชภัณฑ์มิใช่ยา) ไม่มียอดจาก HOSxP — ช่องที่เป็น 0 เว้นว่างไว้เขียนเอง
         const man = it.source === 'manual';
         const z = function (v, s) { return man && !(toNonNegativeNumber(v) > 0) ? '' : s; };
@@ -1262,13 +1268,14 @@ const buildInternalReqFormHtml = (opts) => {
           '<td class="name">' + esc(it.name) + '</td>' +
           '<td class="c muted">' + esc(it.unit) + '</td>' +
           '<td class="c">' + pack + '</td>' +
-          '<td class="c">' + z(it.usage, qty(it.usage, pack)) + '</td>' +
+          '<td class="c">' + z(usage, qty(usage, pack)) + '</td>' +
           '<td class="c blue">' + z(onHand, qty(onHand, pack)) + '</td>' +
           '<td class="c tgt">' + tgt + '</td>' +
           '<td class="c b">' + (blank ? '' : z(disp, qty(disp, pack))) + '</td>' +
-          '<td class="r">' + esc(formatUnitPrice(it.price)) + '</td>' +
+          '<td class="r">' + money(it.price) + '</td>' +
           '<td class="r b">' + (blank ? '' : z(disp, money(valueOf(it)))) + '</td>' +
-          '<td class="c lotcell">' + lotPickHtml(it, pack) + '</td>' + // v6.15 คงเหลือ: คลังใหญ่รวมทุก lot หลังหยิบ (หน่วยใหญ่) + lot ที่ต้องหยิบ · ไม่มีข้อมูล lot = เว้นให้เขียนในกระดาษ
+          '<td class="c b">' + stockAfterHtml(it, pack) + '</td>' + // คงเหลือคลัง: คลังใหญ่รวมทุก lot หลังหยิบ · ไม่มีข้อมูล lot = เว้นให้เขียน
+          '<td class="lotcell">' + lotPickHtml(it, pack) + '</td>' +
           '<td class="c code">' + esc(drugCodeLabel(it.drugId, oldCodeOf(it.drugId))) + '</td>' +
           '</tr>';
       }
@@ -1300,7 +1307,7 @@ const buildInternalReqFormHtml = (opts) => {
   const fileTitle = (safeText(opts.deptName || req.dept_name) + ' ' + parts.month + ' ' + parts.year).replace(/[\\/:*?"<>|]+/g, '-').trim();
   return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>' + esc(fileTitle) + '</title>' +
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
-    '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
+    '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&family=Roboto+Condensed:wght@400;700&display=block" rel="stylesheet">' +
     '<style>' +
     '@page{size:A4 portrait;margin:14mm 10mm 14mm 10mm;' +
     // v6.5.2 เลขหน้ามุมขวาบน + เวลาพิมพ์ท้ายกระดาษทุกหน้า (ไม่ล้นไปหน้าใหม่)
@@ -1323,6 +1330,10 @@ const buildInternalReqFormHtml = (opts) => {
     '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
     '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:22px;text-align:center;page-break-inside:avoid;font-size:12.5px}.nw{white-space:nowrap}' +
     '.blankrow td{height:22px}' +
+    // v6.20 ใบห้องยา: ความกว้างคอลัมน์ตายตัว (ไม่ให้ตัวเลขยาวดันคอลัมน์) · Lot ใช้ตัวอักษรแคบ
+    '.items.ph{table-layout:fixed;font-size:10px}.items.ph th,.items.ph td{padding:2px 3px;overflow-wrap:anywhere}.items.ph th{font-size:9.5px}' +
+    ".items.ph td.lotcell{font-family:'Roboto Condensed','Arial Narrow',Sarabun,sans-serif;font-size:9px;line-height:1.2;color:#1e3a8a}.lp{white-space:nowrap}" +
+    '.items.ph td.muted{font-size:9px}.items.ph td.code{font-size:8.5px;overflow-wrap:normal;word-break:break-all}' +
     // v6.6.5 กลุ่มตำแหน่งเดียวกัน: จุดไข่ปลาเล็ก 0.1pt
     '.items tr.ldt td{border-top:0.1pt dotted #444}.items tr.ldb td{border-bottom:0.1pt dotted #444}' +
     '</style></head><body>' +
@@ -1330,11 +1341,12 @@ const buildInternalReqFormHtml = (opts) => {
     '<div class="meta"><div>เลขที่ <b>' + esc(opts.formNo) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +
     '<div class="to">เรียน ผู้อำนวยการโรงพยาบาลสวี</div>' +
     '<div class="intro">ด้วย<b>' + esc(deptSentencePrefix(opts.deptName || req.dept_name)) + '</b> มีความประสงค์จะขอเบิกวัสดุ/เวชภัณฑ์ เพื่อใช้ในราชการดังรายการต่อไปนี้</div>' +
-    '<table class="items"><thead><tr>' +
+    '<table class="items' + (isPharmacy ? ' ph' : '') + '"><thead><tr>' +
     (isPharmacy
-      ? '<th style="width:4%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:7%">หน่วย</th><th style="width:5%">บรรจุ</th>' +
-        '<th style="width:7.5%">ยอดใช้</th><th style="width:7.5%">ยอด<br>เหลือ</th><th class="tgt" style="width:7.5%">Target<br>Stock</th><th style="width:7.5%">จำนวน<br>จ่าย</th>' +
-        '<th style="width:7.5%">ราคา/<br>หน่วย</th><th style="width:8.5%">มูลค่า<br>(บาท)</th><th style="width:7.5%">คง<br>เหลือ</th><th style="width:6%">รหัส</th>'
+      // v6.20 สัดส่วนตามความยาวข้อมูล: ชื่อยา = ส่วนที่เหลือ (~24%) · Lot ที่จ่าย กว้างสุดในกลุ่มตัวเลข
+      ? '<th style="width:3.5%">ที่</th><th>ชื่อยา/เวชภัณฑ์</th><th style="width:5.5%">หน่วย</th><th style="width:4.5%">บรรจุ</th>' +
+        '<th style="width:5.5%">ยอดใช้</th><th style="width:5.5%">ยอด<br>เหลือ</th><th class="tgt" style="width:5.5%">Target<br>Stock</th><th style="width:6%">จำนวน<br>จ่าย</th>' +
+        '<th style="width:6.5%">ราคา/<br>หน่วย</th><th style="width:7.5%">มูลค่า<br>(บาท)</th><th style="width:6%">คงเหลือ<br>คลัง</th><th style="width:14.5%">Lot ที่จ่าย [จำนวน]</th><th style="width:5.5%">รหัส</th>'
       : '<th style="width:4%">ที่</th><th>รายการ</th><th style="width:7%">หน่วย</th><th style="width:6%">บรรจุ</th>' +
         '<th style="width:8%">จำนวน<br>เบิก</th><th style="width:8%">จำนวน<br>จ่าย</th><th style="width:8%">ราคา/<br>หน่วย</th><th style="width:9%">มูลค่า<br>(บาท)</th>' +
         '<th style="width:8%">คง<br>เหลือ</th><th style="width:7%">รหัส</th>') +

@@ -1,6 +1,8 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.14.0: ยอดค้างในเอกสาร INVS ที่ยังไม่ยืนยัน (sm_po_c CONFIRM_FLAG<>'Y' คลังเดียวกัน) — preflight หักออกก่อนคิด stock_after/alloc/lots_after
+ *            (pending_qty, pending_docs, available) · action stock_projection (อ่านอย่างเดียว) ใช้วางแผน slip จัดยา/กระดานจัดสรร
  *   v2.10.0: action invs_master (รายการยา/ราคา/pack/หน่วยจาก INVS ให้หน้าเว็บเทียบและเลือกบันทึก)
  *   v2.9.5: Stock ID ว่าง = ใช้ default · เขียน sm_po.CONFIRM_DATE (= วันที่เบิก) และ CONFIRM_TIME (เวลาส่ง) ตามชนิดคอลัมน์
  *   v2.9.4: รวม invs_extra_items (รายการส่ง INVS เพิ่ม เช่น น้ำเกลือ ที่ไม่อยู่ใน VMI) เข้าไปตอน preflight/send
@@ -28,7 +30,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.13.0';
+const BRIDGE_VERSION = '2.14.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -421,6 +423,39 @@ function lotsAfterIssue(array $lots,float $qty): array {
     foreach ($lots as $l) { $use=$left>1e-9?min($l['qty'],$left):0.0; $left-=$use; $out[]=['lot_no'=>$l['lot_no'],'expiry'=>$l['expiry'],'qty_before'=>$l['qty'],'qty_issue'=>$use,'qty_after'=>max(0.0,$l['qty']-$use),'trade_code'=>$l['trade_code'] ?? '','trade_name'=>$l['trade_name'] ?? '']; }
     return $out;
 }
+// v2.14.0 ยอดค้างในเอกสารเบิกที่ส่ง INVS แล้วแต่ยังไม่ยืนยันจ่าย (inv_md_c ยังไม่ถูกหัก) — อ่านอย่างเดียว
+// นับเฉพาะ sm_po ของคลังจ่ายเดียวกัน (STOCK_ID) ที่ทั้งหัวและบรรทัด CONFIRM_FLAG<>'Y' · บรรทัด CANCEL_DISP มีค่า = ไม่นับ · แก้จำนวนเป็น 0 = ไม่นับ
+// ย้อนหลังไม่เกิน invs.pending_lookback_days (ค่าเริ่มต้น 120 วัน ตาม SYSDATE) กันเอกสารค้างเก่ามาก
+function pendingInvsByDrug(mysqli $db,array $config,array $drugIds,string $stockId,string $excludeSubPo=''): array {
+    $ids=array_values(array_unique(array_filter(array_map(fn($v)=>cleanText((string)$v),$drugIds),fn($v)=>$v!=='')));
+    $out=[]; if (!$ids) return $out;
+    $days=max(1,(int)cfg($config,'invs','pending_lookback_days',120));
+    $cancel=tableHasColumn($db,'sm_po_c','CANCEL_DISP') ? " AND (c.CANCEL_DISP IS NULL OR TRIM(c.CANCEL_DISP)='')" : '';
+    foreach (array_chunk($ids,200) as $chunk) {
+        $ph=implode(',',array_fill(0,count($chunk),'?'));
+        $sql="SELECT TRIM(c.WORKING_CODE) AS WC, h.SUB_PO_NO, h.DEPT_ID, h.SUB_PO_DATE, h.SYSDATE, SUM(COALESCE(c.QTY_ORDER,0)) AS Q
+              FROM sm_po_c c INNER JOIN sm_po h ON h.SUB_PO_NO=c.SUB_PO_NO
+              WHERE h.STOCK_ID=? AND h.SUB_PO_NO<>? AND TRIM(c.WORKING_CODE) IN ($ph)
+                AND (h.CONFIRM_FLAG IS NULL OR h.CONFIRM_FLAG<>'Y') AND (c.CONFIRM_FLAG IS NULL OR c.CONFIRM_FLAG<>'Y'){$cancel}
+                AND h.SYSDATE>=DATE_SUB(NOW(), INTERVAL $days DAY)
+              GROUP BY TRIM(c.WORKING_CODE), h.SUB_PO_NO, h.DEPT_ID, h.SUB_PO_DATE, h.SYSDATE HAVING Q>0 ORDER BY h.SYSDATE";
+        $st=$db->prepare($sql); $args=array_merge([$stockId,$excludeSubPo],$chunk); $st->bind_param(str_repeat('s',count($args)),...$args); $st->execute(); $res=$st->get_result();
+        while ($r=$res->fetch_assoc()) {
+            $wc=cleanText($r['WC']); $q=finiteNumber($r['Q'] ?? 0);
+            if (!isset($out[$wc])) $out[$wc]=['qty'=>0.0,'docs'=>[]];
+            $out[$wc]['qty']+=$q;
+            $out[$wc]['docs'][]=['sub_po_no'=>cleanText($r['SUB_PO_NO'] ?? ''),'dept_id'=>cleanText($r['DEPT_ID'] ?? ''),'date'=>cleanText((string)($r['SUB_PO_DATE'] ?? '')),'sysdate'=>cleanText((string)($r['SYSDATE'] ?? '')),'qty'=>$q];
+        }
+        $st->close();
+    }
+    return $out;
+}
+// หัก lot ตามลำดับที่ INVS ตัด (เรียง RECORD_NUMBER) — ใช้จำลองคลังหลังเอกสารค้างยืนยันแล้ว
+function consumeLots(array $lots,float $qty): array {
+    $left=$qty; $out=[];
+    foreach ($lots as $l) { $use=$left>1e-9?min($l['qty'],$left):0.0; $left-=$use; $rest=$l['qty']-$use; if ($rest>1e-9) { $l['qty']=$rest; $out[]=$l; } }
+    return $out;
+}
 function drugExists(mysqli $db,string $workingCode): ?array {
     $st=$db->prepare('SELECT WORKING_CODE, DRUG_NAME FROM drug_gn WHERE TRIM(WORKING_CODE)=TRIM(?) LIMIT 1');
     $st->bind_param('s',$workingCode); $st->execute(); $r=$st->get_result()->fetch_assoc(); $st->close(); return $r ?: null;
@@ -572,6 +607,11 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
         }
         $allLots=lotsOnHand($db,$drugId,$stockId);
         $stockBefore=array_sum(array_map(fn($l)=>$l['qty'],$allLots));
+        // v2.14.0 หักเอกสาร INVS ที่ยังไม่ยืนยันก่อน → lot/คงคลังหลังเบิกใบนี้ตรงกับที่จะเหลือจริง
+        $pend=pendingInvsByDrug($db,$config,[$drugId],$stockId)[$drugId] ?? ['qty'=>0.0,'docs'=>[]];
+        $pendQty=min($stockBefore,(float)$pend['qty']);
+        $projLots=consumeLots($allLots,$pendQty);
+        if ($pendQty>0 && $qty>$stockBefore-$pendQty) $warnings[]="{$drugId}: คลังมี {$stockBefore} แต่ค้างในเอกสาร INVS ที่ยังไม่ยืนยัน {$pendQty} (".count($pend['docs'])." ใบ) — เหลือให้ใบนี้ ".max(0,$stockBefore-$pendQty)." ขอ {$qty}";
         $nlem=findNlem($db,$drugId,cleanText($lot['TRADE_CODE'] ?? ''),isset($lot['PACK_CODE'])?(int)$lot['PACK_CODE']:null);
         $lines[]=[
             'drug_id'=>$drugId,'drug_name'=>cleanText($dg['DRUG_NAME'] ?? ($it['name'] ?? '')),'qty'=>$qty,
@@ -581,7 +621,8 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
             'pack_code'=>($lot['PACK_CODE']!==null && $lot['PACK_CODE']!=='')?(int)$lot['PACK_CODE']:null,'nlem'=>$nlem,
             'location'=>cleanText($lot['LOCATION'] ?? ''),'mod_sys'=>cleanText($lot['MOD_SYS'] ?? cfg($config,'invs','mod_sys','MED')),
             'vmi_pack_size'=>$masterPack,'extra'=>!empty($it['_extra']),'extra_qty'=>finiteNumber($it['_extra_qty'] ?? 0),
-            'stock_before'=>$stockBefore,'stock_after'=>max(0.0,$stockBefore-$qty),'stock_lots'=>count($allLots),'alloc'=>allocateLots($allLots,$qty),'lots_after'=>lotsAfterIssue($allLots,$qty)
+            'stock_before'=>$stockBefore,'pending_qty'=>$pendQty,'pending_docs'=>array_slice($pend['docs'],0,20),'available'=>max(0.0,$stockBefore-$pendQty),
+            'stock_after'=>max(0.0,$stockBefore-$pendQty-$qty),'stock_lots'=>count($allLots),'alloc'=>allocateLots($projLots,$qty),'lots_after'=>lotsAfterIssue($projLots,$qty)
         ];
     }
     if (!$lines) $errors[]='ไม่มีรายการที่มีจำนวนจ่ายมากกว่า 0';
@@ -644,7 +685,7 @@ $raw=(string)file_get_contents('php://input');
 $body=json_decode($raw,true);
 if (!is_array($body)) respondError('JSON_INVALID','Request body ต้องเป็น JSON',400);
 $action=cleanText($body['action'] ?? '');
-if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send','hosxp_usage_daily','invs_lots','trace_query'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
+if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send','hosxp_usage_daily','invs_lots','trace_query','stock_projection'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
 
 // ----------------------------- list_depts (READ-ONLY) -----------------------------
 if ($action==='list_depts') {
@@ -1345,6 +1386,37 @@ if ($action==='invs_lots') {
 
 // v2.13.0 Traceability (อ่านอย่างเดียว): ฐาน sawee_trace บนเครื่อง Bridge (ไม่ใช่ INVS/HOSxP) — CLI trace_dispense.php เป็นผู้เขียน
 // เก็บ HN/VN/AN + วันที่จ่าย + ยา + lot (ไม่มีชื่อผู้ป่วย) · ข้อมูลส่งถึงเบราว์เซอร์ผู้ค้นเท่านั้น ไม่บันทึกลง Firestore
+// v2.14.0 คลังจ่ายที่ใช้ได้จริง = inv_md_c − เอกสาร INVS ที่ยังไม่ยืนยัน (อ่านอย่างเดียว) — วางแผน slip จัดยา / กระดานจัดสรร
+// lots = lot หลังหักเอกสารค้าง เรียงตามลำดับที่ INVS ตัด (RECORD_NUMBER)
+if ($action==='stock_projection') {
+    $actor=requireRoles($config,$body,['admin']);
+    $ids=array_values(array_unique(array_filter(array_map(fn($v)=>cleanText((string)$v),(array)($body['drug_ids'] ?? [])),fn($v)=>$v!=='')));
+    if (count($ids)>1500) respondError('TOO_MANY','ส่งรหัสยาได้ไม่เกิน 1,500 รายการต่อครั้ง',400);
+    $stockId=cleanText($body['stock_id'] ?? ''); if ($stockId==='') $stockId=cleanText(cfg($config,'invs','default_stock_id','10'));
+    try {
+        $db=connectDb($config); $lots=[]; $packs=[];
+        foreach (array_chunk($ids,200) as $chunk) {
+            $ph=implode(',',array_fill(0,count($chunk),'?'));
+            $st=$db->prepare("SELECT TRIM(c.WORKING_CODE) AS WC, c.RECORD_NUMBER, c.LOT_NO, c.EXPIRED_DATE, c.QTY_ON_HAND, c.PACK_RATIO FROM inv_md_c c WHERE c.DEPT_ID=? AND TRIM(c.WORKING_CODE) IN ($ph) AND COALESCE(c.QTY_ON_HAND,0)>0 ORDER BY c.RECORD_NUMBER ASC");
+            $args=array_merge([$stockId],$chunk); $st->bind_param(str_repeat('s',count($args)),...$args); $st->execute(); $res=$st->get_result();
+            while ($r=$res->fetch_assoc()) { $wc=cleanText($r['WC']); $lots[$wc][]=['lot_no'=>cleanText($r['LOT_NO'] ?? ''),'expiry'=>cleanText($r['EXPIRED_DATE'] ?? ''),'qty'=>finiteNumber($r['QTY_ON_HAND'] ?? 0)]; $pr=finiteNumber($r['PACK_RATIO'] ?? 0); if ($pr>0) $packs[$wc]=max($packs[$wc] ?? 0,$pr); }
+            $st->close();
+        }
+        $pend=pendingInvsByDrug($db,$config,$ids,$stockId);
+        $db->close();
+        $out=[];
+        foreach ($ids as $id) {
+            $ls=$lots[$id] ?? []; $onHand=array_sum(array_map(fn($l)=>$l['qty'],$ls));
+            $p=$pend[$id] ?? ['qty'=>0.0,'docs'=>[]]; $pq=min($onHand,(float)$p['qty']);
+            $out[$id]=['on_hand'=>$onHand,'pending_qty'=>$pq,'pending_raw'=>(float)$p['qty'],'pending_docs'=>array_slice($p['docs'],0,20),'available'=>max(0.0,$onHand-$pq),'pack_ratio'=>$packs[$id] ?? 0,'lots'=>consumeLots($ls,$pq)];
+        }
+        respond(['ok'=>true,'action'=>'stock_projection','stock_id'=>$stockId,'lookback_days'=>max(1,(int)cfg($config,'invs','pending_lookback_days',120)),'drugs'=>(object)$out,'bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
+        respondError('INVS_ERROR','อ่านยอดคงคลัง INVS ไม่สำเร็จ: '.$e->getMessage(),500);
+    }
+}
+
 if ($action==='trace_query') {
     $actor=requireRoles($config,$body,['admin','pharmacy']);
     $lotNo=cleanText($body['lot_no'] ?? ''); $hn=cleanText($body['hn'] ?? ''); $drugId=cleanText($body['drug_id'] ?? '');

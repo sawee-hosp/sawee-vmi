@@ -1,5 +1,5 @@
 rules_version = '2';
-// Sawee Rxfill Firestore Rules v6.16 (จ่ายล่วงหน้า รับแล้ว) · v6.14 (คลังห้องยาแยก lot) · v6.9 (LINE แจ้งเตือน · เบิกยาด่วน · แก้ Lot/EXP) · v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
+// Sawee Rxfill Firestore Rules v6.17 (pick_slips slip จัดยา) · v6.16 (จ่ายล่วงหน้า รับแล้ว) · v6.14 (คลังห้องยาแยก lot) · v6.9 (LINE แจ้งเตือน · เบิกยาด่วน · แก้ Lot/EXP) · v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -446,6 +446,11 @@ service cloud.firestore {
     }
 
     // v6.16 จ่ายล่วงหน้า "รับแล้ว" (เช่น น้ำเกลือ) — แอดมินบันทึก หน่วยงานอ่านได้ แก้/ลบไม่ได้ · ระบบรวมเข้าใบเบิกหน่วยงานรอบเร็วที่สุด
+    // v6.17 slip จัดยา (ข้อมูลตอนส่ง INVS: Lot/EXP ที่หยิบ + ยอดเหลือคงคลัง) — พิมพ์ย้อนหลัง · แอดมินเท่านั้น
+    match /pick_slips/{docId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
     match /internal_predispense/{docId} {
       allow read: if isAdmin() || ownsDept(resource.data.deptId);
       allow create, update, delete: if isAdmin();

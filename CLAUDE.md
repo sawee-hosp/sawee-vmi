@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.16.0 · Bridge v2.13.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.17.0 · Bridge v2.13.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -183,3 +183,10 @@
   - รวมเข้าใบเบิกหน่วยงานรอบเร็วที่สุดที่เห็น: DeptReqView (ตอนสร้าง/แก้ใบ) หรือแอดมินตรวจ INVS (`mergePredisps` อัตโนมัติ + ปุ่มรวมตอนนี้) · ใบเก็บ `predisp_ids`, item `predispQty` · อนุมัติแล้วรายการเป็น Merged
   - ยอดรับแล้ว = `urgentQty` (ใบเบิกด่วน) + `predispQty` (shared.js `receivedQtyOf` / `regularQtyOf` / `qtyWithReceivedText`) · requestQty/dispenseQty = รวมทั้งหมด (ส่ง INVS/คิดเงิน) · DeptReqView ช่องจำนวน = ยอดเบิกปกติ ส่วนรับแล้วล็อก (ลบแถวไม่ได้) · แสดง "3+2(รับแล้ว)" ในตารางหน่วยงาน, แผงแอดมิน, ใบพิมพ์หน่วยงาน (ช่องจำนวนเบิก)
 - tests/v616.js · ตัวอย่าง slip `docs/blueprint/screens/S01-pick-slip-80mm.png`
+
+## v6.17 Slip จัดยา 80 มม. ฟอร์มเดียว (แทน v6.16 ตัวเลือกกระดาษ)
+- ยกเลิก "ใบเบิกพร้อมยอดคงเหลือ A4" (`buildInvsStockSheetHtml`), ตัวเลือกกระดาษ (`SLIP_PAPERS`) และ "พิมพ์ใบจัดยา (เรียงตามตำแหน่ง)" (`printPickingList`) → เหลือ `PickSlipButton` "พิมพ์ slip จัดยา (80 มม.)" ปุ่มเดียว (ใบ รพ.สต. กล่อง INVS + คิวใบภายใน ทุกสถานะ)
+- slip: ตำแหน่ง · ชื่อยา · รหัส (old_code) · เบิก หน่วยใหญ่ (×บรรจุ หน่วยย่อย) · รับแล้ว → หยิบ (predisp/urgent/emergency) · ทุก Lot ที่ตัด + EXP + จำนวนต่อ lot · เหลือคงคลัง หน่วยใหญ่(เศษ)
+- ข้อมูล slip เก็บแยก `pick_slips/{rpst|internal}__{reqId}` (`buildPickSlipData`/`savePickSlip`) ตอนส่ง INVS จากผลที่ Bridge ตอบกลับ (`data.items`) → หลังส่งถาม "พิมพ์ slip จัดยา?" (`saveAndPromptPickSlip`, ใบ รพ.สต. ด้วย) · พิมพ์ย้อนหลัง `loadPickSlip`: pick_slips → snapshot INVS ในใบ (บันทึกเก็บด้วย) → ยังไม่ส่ง INVS = รายการในใบ เว้น Lot/คงคลังให้เขียน
+- เหตุ: ใบที่อ่านฟิลด์ INVS กลับจาก Firestore/แคชไม่ได้ slip ขึ้น "ไม่มีข้อมูล INVS" ทั้งที่เพิ่งส่ง
+- rules v6.17: `pick_slips` แอดมินเท่านั้น · tests v616 (ข้อ 6 พิมพ์ย้อนหลัง) / v615 / v612 · ตัวอย่าง `docs/blueprint/screens/S02-pick-slip-80mm-v617.png`

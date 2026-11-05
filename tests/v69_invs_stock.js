@@ -12,8 +12,8 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
   await p.goto('file://'+path.join(DIR,'t_app.html')); await p.waitForTimeout(1800);
   await p.evaluate(()=>{window.__ctxOpen=true;});
   await p.click('tr.cursor-pointer >> nth=0');await p.waitForTimeout(1200); await p.waitForTimeout(1000);
-  const has=await p.isVisible('#print-invs-stock'); console.log('button',has);
-  if(has){ await p.evaluate(()=>{HTMLIFrameElement.prototype.__x=1; window.print=()=>{};}); await p.click('#print-invs-stock'); await p.waitForTimeout(500);
+  const has=await p.isVisible('#print-pick-slip'); console.log('button',has);
+  if(has){ await p.evaluate(()=>{HTMLIFrameElement.prototype.__x=1; window.print=()=>{};}); await p.click('#print-pick-slip'); await p.waitForTimeout(500);
     const html=await p.evaluate(()=>{const f=document.querySelector('iframe[aria-hidden]');return f?f.contentWindow.document.documentElement.outerHTML:''});
     fs.writeFileSync(path.join(DIR,'stk.html'),html); console.log(/3,500/.test(html), /B2/.test(html), /D1\(013\)/.test(html)); }
   console.log('errors',errs.join('|')||'none'); await b.close();

@@ -37,7 +37,9 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
   check('value: approved with INVS prices (300×1.2 + 30×4 = 480)', done.st==='Completed' && done.v===480 && done.items.includes('D1:120:INVS') && done.items.includes('D2:40:INVS'), JSON.stringify(done));
   await p.locator('.fixed button').last().click(); await p.waitForTimeout(800);
   const html=await p.evaluate(()=>{ const f=[...document.querySelectorAll('iframe')].pop(); try{ return f?f.contentWindow.document.documentElement.outerHTML:''; }catch(e){ return ''; } });
-  check('sheet: not empty (from Bridge result) + big units', html.includes('PO777') && html.includes('Syringe 5 ml') && /9\(50\)/.test(html) && /S2 · [^<]* · เหลือ <b>9\(50\)<\/b>/.test(html) && !html.includes('รวม 0 รายการ'), html.length+' chars');
+  check('slip: not empty (from Bridge result) + big units', html.includes('PO777') && html.includes('Syringe 5 ml') && /<b>S2<\/b> <span class="sm">EXP [^<]*<\/span><span class="lq">\(50\)<\/span>/.test(html) && html.includes('เหลือคงคลัง <b>9(50)</b>') && html.includes('2 รายการ'), html.length+' chars');
+  const ps=await p.evaluate(()=>{ const d=(window.__STORE.pick_slips||new Map()).get('internal__IR1'); return d ? d.invs_sub_po_no+':'+d.items.map(i=>i.drug_id+'='+i.lots.map(l=>l.lot_no+'/'+l.qty).join('+')+'>'+i.stock_after).join(',') : null; });
+  check('pick_slips saved from Bridge result', ps==='PO777:D2=G1/30>15,D1=S1/250+S2/50>950' || ps==='PO777:D1=S1/250+S2/50>950,D2=G1/30>15', ps);
   check('no errors', !errs.length, errs.join(' | '));
   console.log(res.join('\n')); await b.close();
 })().catch(e=>{console.error('HARNESS',e.message); console.log(res.join('\n')); process.exit(1);});

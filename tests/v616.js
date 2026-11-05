@@ -17,15 +17,14 @@ const newPage=async(b,uid,extra,file)=>{ seed(uid,extra); const p=await (await b
   // 1) slip จัดยา
   {
     const {p,errs}=await newPage(b,'a1',{},'t_app.html');
-    const html=await p.evaluate(()=>buildPickSlipHtml({ widthMm: 80, unitTitle: 'ตึกผู้ป่วยหญิง', ctx: { findDrug: (id) => ({ D1: { pack_size: 100, invs_location: '12/1/1', drug_name: 'Syringe 5 ml' }, D2: { pack_size: 10, invs_location: '7/1/2-1', drug_name: 'NSS 1000 ml' } })[id], appDb: { units: [] } },
+    const html=await p.evaluate(()=>buildPickSlipHtml(buildPickSlipData({ source: 'internal', unitTitle: 'ตึกผู้ป่วยหญิง', ctx: { findDrug: (id) => ({ D1: { pack_size: 100, invs_location: '12/1/1', drug_name: 'Syringe 5 ml' }, D2: { pack_size: 10, invs_location: '7/1/2-1', drug_name: 'NSS 1000 ml' } })[id], appDb: { units: [] } },
       req: { invs_sub_po_no: 'PO9', items: [], invs_request_lot_snapshot: [
         { drug_id: 'D1', qty: 350, stock_before: 1250, stock_after: 900, lots_after: [{ lot_no: 'S1', expiry: '20270101', qty_issue: 250, qty_after: 0 }, { lot_no: 'S2', expiry: '20280101', qty_issue: 100, qty_after: 900 }] },
-        { drug_id: 'D2', qty: 25, stock_before: 45, stock_after: 20, lots_after: [{ lot_no: 'N1', expiry: '20270501', qty_issue: 25, qty_after: 20 }] } ] } }));
+        { drug_id: 'D2', qty: 25, stock_before: 45, stock_after: 20, lots_after: [{ lot_no: 'N1', expiry: '20270501', qty_issue: 25, qty_after: 20 }] } ] } })));
     const iD2=html.indexOf('NSS 1000 ml'), iD1=html.indexOf('Syringe 5 ml');
     check('slip: sorted by location (7/… before 12/…)', iD2>0 && iD1>iD2);
-    check('slip: qty / lots / EXP / stock after in big units', /เบิก <b class="big">3\(50\)<\/b>/.test(html) && /<b>S1<\/b> <span class="sm">EXP 01\/01\/70<\/span><span class="lq">2\(50\)<\/span>/.test(html) && /เหลือคลัง <b>9<\/b>/.test(html) && /เบิก <b class="big">2\(5\)<\/b>/.test(html));
+    check('slip: qty / lots / EXP / stock after in big units', /เบิก <b class="big">3\(50\)<\/b>/.test(html) && /<b>S1<\/b> <span class="sm">EXP 01\/01\/70<\/span><span class="lq">2\(50\)<\/span>/.test(html) && /เหลือคงคลัง <b>9<\/b>/.test(html) && html.includes('รหัส D1') && /เบิก <b class="big">2\(5\)<\/b>/.test(html));
     check('slip: 80 mm page + auto height script', html.includes('@page{size:80mm') && html.includes('scrollHeight'));
-    check('slip: default paper = A4', await p.evaluate(()=>getSlipPaper())==='a4');
     // 2) แอดมินบันทึกจ่ายล่วงหน้า
     await p.click('text=คิวใบเบิกภายใน รพ.'); await p.waitForTimeout(500);
     await p.click('button:has-text("จ่ายล่วงหน้า (รับแล้ว)")'); await p.waitForSelector('#predisp-admin');
@@ -74,11 +73,24 @@ const newPage=async(b,uid,extra,file)=>{ seed(uid,extra); const p=await (await b
     const {p,errs}=await newPage(b,'a1',{internal_requisitions:{IR9:IR}},'t_app.html');
     await p.click('text=คิวใบเบิกภายใน รพ.'); await p.waitForTimeout(500); await p.click('button:has-text("ดำเนินการแล้ว")'); await p.waitForTimeout(300);
     await p.click('tr:has-text("ตึกผู้ป่วยหญิง")'); await p.waitForTimeout(700);
-    check('no-INVS req: slip button shown (slip sizes only)', await p.isVisible('button:has-text("พิมพ์ slip จัดยา")') && (await p.locator('#invs-sheet-paper option').count())===3);
-    const html=await p.evaluate(()=>buildPickSlipHtml({ widthMm: 80, unitTitle: 'ตึก', ctx: { findDrug: (id) => ({ D1: { pack_size: 100, invs_location: '12/1/1', drug_name: 'Syringe 5 ml' }, D2: { pack_size: 10, invs_location: '7/1/2-1', drug_name: 'NSS 1000 ml' } })[id], appDb: { units: [] } },
-      req: { items: [{ drugId: 'D1', name: 'Syringe 5 ml', packSize: 100, dispenseQty: 200 }, { drugId: 'D2', name: 'NSS 1000 ml', packSize: 10, dispenseQty: 20 }, { drugId: 'D3', name: 'X', dispenseQty: 0 }] } }));
-    check('no-INVS slip: items by location + blank lot line', html.indexOf('NSS 1000 ml')<html.indexOf('Syringe 5 ml') && /เบิก <b class="big">2<\/b>/.test(html) && html.includes('Lot ............ EXP') && !html.includes('>X<') && html.includes('ไม่มีข้อมูล INVS'));
+    check('no-INVS req: single slip button (no A4 / location list)', await p.isVisible('#print-pick-slip') && !(await p.isVisible('text=พิมพ์ใบจัดยา (เรียงตามตำแหน่ง)')) && !(await p.locator('#invs-sheet-paper').count()));
+    const html=await p.evaluate(()=>buildPickSlipHtml(buildPickSlipData({ source: 'internal', unitTitle: 'ตึก', ctx: { findDrug: (id) => ({ D1: { pack_size: 100, invs_location: '12/1/1', drug_name: 'Syringe 5 ml' }, D2: { pack_size: 10, invs_location: '7/1/2-1', drug_name: 'NSS 1000 ml' } })[id], appDb: { units: [] } },
+      req: { items: [{ drugId: 'D1', name: 'Syringe 5 ml', packSize: 100, dispenseQty: 200 }, { drugId: 'D2', name: 'NSS 1000 ml', packSize: 10, dispenseQty: 20 }, { drugId: 'D3', name: 'X', dispenseQty: 0 }] } })));
+    check('no-INVS slip: items by location + blank lot line', html.indexOf('NSS 1000 ml')<html.indexOf('Syringe 5 ml') && /เบิก <b class="big">2<\/b>/.test(html) && html.includes('Lot ............ EXP') && !html.includes('>X<') && html.includes('ยังไม่ส่ง INVS'));
     check('no-INVS: no errors', !errs.length, errs.join(' | '));
+  }
+  // 6) พิมพ์ย้อนหลังจาก pick_slips แม้ใบไม่มีฟิลด์ INVS (อ่านกลับไม่ได้)
+  {
+    const IR={deptId:'WARD',dept_name:'ตึกผู้ป่วยหญิง',kind:'dept',status:'Completed',form_no:'4/2570',submitted_at:'2026-10-28T01:00:00Z',items:[{drugId:'D2',name:'NSS 1000 ml',unit:'ขวด',packSize:10,price:250,type:'2',requestQty:20,dispenseQty:20}],total_value:500};
+    const PS={source:'internal',req_id:'IR8',unit_title:'ตึกผู้ป่วยหญิง',has_invs:true,invs_sub_po_no:'PO55',sent_at:'2026-10-28T03:00:00Z',items:[{drug_id:'D2',name:'NSS 1000 ml',loc:'7/1/2-1',code:'D2',pack:10,unit:'ขวด',qty:20,received:0,lots:[{lot_no:'N7',expiry:'20270501',qty:20}],stock_after:25}]};
+    const {p,errs}=await newPage(b,'a1',{internal_requisitions:{IR8:IR},pick_slips:{internal__IR8:PS}},'t_app.html');
+    await p.evaluate(()=>{ window.print=()=>{}; });
+    await p.click('text=คิวใบเบิกภายใน รพ.'); await p.waitForTimeout(500); await p.click('button:has-text("ดำเนินการแล้ว")'); await p.waitForTimeout(300);
+    await p.click('tr:has-text("ตึกผู้ป่วยหญิง")'); await p.waitForTimeout(700);
+    await p.click('#print-pick-slip'); await p.waitForTimeout(800);
+    const html=await p.evaluate(()=>{ const f=[...document.querySelectorAll('iframe')].pop(); try{ return f?f.contentWindow.document.documentElement.outerHTML:''; }catch(e){ return ''; } });
+    check('reprint: from pick_slips (PO55, lot N7, stock 2(5))', html.includes('PO55') && html.includes('<b>N7</b>') && html.includes('เหลือคงคลัง <b>2(5)</b>'), html.length+' chars');
+    check('reprint: no errors', !errs.length, errs.join(' | '));
   }
   console.log(res.join('\n')); await b.close();
 })().catch(e=>{console.error('HARNESS',e.message); console.log(res.join('\n')); process.exit(1);});

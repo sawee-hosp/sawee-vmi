@@ -34,8 +34,14 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
   check('asu: bridge calls', calls.includes('hosxp_usage_daily') && calls.includes('invs_lots'), JSON.stringify(calls));
   const rowText=async(name)=>(await p.locator('tr',{hasText:name}).first().innerText()).replace(/\s+/g,' ');
   const ibu=await rowText('Ibuprofen 400 mg tab'), para=await rowText('Paracetamol 500 mg tab');
-  check('asu: need 37 → clear lot A = 40', / 37 40 /.test(ibu) && /เคลียร์ lot A/.test(ibu) && /A .*หยิบ 40 → เหลือ 0/.test(ibu), ibu);
-  check('asu: pack 1000, need 1,800 → 2,000 across 2 lots', /L1 .*หยิบ 1,500 → เหลือ 0/.test(para) && /L2 .*หยิบ 500 → เหลือ 4,500/.test(para), para);
+  check('asu: need 37 → clear lot A = 40 · remain all lots 260 (2 lot)', / 37 40 /.test(ibu) && /เคลียร์ lot A/.test(ibu) && /เหลือรวม 260 · 2 lot \/ คลัง 300 A [^[]*\[40\]/.test(ibu), ibu);
+  check('asu: pack 1000, need 1,800 → 2,000 across 2 lots · remain 4,500 (1 lot)', /เหลือรวม 4,500 \(4\(500\) แพ็ค\) · 1 lot \/ คลัง 6,500/.test(para) && /L1 [^[]*\[1,500\]/.test(para) && /L2 [^[]*\[500\]/.test(para), para);
+  // v6.19 เบิกจริงห้ามเกินคงคลังรวมทุก lot (Ibuprofen คลัง 300)
+  const ibuIn=p.locator('input[aria-label="เบิกจริง Ibuprofen 400 mg tab"]');
+  await ibuIn.fill('999'); await ibuIn.press('Enter'); await ibuIn.blur(); await p.waitForTimeout(300);
+  const ibu2=await rowText('Ibuprofen 400 mg tab');
+  check('cap: เบิกจริง > คงคลัง → 300, เหลือรวม 0', (await ibuIn.inputValue())==='300' && /เหลือรวม 0 · 0 lot/.test(ibu2) && (await p.innerText('body')).includes('เบิกได้ไม่เกินคงคลังรวมทุก lot'), (await ibuIn.inputValue())+' · '+ibu2);
+  await ibuIn.fill(''); await ibuIn.press('Enter'); await ibuIn.blur(); await p.waitForTimeout(200);
   check('asu: VEN shown (pharmacy read-only)', ibu.includes('VEN N'));
   // ใบพิมพ์ (ประมาณการ/ใบเบิก) ต้องมี Lot ที่หยิบ + เหลือหลังหยิบ
   await p.click('#ph-estimate'); await p.waitForSelector('#ph-est-print');

@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.20.0 · Bridge v2.14.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.21.0 · Bridge v2.15.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -216,3 +216,12 @@
   - ยอดใช้ปัดขึ้นเป็นจำนวนเต็ม · ยอดเหลือปัดเป็นจำนวนเต็ม · ราคา/หน่วย 2 ตำแหน่ง · คงเหลือคลัง = lotStockAfter (หน่วยใหญ่) แยกจาก lot · tests/v620.js (v613/v64 ปรับตาม)
 
 - ตัวอย่าง `docs/blueprint/screens/S05-pharmacy-form-v620.png`
+
+## v6.21 (Bridge 2.15.0)
+- **ใบเบิกด่วนในใบพิมพ์หน่วยงาน:** `qtyWithReceivedText` แยกที่มา `3+2(ด่วน)` (urgentQty) / `3+2(รับแล้ว)` (predispQty) / ทั้งคู่ `3+2(ด่วน)+1(รับแล้ว)` · หมายเหตุท้ายใบ "รวมรายการรับแล้ว: รวมใบเบิกด่วน n ใบ วันที่ …" (`receivedRefsFor` + `receivedRefsText`, opts.receivedRefs) · ใบพิมพ์หน่วยงาน (internal.html) อ่านใบล่าสุดจาก Firestore ก่อนพิมพ์
+  - เหตุ: ใบ 3/2570 ซักฟอก รวมใบด่วนแล้วแต่รายการไม่มี urgentQty → พิมพ์เป็นยอดปกติ คนจัดหยิบซ้ำ · คิวใบภายใน (แอดมิน) แถบ `#iq-urgent-fix` "ระบุยอดด่วนตามใบด่วน (จำนวนเบิกเท่าเดิม)" สำหรับใบที่มีใบด่วน Merged (urgent_ids / merged_req_id) แต่ urgentQty ไม่ครบ — แก้ได้ทุกสถานะยกเว้นยกเลิก (ไม่เปลี่ยนจำนวน/มูลค่า)
+- **ลำดับแผนจัดยา:** ยอดจองนับเฉพาะแผนที่อยู่ก่อนหน้า (`first_planned_at`, `pickPlanOrder`) — พิมพ์ซ้ำคงลำดับเดิม · `cancelPickPlan` ปุ่ม × บนป้าย "กำลังจัด" · กระดานจัดสรร `#pick-plan-queue` ลำดับแผนที่ค้าง + "ยกเลิกลำดับ" / "ล้างแผนทั้งหมด" · ส่ง INVS แล้วหลุดจากลำดับเอง (ยอดค้างใน INVS นับต่อจนยืนยัน)
+- **สต็อกห้องยา (StockView):** "วันที่นับ" → `internal_stock.counted_ymd` · PharmacyReqView: ยอดนับรวมการจ่ายก่อนวันนับแล้ว → นับหลังสิ้นช่วงยอดใช้ = ไม่หักยอดใช้ · นับระหว่างช่วง = หักยอดใช้หลังวันนับ (รายวันจาก ASU ถ้ามี ไม่งั้นเฉลี่ยตามวัน) · ใบเก่าใช้ counted_at · แสดง "นับ … · ไม่หักยอดใช้"
+- **Sync มูลค่าจริงจาก INVS** (`InvsValueSyncModal` ปุ่มในคิวใบเบิกภายใน + กระดานจัดสรร): ทุกใบที่มี invs_sub_po_no (รพ.สต. + ภายใน) → Bridge `invs_doc_values` {sub_po_nos} (อ่านอย่างเดียว: confirmed = หัว CONFIRM_FLAG='Y' หรือทุกบรรทัดใช้งาน 'Y' · ต่อยา SUM VALUE/QTY บรรทัด CANCEL_DISP ว่าง) → เฉพาะใบยืนยันแล้ว: items.price = มูลค่า INVS ÷ จำนวนในใบ × บรรจุ (`price_source:'INVS_CONFIRMED'`, `invs_value`, คง `price_before_invs`) · `estimate_total_value` = **ราคาประมาณการ** (มูลค่าที่ระบบคิดครั้งแรกจาก price_before_invs) · `invs_confirmed_total_value`, `invs_value_confirmed`, ใบภายในอัปเดต total_value/approved_total_value · กล่อง INVS แสดง "มูลค่าจริง INVS · ราคาประมาณการ"
+- tests/v621.js
+

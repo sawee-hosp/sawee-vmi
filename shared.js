@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.20.0';
+const APP_VERSION = '6.21.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1091,7 +1091,31 @@ const qtyWithReceivedText = (it, total, pack) => {
   const tot = toNonNegativeNumber(total != null ? total : (it && (it.requestQty != null ? it.requestQty : it.dispenseQty)));
   if (!(rcv > 0)) return fq(tot);
   const reg = Math.max(0, tot - rcv);
-  return (reg > 0 ? fq(reg) + '+' : '') + fq(rcv) + '(รับแล้ว)';
+  // v6.21 แยกที่มา: ใบเบิกด่วน = "(ด่วน)" · จ่ายล่วงหน้าโดยแอดมิน = "(รับแล้ว)" — คนจัดยาไม่หยิบซ้ำ
+  const urg = toNonNegativeNumber(it && it.urgentQty), pre = toNonNegativeNumber(it && it.predispQty);
+  const parts = [];
+  if (urg > 0) parts.push(fq(urg) + '(ด่วน)');
+  if (pre > 0) parts.push(fq(pre) + '(รับแล้ว)');
+  return (reg > 0 ? fq(reg) + '+' : '') + parts.join('+');
+};
+// v6.21 อ้างอิงใบเบิกด่วน/จ่ายล่วงหน้าที่รวมเข้าใบ (ใช้ทั้ง internal.html และ app.html)
+const receivedRefsFor = (req, urgents, predisps) => {
+  const uIds = new Set((req && req.urgent_ids) || []), pIds = new Set((req && req.predisp_ids) || []);
+  const ymdOf = (v) => { const ms = typeof tsToMillis === 'function' ? tsToMillis(v) : 0; if (!ms) return ''; const d = new Date(ms); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  return [].concat(
+    (urgents || []).filter(u => u && (uIds.has(u.id) || (req && u.merged_req_id && u.merged_req_id === req.id))).map(u => ({ kind: 'urgent', id: u.id, date: u.form_date || ymdOf(u.created_at) })),
+    (predisps || []).filter(p => p && pIds.has(p.id)).map(p => ({ kind: 'predisp', id: p.id, date: p.given_date || ymdOf(p.created_at) }))
+  );
+};
+// v6.21 หมายเหตุท้ายใบ: ใบเบิกด่วน / จ่ายล่วงหน้า ที่รวมเข้าใบนี้ (refs = [{kind:'urgent'|'predisp', date}])
+const receivedRefsText = (refs) => {
+  const list = Array.isArray(refs) ? refs : [];
+  const dates = (k) => [...new Set(list.filter(r => r && r.kind === k && r.date).map(r => thaiDateShort(r.date)))];
+  const out = [];
+  const u = list.filter(r => r && r.kind === 'urgent'), pd = list.filter(r => r && r.kind === 'predisp');
+  if (u.length) out.push('รวมใบเบิกด่วน ' + u.length + ' ใบ' + (dates('urgent').length ? ' วันที่ ' + dates('urgent').join(', ') : '') + ' — ยอด "(ด่วน)" หน่วยงานรับไปแล้ว ไม่ต้องจัดซ้ำ');
+  if (pd.length) out.push('รวมจ่ายล่วงหน้า ' + pd.length + ' ครั้ง' + (dates('predisp').length ? ' วันที่ ' + dates('predisp').join(', ') : '') + ' — ยอด "(รับแล้ว)" ไม่ต้องจัดซ้ำ');
+  return out.join(' · ');
 };
 
 const buildInternalReqId = (deptId) => {
@@ -1352,6 +1376,8 @@ const buildInternalReqFormHtml = (opts) => {
         '<th style="width:8%">คง<br>เหลือ</th><th style="width:7%">รหัส</th>') +
     '</tr></thead><tbody>' + body +
     '<tr class="note"><td colspan="' + colCount + '"><b>หมายเหตุ:</b> ข้อมูลยา จำนวนเต็มคือจำนวนหน่วยเบิกหลัก และเลขในวงเล็บคือจำนวนที่แตกออกจากหน่วยเบิกหลักตามขนาดบรรจุ' + (req.note ? ' · ' + esc(req.note) : '') + '</td></tr>' +
+    // v6.21 ใบเบิกด่วน/จ่ายล่วงหน้าที่รวมเข้าใบนี้
+    (!isPharmacy && receivedRefsText(opts.receivedRefs) ? '<tr class="note"><td colspan="' + colCount + '"><b>รวมรายการรับแล้ว:</b> ' + esc(receivedRefsText(opts.receivedRefs)) + '</td></tr>' : '') +
     '</tbody></table>' +
     '<table class="totals"><tr><th>รวมจำนวนรายการทั้งหมด:</th><td class="rt">' + n + ' รายการ</td></tr><tr><th>รวมเป็นเงินทั้งสิ้น:</th><td class="big">' + (blank ? '' : money(total) + ' บาท') + '</td></tr></table>' +
     '<div class="sigs">' + signers.map(function (x, i) { return sign(INTERNAL_SIGN_ROLES[i], x.name, x.position); }).join('') + '</div>' +

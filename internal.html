@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.20.0"></script>
+  <script src="shared.js?v=6.21.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.20.0';
+      var need = '6.21.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -405,9 +405,13 @@
             catch (e) { ctx.showToast('พิมพ์ได้ แต่จำผู้ลงนามในใบนี้ไม่สำเร็จ: ' + (e?.message || e), 'warn'); }
           }
           if (changed) await ctx.reload();
+          // v6.21 พิมพ์จากข้อมูลล่าสุด (กันรายการเก่าค้างในหน้าจอ) + อ้างอิงใบเบิกด่วน/จ่ายล่วงหน้าที่รวมเข้าใบนี้
+          let fresh = req;
+          try { const snap = await db.collection('internal_requisitions').doc(req.id).get(); if (snap.exists) fresh = { ...req, ...snap.data(), id: req.id }; } catch (e) { /* ใช้ข้อมูลในหน้าจอ */ }
           await printHtmlDocument(buildInternalReqFormHtml({
-            req, formNo, formDate, deptName: req.dept_name || ctx.dept?.dept_name, drugTypes: ctx.drugTypes,
-            locOf: (id) => safeText(ctx.drugById.get(String(id))?.invs_location), oldCodeOf: (id) => ctx.drugById.get(String(id))?.old_code, signers
+            req: fresh, formNo, formDate, deptName: fresh.dept_name || ctx.dept?.dept_name, drugTypes: ctx.drugTypes,
+            locOf: (id) => safeText(ctx.drugById.get(String(id))?.invs_location), oldCodeOf: (id) => ctx.drugById.get(String(id))?.old_code, signers,
+            receivedRefs: receivedRefsFor(fresh, ctx.urgents || [], ctx.predispense || [])
           }));
           await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_PRINT', 'internal_requisitions', req.id, { form_no: formNo });
           onClose();
@@ -1283,7 +1287,13 @@ ORDER BY d.name`;
           const lotMeta = ctx.pharmMeta ? ctx.pharmMeta.get(id) : null;
           const lotUsed = lotMeta && asuSeriesByDrug ? pharmUsageSince(asuSeriesByDrug.get(id) || {}, asuData.from, asuData.to, lotMeta.initial_ymd, multiplier) : null;
           const roomLots = lotUsed !== null ? pharmLotsRemaining(ctx.pharmLotsByDrug.get(id) || [], lotMeta, lotUsed) : null;
-          const onHand = onHandTouched ? toNonNegativeNumber(st.onHand) : roomLots ? roomLots.total : Math.max(0, stockBal - usage);
+          // v6.21 นับสต็อกแล้ว: ยอดนับรวมผลการจ่ายก่อนวันนับไว้แล้ว → หักเฉพาะยอดใช้หลังวันนับ
+          //  นับหลังสิ้นช่วงยอดใช้ = ไม่หัก · นับระหว่างช่วง = หักยอดใช้รายวันหลังวันนับ (ไม่มีรายวัน = เฉลี่ยตามจำนวนวัน) · ยังไม่เคยนับ = วิธีเดิม
+          const countYmd = stockDoc && stockDoc.last_source === 'MANUAL_COUNT' ? (safeText(stockDoc.counted_ymd) || (tsToMillis(stockDoc.counted_at) ? tsToYmd(stockDoc.counted_at) : '')) : '';
+          const usageAfterCount = !countYmd || countYmd < from ? usage : countYmd >= to ? 0
+            : (asuSeriesByDrug && asuSeriesByDrug.has(id) ? Math.round(Object.entries(asuSeriesByDrug.get(id) || {}).filter(([d]) => d > countYmd && d <= to).reduce((a, [, q]) => a + toNonNegativeNumber(q), 0) * multiplier * 1000) / 1000
+              : Math.round(usage * Math.max(0, (parseYmd(to) - parseYmd(countYmd)) / 86400000) / Math.max(1, (parseYmd(to) - parseYmd(from)) / 86400000 + 1) * 1000) / 1000);
+          const onHand = onHandTouched ? toNonNegativeNumber(st.onHand) : roomLots ? roomLots.total : Math.max(0, stockBal - usageAfterCount);
           const inTransit = inTransitMap.get(id) || 0;
           const blocked = String(base.type) === '6' || !!base.isDiscontinued;
           const sAsu = storedAsu.get(id);
@@ -1312,7 +1322,7 @@ ORDER BY d.name`;
             id, base, drug, multiplier, multiplierChanged: !!drug && Math.abs(multiplier - getHosxpMultiplier(drug)) > 1e-9,
             opdRaw, ipdRaw, usage, icodes: u?.icodes || (drug?.hosxp_code ? String(drug.hosxp_code).split(/[,;\s]+/).filter(Boolean) : []),
             hosxpUnits: u?.hosxpUnits || '', hosxpNames: u?.hosxpNames || [],
-            stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit,
+            stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit, countYmd, usageAfterCount,
             dailyAvg: sug.dailyAvg, target: sug.target, suggested, follow, dispense, blocked, source,
             skipReason: blocked ? '' : sug.skipReason, coverRounds: sug.coverRounds,
             asu: asuStats, plan, lotPlan, lotStockAfter, lotTotal, dispenseCapped, lotsLeftCount, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
@@ -1321,7 +1331,7 @@ ORDER BY d.name`;
           });
         });
         return out;
-      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue, asuMode, asuSeriesByDrug, asuData, invsLots, storedAsu, ctx.pharmMeta, ctx.pharmLotsByDrug]);
+      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue, asuMode, asuSeriesByDrug, asuData, invsLots, storedAsu, ctx.pharmMeta, ctx.pharmLotsByDrug, from, to]);
       const derived = useMemo(() => derivedAll.filter(r => !hideTypes.includes(String(r.base.type))), [derivedAll, hideTypes]);
       const hiddenByType = useMemo(() => { const m = {}; derivedAll.forEach(r => { const t = String(r.base.type); if (hideTypes.includes(t)) m[t] = (m[t] || 0) + 1; }); return m; }, [derivedAll, hideTypes]);
 
@@ -1740,9 +1750,10 @@ ORDER BY d.name`;
                         <td className="p-2 text-right tnum" title={r.asu ? `เฉลี่ย 180 วัน ${fmtNum(r.asu.d180, 2)} · 60 วัน ${fmtNum(r.asu.d60, 2)} · σ ${fmtNum(r.asu.sigma, 2)} · วันที่มีการจ่าย ${r.asu.activeDays}${r.asu.adi ? ` · ADI ${r.asu.adi}` : ''}` : ''}>{r.dailyAvg ? fmtNum(r.dailyAvg, r.dailyAvg < 10 ? 2 : 1) : '-'}{r.asu && <div className="text-[10px] text-indigo-500">{r.asu.d60 > r.asu.d180 ? '60 วัน' : '180 วัน'}</div>}</td>
                         <td className="p-2 text-right whitespace-nowrap">
                           <NumCell value={r.onHand} touched={r.onHandTouched} ariaLabel={`เครดิต ${r.base.name}`} onCommit={v => patchRow(r.id, { onHand: v })} />
+                          {r.countYmd && !r.onHandTouched && !r.roomLots && <div className="text-[10px] text-emerald-700 whitespace-nowrap" title="ยอดนับรวมการจ่ายก่อนวันนับแล้ว — หักเฉพาะยอดใช้หลังวันนับ">นับ {formatThaiDate(r.countYmd)}{r.usageAfterCount > 0 ? ` · หักใช้หลังนับ ${fmtNum(r.usageAfterCount)}` : ' · ไม่หักยอดใช้'}</div>}
                           {!r.onHandTouched && r.roomLots && <div className="text-[10px] text-teal-700 font-bold" title={r.roomLots.lots.map(l => `${l.lot_no} ${fmtExpShort(l.expiry)} เหลือ ${fmtNum(l.remain)}`).join('\n')}>lot ห้องยา {r.roomLots.lots.filter(l => l.remain > 0).length} lot</div>}
                           {!r.onHandTouched && !r.roomLots && r.lotMeta && <div className="text-[10px] text-amber-700">นับ lot แล้ว — กด "ยอดใช้ 180 วัน"</div>}
-                          {!r.onHandTouched && !r.roomLots && !r.lotMeta && r.hasStock && r.usage > 0 && <div className="text-[10px] text-slate-400">{fmtNum(r.stockBal)} − {fmtNum(r.usage)}</div>}
+                          {!r.onHandTouched && !r.roomLots && !r.lotMeta && r.hasStock && r.usageAfterCount > 0 && <div className="text-[10px] text-slate-400">{fmtNum(r.stockBal)} − {fmtNum(r.usageAfterCount)}</div>}
                           {r.onHandTouched && !editReq && <button onClick={() => patchRow(r.id, { onHand: null })} className="text-[10px] text-slate-400 hover:text-teal-600 block ml-auto">↺ คืนค่า</button>}
                         </td>
                         <td className="p-2 text-right tnum">{r.inTransit ? fmtNum(r.inTransit) : '-'}</td>
@@ -2483,6 +2494,7 @@ ORDER BY d.name`;
     const StockView = ({ ctx }) => {
       const [search, setSearch] = useState('');
       const [edits, setEdits] = useState(new Map());
+      const [countYmd, setCountYmd] = useState(() => toYmd(new Date())); // v6.21 วันที่นับจริง
       const [saving, setSaving] = useState(false);
       const [showAll, setShowAll] = useState(false);
       const stockMap = useMemo(() => new Map(ctx.stock.map(s => [String(s.drug_id), s])), [ctx.stock]);
@@ -2504,11 +2516,12 @@ ORDER BY d.name`;
 
       const saveCounts = async () => {
         if (!edits.size) return;
+        if (!countYmd) return ctx.showToast('ระบุวันที่นับก่อน', 'error');
         setSaving(true);
         try {
           const ops = [...edits.entries()].map(([id, bal]) => ({
             type: 'set', ref: db.collection('internal_stock').doc(internalStockDocId(ctx.dept.dept_id, id)),
-            data: { dept_id: String(ctx.dept.dept_id), drug_id: id, balance: toNonNegativeNumber(bal), last_source: 'MANUAL_COUNT', counted_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp(), updated_by_uid: ctx.currentUser.uid, updated_by_name: safeText(ctx.currentUser.name) },
+            data: { dept_id: String(ctx.dept.dept_id), drug_id: id, balance: toNonNegativeNumber(bal), last_source: 'MANUAL_COUNT', counted_ymd: countYmd, counted_at: firebase.firestore.FieldValue.serverTimestamp(), updated_at: firebase.firestore.FieldValue.serverTimestamp(), updated_by_uid: ctx.currentUser.uid, updated_by_name: safeText(ctx.currentUser.name) },
             options: { merge: true }
           }));
           await executeBatchChunks(ops);
@@ -2533,6 +2546,7 @@ ORDER BY d.name`;
             <div className="p-4 border-b flex flex-wrap gap-3 items-center">
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหายา" aria-label="ค้นหายาในสต็อก" className="px-4 py-2.5 border border-slate-300 rounded-xl flex-1 min-w-[12rem]" />
               <label className="inline-flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} className="w-4 h-4 accent-teal-600" /> แสดงยาทุกตัวใน master (สำหรับนับครั้งแรก)</label>
+              <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600" title="ยอดนับรวมผลการจ่ายก่อนวันนับไว้แล้ว — ใบเบิกห้องยาจะหักเฉพาะยอดใช้หลังวันนับ (นับหลังสิ้นช่วงยอดใช้ = ไม่หักยอดใช้รอบนั้น)">วันที่นับ <input type="date" id="stock-count-date" value={countYmd} max={toYmd(new Date())} onChange={e => setCountYmd(e.target.value)} className="p-2 border border-slate-300 rounded-xl font-normal" /></label>
               <button onClick={saveCounts} disabled={!edits.size || saving} className="px-5 py-2.5 rounded-xl bg-teal-600 text-white font-bold disabled:opacity-40">{saving ? 'กำลังบันทึก...' : `บันทึกยอดนับ (${edits.size})`}</button>
             </div>
             <div className="overflow-auto max-h-[70vh]">

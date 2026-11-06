@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.15.0: action invs_doc_values (อ่านอย่างเดียว) มูลค่าจริงหลังยืนยันจ่ายใน INVS ต่อเอกสาร/ยา (บรรทัดที่ไม่ถูกยกเลิก) — เว็บบันทึกทับราคาประมาณการ
  *   v2.14.0: ยอดค้างในเอกสาร INVS ที่ยังไม่ยืนยัน (sm_po_c CONFIRM_FLAG<>'Y' คลังเดียวกัน) — preflight หักออกก่อนคิด stock_after/alloc/lots_after
  *            (pending_qty, pending_docs, available) · action stock_projection (อ่านอย่างเดียว) ใช้วางแผน slip จัดยา/กระดานจัดสรร
  *   v2.10.0: action invs_master (รายการยา/ราคา/pack/หน่วยจาก INVS ให้หน้าเว็บเทียบและเลือกบันทึก)
@@ -30,7 +31,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.14.0';
+const BRIDGE_VERSION = '2.15.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -685,7 +686,7 @@ $raw=(string)file_get_contents('php://input');
 $body=json_decode($raw,true);
 if (!is_array($body)) respondError('JSON_INVALID','Request body ต้องเป็น JSON',400);
 $action=cleanText($body['action'] ?? '');
-if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send','hosxp_usage_daily','invs_lots','trace_query','stock_projection'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
+if (!in_array($action,['authcheck','preflight','send','sync_hosxp_codes','hosxp_usage','list_depts','hosxp_diag','invs_discover','invs_extras','sync_ncds','invs_master','substock_preflight','substock_send','hosxp_usage_daily','invs_lots','trace_query','stock_projection','invs_doc_values'],true)) respondError('ACTION_INVALID','action ไม่รองรับ: '.$action,400);
 
 // ----------------------------- list_depts (READ-ONLY) -----------------------------
 if ($action==='list_depts') {
@@ -1414,6 +1415,51 @@ if ($action==='stock_projection') {
     } catch (Throwable $e) {
         if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
         respondError('INVS_ERROR','อ่านยอดคงคลัง INVS ไม่สำเร็จ: '.$e->getMessage(),500);
+    }
+}
+
+// v2.15.0 มูลค่าจริงของเอกสารเบิกหลังยืนยันจ่ายใน INVS (INVS ตัดข้าม lot ราคาต่างกัน) — อ่านอย่างเดียว
+// ต่อเอกสาร: confirmed (หัว CONFIRM_FLAG='Y' หรือทุกบรรทัดที่ใช้งาน 'Y') · ต่อยา: ผลรวม VALUE/QTY ของบรรทัดที่ไม่ถูกยกเลิก (CANCEL_DISP ว่าง)
+if ($action==='invs_doc_values') {
+    $actor=requireRoles($config,$body,['admin']);
+    $nos=array_values(array_unique(array_filter(array_map(fn($v)=>cleanText((string)$v),(array)($body['sub_po_nos'] ?? [])),fn($v)=>$v!=='')));
+    if (count($nos)>1000) respondError('TOO_MANY','ส่งเลขเอกสารได้ไม่เกิน 1,000 ใบต่อครั้ง',400);
+    try {
+        $db=connectDb($config); $docs=[];
+        $hasCancel=tableHasColumn($db,'sm_po_c','CANCEL_DISP'); $hasCfm=tableHasColumn($db,'sm_po_c','QTY_CFM');
+        foreach (array_chunk($nos,200) as $chunk) {
+            $ph=implode(',',array_fill(0,count($chunk),'?')); $types=str_repeat('s',count($chunk));
+            $st=$db->prepare("SELECT SUB_PO_NO, CONFIRM_FLAG, TOTAL_VALUE, RECORD_NUMBER FROM sm_po WHERE SUB_PO_NO IN ($ph) ORDER BY RECORD_NUMBER ASC");
+            $st->bind_param($types,...$chunk); $st->execute(); $res=$st->get_result();
+            while ($r=$res->fetch_assoc()) { $no=cleanText($r['SUB_PO_NO']); $docs[$no]=['found'=>true,'header_confirm'=>strtoupper(cleanText($r['CONFIRM_FLAG'] ?? ''))==='Y','header_total_value'=>finiteNumber($r['TOTAL_VALUE'] ?? 0),'drugs'=>[],'total_value'=>0.0,'lines'=>0,'lines_confirmed'=>0]; }
+            $st->close();
+            $sel="SELECT SUB_PO_NO, TRIM(WORKING_CODE) AS WC, QTY_ORDER, QTY_RCV".($hasCfm?", QTY_CFM":", NULL AS QTY_CFM").", VALUE, CONFIRM_FLAG".($hasCancel?", CANCEL_DISP":", '' AS CANCEL_DISP")." FROM sm_po_c WHERE SUB_PO_NO IN ($ph)";
+            $st=$db->prepare($sel); $st->bind_param($types,...$chunk); $st->execute(); $res=$st->get_result();
+            while ($r=$res->fetch_assoc()) {
+                $no=cleanText($r['SUB_PO_NO']); if (!isset($docs[$no])) continue;
+                if (cleanText($r['CANCEL_DISP'] ?? '')!=='') continue;
+                $wc=cleanText($r['WC']); $v=finiteNumber($r['VALUE'] ?? 0);
+                $d=&$docs[$no]['drugs'];
+                if (!isset($d[$wc])) $d[$wc]=['value'=>0.0,'qty_order'=>0.0,'qty_rcv'=>0.0,'qty_cfm'=>0.0,'lines'=>0];
+                $d[$wc]['value']+=$v; $d[$wc]['qty_order']+=finiteNumber($r['QTY_ORDER'] ?? 0); $d[$wc]['qty_rcv']+=finiteNumber($r['QTY_RCV'] ?? 0); $d[$wc]['qty_cfm']+=finiteNumber($r['QTY_CFM'] ?? 0); $d[$wc]['lines']++;
+                unset($d);
+                $docs[$no]['total_value']+=$v; $docs[$no]['lines']++;
+                if (strtoupper(cleanText($r['CONFIRM_FLAG'] ?? ''))==='Y') $docs[$no]['lines_confirmed']++;
+            }
+            $st->close();
+        }
+        $db->close();
+        foreach ($nos as $no) {
+            if (!isset($docs[$no])) { $docs[$no]=['found'=>false,'confirmed'=>false]; continue; }
+            $x=&$docs[$no]; $x['total_value']=round($x['total_value'],2);
+            foreach ($x['drugs'] as $k=>$dv) $x['drugs'][$k]['value']=round($dv['value'],4);
+            $x['confirmed']=$x['header_confirm'] || ($x['lines']>0 && $x['lines_confirmed']===$x['lines']);
+            $x['drugs']=(object)$x['drugs']; unset($x);
+        }
+        respond(['ok'=>true,'action'=>'invs_doc_values','docs'=>(object)$docs,'bridge_version'=>BRIDGE_VERSION]);
+    } catch (Throwable $e) {
+        if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
+        respondError('INVS_ERROR','อ่านมูลค่าเอกสารจาก INVS ไม่สำเร็จ: '.$e->getMessage(),500);
     }
 }
 

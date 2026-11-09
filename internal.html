@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.21.0"></script>
+  <script src="shared.js?v=6.23.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.21.0';
+      var need = '6.23.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -390,11 +390,18 @@
       const [busy, setBusy] = useState(false);
       // v6.9 วันที่ในใบ: ผู้เบิกแก้ไม่ได้ (ล็อก) · แอดมินแก้ได้จนกว่าจะส่ง INVS
       const dateLocked = !ctx.isAdmin || !!req.invs_sub_po_no;
+      // v6.22 ใบหน่วยงานที่ยังไม่ส่ง INVS: พิมพ์ = ล็อกยอด (ผู้เบิกแก้ไม่ได้ · แอดมินแก้ได้จนส่ง INVS) — ถามยืนยันก่อนพิมพ์ครั้งแรก
+      const willLock = req.kind !== 'pharmacy' && !req.is_printed && ['Pending', 'Draft'].includes(req.status) && !req.invs_sub_po_no;
+      const confirmPrint = () => {
+        if (!willLock) return doPrint();
+        ctx.setConfirmDialog({ title: 'พิมพ์แล้วยอดจะถูกล็อก', message: 'เมื่อพิมพ์ใบเบิกนี้ ยอดเบิกจะถูกล็อก — หน่วยงานแก้ไข/ยกเลิกใบไม่ได้อีก แก้ได้เฉพาะแอดมิน (จนกว่าจะส่ง INVS) · ถ้าต้องแก้ ติดต่อแอดมินหรือขอให้ตีกลับใบ\nตรวจสอบรายการและจำนวนให้ถูกต้องก่อนพิมพ์', icon: 'fa-lock', iconColor: 'text-amber-600', confirmBtnClass: 'bg-slate-800 hover:bg-slate-900', confirmText: 'ยืนยัน ล็อกและพิมพ์', onConfirm: () => doPrint() });
+      };
       const doPrint = async () => {
         setBusy(true);
         try {
           let changed = false;
-          try { await db.collection('internal_requisitions').doc(req.id).update({ printed_at: firebase.firestore.FieldValue.serverTimestamp(), printed_by_name: safeText(ctx.currentUser?.name), print_count: firebase.firestore.FieldValue.increment(1) }); changed = true; }
+          try { await db.collection('internal_requisitions').doc(req.id).update({ printed_at: firebase.firestore.FieldValue.serverTimestamp(), printed_by_name: safeText(ctx.currentUser?.name), print_count: firebase.firestore.FieldValue.increment(1),
+            ...(willLock ? { is_printed: true, printed_locked_at: firebase.firestore.FieldValue.serverTimestamp(), printed_locked_by_name: safeText(ctx.currentUser?.name) } : {}) }); changed = true; }
           catch (e) { /* ผู้เบิกอาจไม่มีสิทธิ์เขียนใบที่อนุมัติแล้ว — พิมพ์ต่อได้ */ }
           if (formNo !== safeText(req.form_no) || formDate !== safeText(req.form_date)) {
             try { await db.collection('internal_requisitions').doc(req.id).update({ form_no: safeText(formNo), form_date: formDate, fiscal_year: fiscalYearBEOfYmd(formDate) }); changed = true; }
@@ -430,7 +437,7 @@
             <p className="text-xs text-slate-500">เลขที่สร้างอัตโนมัติ = ลำดับใบของหน่วยงานในปีงบประมาณ / ปีงบ (พ.ศ.) แก้ได้ก่อนพิมพ์</p>
             <div className="flex justify-end gap-2">
               <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-100 font-bold text-slate-600">ยกเลิก</button>
-              <button onClick={doPrint} disabled={busy} className="px-5 py-2 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-print'} mr-2`}></i>พิมพ์ / บันทึก PDF</button>
+              <button id="form-print-go" onClick={confirmPrint} disabled={busy} className="px-5 py-2 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-50"><i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : willLock ? 'fa-lock' : 'fa-print'} mr-2`}></i>{willLock ? 'ล็อกยอด + พิมพ์ / PDF' : 'พิมพ์ / บันทึก PDF'}</button>
             </div>
           </div>
         </Modal>
@@ -739,6 +746,7 @@
       const hasPendingOther = ctx.reqs.some(r => r.status === 'Pending' && r.id !== editReq?.id);
 
       const submit = () => {
+        if (editReq && internalReqLockedForDept(ctx.reqs.find(r => r.id === editReq.id) || editReq, ctx.isAdmin)) return ctx.showToast('ใบนี้พิมพ์แล้ว ยอดถูกล็อก — แก้ได้เฉพาะแอดมิน (จนกว่าจะส่ง INVS)', 'error');
         if (!valid.length) return ctx.showToast('ยังไม่มีรายการที่ใส่จำนวนเบิก', 'error');
         const zero = items.length - valid.length;
         ctx.setConfirmDialog({
@@ -1270,6 +1278,8 @@ ORDER BY d.name`;
       const derivedAll = useMemo(() => {
         const ids = new Set([...rowState.keys(), ...usageByDrug.keys()]);
         if (showHistory) historyIds.forEach(id => ids.add(id));
+        // v6.22 ยา "เบิกทั้งหมด" อยู่ในใบเสมอ (ดึงคงคลังทุก lot ของคลังใหญ่)
+        ctx.drugs.forEach(d => { if (d.pharm_req_mode === 'all' && !isDrugDiscontinuedAll(d)) ids.add(String(d.drug_id)); });
         const out = [];
         ids.forEach(id => {
           const st = rowState.get(id) || {};
@@ -1295,7 +1305,9 @@ ORDER BY d.name`;
               : Math.round(usage * Math.max(0, (parseYmd(to) - parseYmd(countYmd)) / 86400000) / Math.max(1, (parseYmd(to) - parseYmd(from)) / 86400000 + 1) * 1000) / 1000);
           const onHand = onHandTouched ? toNonNegativeNumber(st.onHand) : roomLots ? roomLots.total : Math.max(0, stockBal - usageAfterCount);
           const inTransit = inTransitMap.get(id) || 0;
-          const blocked = String(base.type) === '6' || !!base.isDiscontinued;
+          // v6.22 โหมดเบิกห้องยา (master_drugs.pharm_req_mode — มีผลเฉพาะห้องยา): normal · all = เบิกคงคลังทุก lot · exclude = คลังพิเศษ ไม่เบิกห้องยา
+          const reqMode = drug?.pharm_req_mode === 'all' || drug?.pharm_req_mode === 'exclude' ? drug.pharm_req_mode : 'normal';
+          const blocked = String(base.type) === '6' || !!base.isDiscontinued || reqMode === 'exclude';
           const sAsu = storedAsu.get(id);
           const asuStats = asuMode ? (asuSeriesByDrug ? calcAsuStats(asuSeriesByDrug.get(id) || {}, addDaysYmd(asuData.to, -179), asuData.to, multiplier) : (sAsu ? sAsu.stats : null)) : null;
           const lots = invsLots ? (invsLots[id] || []) : null; // v6.20 ใช้ lot INVS ล่าสุดทั้งสูตร ASU และสูตรเดิม
@@ -1307,11 +1319,11 @@ ORDER BY d.name`;
           // v6.19 คงคลังใหญ่รวมทุก lot (ดึง lot แล้ว หรือคำนวณจากที่บันทึกในใบ) — เบิกจริงห้ามเกินยอดนี้
           const lotTotal = lots ? Math.round(lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) * 1000) / 1000
             : (sAsu && sAsu.stockAfter !== null && sAsu.stockAfter !== undefined ? Math.round((toNonNegativeNumber(sAsu.stockAfter) + toNonNegativeNumber(sAsu.dispense)) * 1000) / 1000 : null);
-          const rawDispense = follow ? suggested : toNonNegativeNumber(st.dispenseManual);
+          const rawDispense = follow ? (reqMode === 'all' && !blocked ? (lotTotal ?? 0) : suggested) : toNonNegativeNumber(st.dispenseManual);
           const dispenseCapped = lotTotal !== null && rawDispense > lotTotal + 1e-9;
           const dispense = dispenseCapped ? lotTotal : rawDispense;
           // Lot ที่ต้องหยิบ + เหลือหลังหยิบ (ตามจำนวนเบิกจริง) — ไม่มี lot ใหม่ใช้ของที่บันทึกไว้ถ้าจำนวนเท่าเดิม
-          const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan && !dispenseCapped ? plan.lotPlan : allocatePharmLots(lots, dispense))
+          const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan && !dispenseCapped && reqMode !== 'all' ? plan.lotPlan : allocatePharmLots(lots, dispense))
             : (sAsu && Math.abs(sAsu.dispense - dispense) < 1e-9 ? sAsu.lotPlan : []);
           // v6.15 คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (ใช้ในช่องคงเหลือของใบพิมพ์)
           const lotStockAfter = lotTotal !== null ? Math.max(0, Math.round((lotTotal - dispense) * 1000) / 1000) : null;
@@ -1323,20 +1335,23 @@ ORDER BY d.name`;
             opdRaw, ipdRaw, usage, icodes: u?.icodes || (drug?.hosxp_code ? String(drug.hosxp_code).split(/[,;\s]+/).filter(Boolean) : []),
             hosxpUnits: u?.hosxpUnits || '', hosxpNames: u?.hosxpNames || [],
             stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit, countYmd, usageAfterCount,
-            dailyAvg: sug.dailyAvg, target: sug.target, suggested, follow, dispense, blocked, source,
-            skipReason: blocked ? '' : sug.skipReason, coverRounds: sug.coverRounds,
+            dailyAvg: sug.dailyAvg, target: sug.target, suggested: reqMode === 'all' && !blocked ? (lotTotal ?? 0) : suggested, follow, dispense, blocked, source, reqMode,
+            skipReason: blocked ? '' : reqMode === 'all' ? (lotTotal === null ? 'เบิกทั้งหมด — กด "คงคลัง lot INVS ล่าสุด"' : lotTotal <= 0 ? 'เบิกทั้งหมด — คลังใหญ่ไม่มีของ' : '') : sug.skipReason, coverRounds: sug.coverRounds,
             asu: asuStats, plan, lotPlan, lotStockAfter, lotTotal, dispenseCapped, lotsLeftCount, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
             value: internalItemValue({ dispenseQty: dispense, packSize: base.packSize, price: base.price }),
             note: st.note || ''
           });
         });
         return out;
-      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue, asuMode, asuSeriesByDrug, asuData, invsLots, storedAsu, ctx.pharmMeta, ctx.pharmLotsByDrug, from, to]);
-      const derived = useMemo(() => derivedAll.filter(r => !hideTypes.includes(String(r.base.type))), [derivedAll, hideTypes]);
+      }, [rowState, usageByDrug, showHistory, historyIds, ctx.drugById, stockMap, inTransitMap, calcDays, coverDays, roundDays, minOrderValue, asuMode, asuSeriesByDrug, asuData, invsLots, storedAsu, ctx.pharmMeta, ctx.pharmLotsByDrug, from, to, ctx.drugs]);
+      // v6.22 ยาคลังพิเศษ (ไม่เบิกห้องยา) ไม่อยู่ในใบ/ยอดรวม · แสดงในตารางเมื่อเปิด "แสดงคลังพิเศษ" (ไว้เปลี่ยนโหมดกลับ)
+      const [showExcluded, setShowExcluded] = useState(false);
+      const derived = useMemo(() => derivedAll.filter(r => !hideTypes.includes(String(r.base.type)) && r.reqMode !== 'exclude'), [derivedAll, hideTypes]);
+      const excludedRows = useMemo(() => derivedAll.filter(r => r.reqMode === 'exclude' && !hideTypes.includes(String(r.base.type))), [derivedAll, hideTypes]);
       const hiddenByType = useMemo(() => { const m = {}; derivedAll.forEach(r => { const t = String(r.base.type); if (hideTypes.includes(t)) m[t] = (m[t] || 0) + 1; }); return m; }, [derivedAll, hideTypes]);
 
       const visible = useMemo(() => {
-        let rows = derived;
+        let rows = showExcluded ? [...derived, ...excludedRows] : derived;
         if (filter === 'used') rows = rows.filter(r => r.usage > 0);
         else if (filter === 'suggest') rows = rows.filter(r => r.suggested > 0);
         else if (filter === 'order') rows = rows.filter(r => r.dispense > 0);
@@ -1354,7 +1369,7 @@ ORDER BY d.name`;
         else if (sortBy === 'loc') sorted.sort((a, b) => Number(a.base.type) - Number(b.base.type) || compareByLocation(a.drug?.invs_location, a.base.name, b.drug?.invs_location, b.base.name));
         else sorted.sort((a, b) => a.base.name.localeCompare(b.base.name, 'th'));
         return sorted;
-      }, [derived, filter, search, sortBy]);
+      }, [derived, excludedRows, showExcluded, filter, search, sortBy]);
 
       const stats = useMemo(() => ({
         used: derived.filter(r => r.usage > 0).length,
@@ -1404,7 +1419,18 @@ ORDER BY d.name`;
       };
       // เปิดแก้ใบเดิม → ดึง lot ล่าสุดอัตโนมัติ 1 ครั้ง (ไม่ต้องเริ่มใหม่)
       const autoLotsRef = useRef(false);
-      useEffect(() => { if (editReq && !autoLotsRef.current && derivedAll.length) { autoLotsRef.current = true; fetchLatestLots(true); } }, [editReq, derivedAll.length]);
+      const hasAllMode = useMemo(() => derivedAll.some(r => r.reqMode === 'all'), [derivedAll]);
+      useEffect(() => { if ((editReq || hasAllMode) && !autoLotsRef.current && derivedAll.length) { autoLotsRef.current = true; fetchLatestLots(true); } }, [editReq, hasAllMode, derivedAll.length]);
+      // v6.22 บันทึกโหมดเบิกห้องยาเข้า master_drugs (ห้องยา/แอดมิน) — มีผลเฉพาะใบเบิกห้องยา
+      const saveReqMode = async (drugId, mode) => {
+        try {
+          await db.collection('master_drugs').doc(String(drugId)).update({ pharm_req_mode: mode === 'normal' ? '' : mode, pharm_req_mode_updated_at: firebase.firestore.FieldValue.serverTimestamp(), pharm_req_mode_updated_by: safeText(ctx.currentUser.name) });
+          await ctx.reloadMasters();
+          if (mode === 'all') patchRow(String(drugId), { dispenseManual: null });
+          ctx.showToast(mode === 'all' ? 'ตั้งเป็น "เบิกทั้งหมด" — เบิกคงคลังทุก lot ของคลังใหญ่' : mode === 'exclude' ? 'ตั้งเป็น "คลังพิเศษ" — ไม่อยู่ในใบเบิกห้องยา' : 'ตั้งเป็นเบิกปกติ');
+          if (mode === 'all' && !invsLots) fetchLatestLots(true);
+        } catch (e) { ctx.showToast('บันทึกโหมดเบิกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+      };
       const saveVen = async (drugId, ven) => {
         try {
           await db.collection('master_drugs').doc(String(drugId)).update({ ven, ven_updated_at: firebase.firestore.FieldValue.serverTimestamp(), ven_updated_by: safeText(ctx.currentUser.name) });
@@ -1461,6 +1487,9 @@ ORDER BY d.name`;
       const submit = () => {
         if (!usageMeta) return ctx.showToast('ยังไม่ได้ดึงยอดใช้ — กด "ดึงยอดใช้จาก HOSxP" หรือ "นำเข้าไฟล์"', 'error');
         if (usageStale) return ctx.showToast('ช่วงวันที่เปลี่ยนหลังดึงยอดใช้ กรุณาดึงยอดใหม่ให้ตรงช่วง', 'error');
+        // v6.22 ยา "เบิกทั้งหมด" ต้องมีคงคลัง lot INVS ล่าสุดก่อนส่ง (ดึงยอดทั้งหมดเข้าใบ)
+        const allPending = derived.filter(r => r.reqMode === 'all' && !r.lotsLoaded);
+        if (allPending.length) { fetchLatestLots(false); return ctx.showToast(`ยา "เบิกทั้งหมด" ${allPending.length} รายการยังไม่มีคงคลัง lot INVS — กำลังดึง แล้วกดส่งอีกครั้ง`, 'warn'); }
         const orderRows = derived.filter(r => r.dispense > 0);
         if (!orderRows.length) return ctx.showToast('ยังไม่มีรายการที่จะเบิก', 'error');
         const warn = [];
@@ -1685,6 +1714,9 @@ ORDER BY d.name`;
                   ซ่อน{(ctx.drugTypes || DEFAULT_DRUG_TYPES)[t] || `หมวด ${t}`} (หมวด {t}){hiddenByType[t] ? <span className="text-xs text-slate-400">{fmtNum(hiddenByType[t])}</span> : null}
                 </label>
               ))}
+              {excludedRows.length > 0 && <label className="inline-flex items-center gap-2 text-sm text-slate-600 cursor-pointer" title="ยาที่ตั้ง ไม่เบิก (คลังพิเศษ) — ไม่อยู่ในใบเบิก/ใบพิมพ์ · แสดงไว้เปลี่ยนโหมดกลับ">
+                <input type="checkbox" id="ph-show-excluded" checked={showExcluded} onChange={e => setShowExcluded(e.target.checked)} className="w-4 h-4 accent-teal-600" /> แสดงคลังพิเศษ (ไม่เบิก) <span className="text-xs text-slate-400">{fmtNum(excludedRows.length)}</span>
+              </label>}
             </div>
             <div className="p-4 border-b grid gap-3 md:grid-cols-[1fr_1fr_auto] items-center">
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="กรองในตาราง: ชื่อยา / รหัส / icode" aria-label="กรองในตาราง" className="px-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-teal-500" />
@@ -1739,7 +1771,10 @@ ORDER BY d.name`;
                               : <span className={`font-bold ${r.ven === 'V' ? 'text-red-600' : r.ven === 'E' ? 'text-amber-600' : 'text-slate-400'}`}>VEN {r.ven}</span>)}
                             {r.source === 'manual' && <span className="text-teal-600 font-bold">เพิ่มเอง</span>}
                             {r.source === 'history' && <span>เคยเบิก</span>}
-                            {r.blocked && <span className="text-red-500 font-bold">{String(r.base.type) === '6' ? 'วัคซีน (ไม่ส่ง INVS)' : 'ยกเลิกใช้'}</span>}
+                            {r.blocked && <span className="text-red-500 font-bold">{r.reqMode === 'exclude' ? 'คลังพิเศษ (ไม่เบิกห้องยา)' : String(r.base.type) === '6' ? 'วัคซีน (ไม่ส่ง INVS)' : 'ยกเลิกใช้'}</span>}
+                            {r.reqMode === 'all' && <span className="text-indigo-700 font-bold">เบิกทั้งหมด</span>}
+                            {r.drug && <select aria-label={`โหมดเบิก ${r.base.name}`} value={r.reqMode} onChange={e => saveReqMode(r.id, e.target.value)} title="โหมดเบิกของห้องยา (มีผลเฉพาะห้องยา)" className="text-[10px] border border-slate-200 rounded px-1 py-0 bg-white text-slate-600">
+                              <option value="normal">เบิกปกติ</option><option value="all">เบิกทั้งหมด (ทุก lot ในคลัง)</option><option value="exclude">ไม่เบิก (คลังพิเศษ)</option></select>}
                           </div>
                         </td>
                         <td className="p-2 text-right tnum">{r.opdRaw ? fmtNum(r.opdRaw) : '-'}</td>
@@ -1947,7 +1982,8 @@ ORDER BY d.name`;
     // ===== ใบเบิกของฉัน =====
     const ReqDetailModal = ({ ctx, req, onClose, onEdit, onPrint }) => {
       if (!req) return null;
-      const canEdit = ['Draft', 'Pending', 'Rejected'].includes(req.status) && !req.invs_sub_po_no;
+      const printLocked = internalReqLockedForDept(req, ctx.isAdmin); // v6.22 พิมพ์แล้ว = ผู้เบิกแก้/ยกเลิกไม่ได้
+      const canEdit = ['Draft', 'Pending', 'Rejected'].includes(req.status) && !req.invs_sub_po_no && !printLocked;
       const items = req.items || [];
       const cancelReq = () => ctx.setConfirmDialog({
         title: 'ยกเลิกใบเบิกนี้?', message: `ใบ ${req.doc_no || req.id} จะถูกนำออกจากคิวของห้องยา`,
@@ -2002,6 +2038,7 @@ ORDER BY d.name`;
             </table>
           </div>
           {req.note && <div className="mt-3 text-sm text-slate-600"><b>หมายเหตุ:</b> {req.note}</div>}
+          {req.is_printed && req.kind !== 'pharmacy' && ['Pending', 'Draft'].includes(req.status) && !req.invs_sub_po_no && <div id="req-print-locked" className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><i className="fa-solid fa-lock mr-2"></i><b>พิมพ์แล้ว — ยอดถูกล็อก</b> {ctx.isAdmin ? 'แอดมินยังแก้ได้จนกว่าจะส่ง INVS' : 'หน่วยงานแก้ไข/ยกเลิกไม่ได้ · ถ้าต้องแก้ ติดต่อแอดมิน'}{req.printed_locked_at ? ` · ล็อกเมื่อ ${formatAppDateTime(req.printed_locked_at)}` : ''}</div>}
           {req.status !== 'Cancelled' && <div id="req-print-box" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
             <div className="text-sm text-slate-600">
               <div><b>วันที่ในใบเบิก:</b> {thaiDateLong(safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at))}{(!ctx.isAdmin || req.invs_sub_po_no) && <i className="fa-solid fa-lock ml-2 text-slate-400" title="ล็อกแล้ว"></i>}</div>
@@ -2756,7 +2793,7 @@ ORDER BY d.name`;
                   <div className="p-10 flex justify-center"><div className="loader"></div></div>
                 ) : (
                   <>
-                    {view === 'new' && !editReq && newRound === undefined && <RoundPickStep ctx={ctx} onPick={setNewRound} onOpenReq={(r) => { setEditReq(r); }} />}
+                    {view === 'new' && !editReq && newRound === undefined && <RoundPickStep ctx={ctx} onPick={setNewRound} onOpenReq={(r) => { if (internalReqLockedForDept(r, isAdmin)) { showToast('ใบนี้พิมพ์แล้ว ยอดถูกล็อก — แก้ได้เฉพาะแอดมิน', 'warn'); setView('history'); return; } setEditReq(r); }} />}
                     {view === 'new' && (editReq || newRound !== undefined) && kind === 'dept' && <DeptReqView key={editReq?.id || 'new-' + deptId + (newRound?.id || '')} ctx={ctx} editReq={editReq} round={editReq ? null : newRound} onDone={() => { setEditReq(null); setView('history'); }} />}
                     {view === 'new' && (editReq || newRound !== undefined) && kind === 'pharmacy' && <PharmacyReqView key={editReq?.id || 'new-' + deptId + (newRound?.id || '')} ctx={ctx} editReq={editReq} round={editReq ? null : newRound} onDone={() => { setEditReq(null); setView('history'); }} />}
                     {view === 'history' && <HistoryView ctx={ctx} onNew={() => { setEditReq(null); setView('new'); }} onEdit={(r) => { setEditReq(r); setView('new'); }} onPrint={setPrintReq} />}

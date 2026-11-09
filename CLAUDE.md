@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.21.0 · Bridge v2.15.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.23.0 · Bridge v2.16.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -224,4 +224,21 @@
 - **สต็อกห้องยา (StockView):** "วันที่นับ" → `internal_stock.counted_ymd` · PharmacyReqView: ยอดนับรวมการจ่ายก่อนวันนับแล้ว → นับหลังสิ้นช่วงยอดใช้ = ไม่หักยอดใช้ · นับระหว่างช่วง = หักยอดใช้หลังวันนับ (รายวันจาก ASU ถ้ามี ไม่งั้นเฉลี่ยตามวัน) · ใบเก่าใช้ counted_at · แสดง "นับ … · ไม่หักยอดใช้"
 - **Sync มูลค่าจริงจาก INVS** (`InvsValueSyncModal` ปุ่มในคิวใบเบิกภายใน + กระดานจัดสรร): ทุกใบที่มี invs_sub_po_no (รพ.สต. + ภายใน) → Bridge `invs_doc_values` {sub_po_nos} (อ่านอย่างเดียว: confirmed = หัว CONFIRM_FLAG='Y' หรือทุกบรรทัดใช้งาน 'Y' · ต่อยา SUM VALUE/QTY บรรทัด CANCEL_DISP ว่าง) → เฉพาะใบยืนยันแล้ว: items.price = มูลค่า INVS ÷ จำนวนในใบ × บรรจุ (`price_source:'INVS_CONFIRMED'`, `invs_value`, คง `price_before_invs`) · `estimate_total_value` = **ราคาประมาณการ** (มูลค่าที่ระบบคิดครั้งแรกจาก price_before_invs) · `invs_confirmed_total_value`, `invs_value_confirmed`, ใบภายในอัปเดต total_value/approved_total_value · กล่อง INVS แสดง "มูลค่าจริง INVS · ราคาประมาณการ"
 - tests/v621.js
+
+## v6.22 ใบหน่วยงานพิมพ์ = ล็อกยอด · ลายน้ำ · โหมดเบิกห้องยา
+- **ใบหน่วยงาน (kind ≠ pharmacy) Pending/Draft ยังไม่ส่ง INVS:** พิมพ์ครั้งแรกถามยืนยัน "พิมพ์แล้วยอดจะถูกล็อก" (`FormPrintModal` ปุ่ม `#form-print-go` "ล็อกยอด + พิมพ์") → `is_printed: true`, `printed_locked_at`, `printed_locked_by_name` · แอดมินพิมพ์จาก app.html ก็ล็อก
+  - `internalReqLockedForDept(req, isAdmin)` (shared.js): ผู้เบิกแก้/ยกเลิกไม่ได้ (ซ่อนปุ่ม, กล่อง `#req-print-locked`, RoundPickStep เปิดใบเดิมไม่ได้, DeptReqView submit บล็อก) · แอดมินแก้ได้จนส่ง INVS · ส่งกลับ (Rejected) = `is_printed:false` ปลดล็อก
+  - rules v6.22: ผู้เบิกแก้ใบได้เฉพาะ `is_printed != true` · สาขาพิมพ์ตั้ง is_printed/printed_locked_* ได้ แต่ปลดเองไม่ได้
+- ลายน้ำใบหน่วยงาน (`buildInternalReqFormHtml`, `.wm` fixed หมุน −35° ทุกหน้า): "พิมพ์เมื่อ d/m/yyyy hh:mm:ss" + ชื่อหน่วยงาน · เลขที่
+- **ห้องยา โหมดเบิก** `master_drugs.pharm_req_mode` ('' ปกติ | 'all' | 'exclude') — มีผลเฉพาะ PharmacyReqView · ตั้งจาก select ใต้ชื่อยา (`saveReqMode`, rules: ห้องยาเขียน pharm_req_mode* ได้)
+  - **เบิกทั้งหมด (all):** อยู่ในตารางเสมอ (แม้ไม่มียอดใช้) · เบิกจริง (ตามแนะนำ) = คงคลังใหญ่รวมทุก lot (`lotTotal`) · lotPlan = ทุก lot · มียา all = ดึง lot INVS อัตโนมัติ · ส่งใบโดยยังไม่มี lot = บล็อกและดึงให้
+  - **ไม่เบิก/คลังพิเศษ (exclude):** blocked · ไม่อยู่ใน derived (ใบ/ยอด/zeroRows/ใบพิมพ์) · ตัวเลือก "แสดงคลังพิเศษ" (`#ph-show-excluded`) ไว้เปลี่ยนกลับ
+- tests/v622.js
+
+## v6.23 คิวจัดยา (แอดมินจัดเอง) · ส่ง INVS ใช้คงคลังจริง (Bridge 2.16.0)
+- **ส่ง INVS (preflight/send) = คงคลังจริง inv_md_c อย่างเดียว** — Bridge 2.16.0 ถอดการหักเอกสารค้างยืนยันออกจาก buildPreflight (stock_after = stock_before − ใบนี้, alloc/lots_after จาก lot จริง) · หน้าตรวจไม่แสดง "ค้างยืนยัน" · ยอดค้างใช้เฉพาะ `stock_projection` (วางแผนคิว/กระดาน)
+- **คิวจัดยา** `pick_slips.queue_pos` (เฉพาะ state PLANNED): ใบใหม่ต่อท้าย · พิมพ์ซ้ำคงคิว · กระดานจัดสรร `#pick-plan-queue` ปุ่มเลื่อนขึ้น/ลง (`movePlan` → `renumberPickQueue` 1..n) · ยกเลิกคิวแล้วเรียงเลขใหม่ · `cmpPickPlan` (queue_pos แล้วเวลาพิมพ์) · `loadPickQueue`
+  - planPickSlip หักเฉพาะแผนที่อยู่ก่อนหน้าในคิว · เก็บ `queue_no`, `queue_after_id`, `queue_after_title` · slip แสดงกรอบ "คิวที่ N · ต่อจาก X" (หรือ "คิวแรก") · ป้ายกำลังจัดแสดง "คิวที่ N" · ใบที่ลำดับก่อนหน้าเปลี่ยนหลังพิมพ์ = เตือน "ควรพิมพ์ slip ใหม่"
+- **สูตรยอด:** คลัง INVS (on_hand) = inv_md_c ตอนกด (อ่านใหม่ทุกครั้ง) · ค้างยืนยัน = sm_po_c ที่ส่งแล้วยังไม่ยืนยัน (หายเมื่อยืนยัน/แก้ 0/ยกเลิก/เกิน 120 วัน) · ใช้ได้ของคิว N = on_hand − ค้างยืนยัน − แผนคิว 1..N−1 · เหลือ = ใช้ได้ − ใบนี้ · แผนหลุดจากคิวเมื่อส่ง INVS (กลายเป็นค้างยืนยัน)/ยกเลิก/ใบปิด/เกิน 30 วัน
+- tests/v623.js
 

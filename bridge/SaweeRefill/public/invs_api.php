@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.16.0: preflight/send ใช้คงคลังจริง (inv_md_c) อย่างเดียว — ไม่หักเอกสารค้างยืนยันอีก (ยอดค้างใช้เฉพาะวางแผนคิว stock_projection)
  *   v2.15.0: action invs_doc_values (อ่านอย่างเดียว) มูลค่าจริงหลังยืนยันจ่ายใน INVS ต่อเอกสาร/ยา (บรรทัดที่ไม่ถูกยกเลิก) — เว็บบันทึกทับราคาประมาณการ
  *   v2.14.0: ยอดค้างในเอกสาร INVS ที่ยังไม่ยืนยัน (sm_po_c CONFIRM_FLAG<>'Y' คลังเดียวกัน) — preflight หักออกก่อนคิด stock_after/alloc/lots_after
  *            (pending_qty, pending_docs, available) · action stock_projection (อ่านอย่างเดียว) ใช้วางแผน slip จัดยา/กระดานจัดสรร
@@ -31,7 +32,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.15.0';
+const BRIDGE_VERSION = '2.16.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -608,11 +609,7 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
         }
         $allLots=lotsOnHand($db,$drugId,$stockId);
         $stockBefore=array_sum(array_map(fn($l)=>$l['qty'],$allLots));
-        // v2.14.0 หักเอกสาร INVS ที่ยังไม่ยืนยันก่อน → lot/คงคลังหลังเบิกใบนี้ตรงกับที่จะเหลือจริง
-        $pend=pendingInvsByDrug($db,$config,[$drugId],$stockId)[$drugId] ?? ['qty'=>0.0,'docs'=>[]];
-        $pendQty=min($stockBefore,(float)$pend['qty']);
-        $projLots=consumeLots($allLots,$pendQty);
-        if ($pendQty>0 && $qty>$stockBefore-$pendQty) $warnings[]="{$drugId}: คลังมี {$stockBefore} แต่ค้างในเอกสาร INVS ที่ยังไม่ยืนยัน {$pendQty} (".count($pend['docs'])." ใบ) — เหลือให้ใบนี้ ".max(0,$stockBefore-$pendQty)." ขอ {$qty}";
+        // v2.16.0 ส่งจริง = ตัดจากคงคลังจริงใน INVS ตอนนี้ (ไม่หักเอกสารค้างยืนยัน — ยอดค้างใช้เฉพาะวางแผนคิวในเว็บ)
         $nlem=findNlem($db,$drugId,cleanText($lot['TRADE_CODE'] ?? ''),isset($lot['PACK_CODE'])?(int)$lot['PACK_CODE']:null);
         $lines[]=[
             'drug_id'=>$drugId,'drug_name'=>cleanText($dg['DRUG_NAME'] ?? ($it['name'] ?? '')),'qty'=>$qty,
@@ -622,8 +619,7 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
             'pack_code'=>($lot['PACK_CODE']!==null && $lot['PACK_CODE']!=='')?(int)$lot['PACK_CODE']:null,'nlem'=>$nlem,
             'location'=>cleanText($lot['LOCATION'] ?? ''),'mod_sys'=>cleanText($lot['MOD_SYS'] ?? cfg($config,'invs','mod_sys','MED')),
             'vmi_pack_size'=>$masterPack,'extra'=>!empty($it['_extra']),'extra_qty'=>finiteNumber($it['_extra_qty'] ?? 0),
-            'stock_before'=>$stockBefore,'pending_qty'=>$pendQty,'pending_docs'=>array_slice($pend['docs'],0,20),'available'=>max(0.0,$stockBefore-$pendQty),
-            'stock_after'=>max(0.0,$stockBefore-$pendQty-$qty),'stock_lots'=>count($allLots),'alloc'=>allocateLots($projLots,$qty),'lots_after'=>lotsAfterIssue($projLots,$qty)
+            'stock_before'=>$stockBefore,'stock_after'=>max(0.0,$stockBefore-$qty),'stock_lots'=>count($allLots),'alloc'=>allocateLots($allLots,$qty),'lots_after'=>lotsAfterIssue($allLots,$qty)
         ];
     }
     if (!$lines) $errors[]='ไม่มีรายการที่มีจำนวนจ่ายมากกว่า 0';

@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.21.0"></script>
+  <script src="shared.js?v=6.22.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.21.0';
+      var need = '6.22.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -8726,6 +8726,8 @@ const AdminConfigView = ({ ctx }) => {
           const patch = {};
           if (formNo !== safeText(req.form_no) || formDate !== safeText(req.form_date)) Object.assign(patch, { form_no: safeText(formNo), form_date: formDate, fiscal_year: fiscalYearBEOfYmd(formDate) });
           if (!sameSigners(signers, req.sign_people)) patch.sign_people = signersForSave(signers);
+          // v6.22 ใบหน่วยงานที่ยังไม่ส่ง INVS: พิมพ์ = ล็อกยอดฝั่งหน่วยงาน (แอดมินแก้ต่อได้จนส่ง INVS)
+          if (req.kind !== 'pharmacy' && !req.is_printed && ['Pending', 'Draft'].includes(req.status) && !req.invs_sub_po_no) Object.assign(patch, { is_printed: true, printed_locked_at: firebase.firestore.FieldValue.serverTimestamp(), printed_locked_by_name: safeText(ctx.currentUser?.name) });
           if (Object.keys(patch).length) {
             await db.collection('internal_requisitions').doc(req.id).update(patch);
             onSaved && onSaved();
@@ -8941,7 +8943,7 @@ const AdminConfigView = ({ ctx }) => {
           const cur = snap.data();
           if (!['Pending', 'ApprovalFailed'].includes(cur.status)) throw new Error('สถานะใบเปลี่ยนแล้ว');
           if (cur.invs_sub_po_no) throw new Error('ใบนี้ส่ง INVS แล้ว ส่งกลับไม่ได้');
-          tx.update(ref, { status: 'Rejected', reject_reason: safeText(rejectReason), admin_note: safeText(adminNote), rejected_at: firebase.firestore.FieldValue.serverTimestamp(), rejected_by_uid: ctx.currentUser.uid, rejected_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+          tx.update(ref, { status: 'Rejected', is_printed: false, reject_reason: safeText(rejectReason), admin_note: safeText(adminNote), rejected_at: firebase.firestore.FieldValue.serverTimestamp(), rejected_by_uid: ctx.currentUser.uid, rejected_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
         });
         await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_REJECT', 'internal_requisitions', req.id, { dept_id: req.deptId, reason: safeText(rejectReason) });
         ctx.showToast('ส่งกลับให้แก้ไขแล้ว'); setRejectOpen(false); await reload(); onBack();

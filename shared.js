@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.21.0';
+const APP_VERSION = '6.22.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1098,6 +1098,8 @@ const qtyWithReceivedText = (it, total, pack) => {
   if (pre > 0) parts.push(fq(pre) + '(รับแล้ว)');
   return (reg > 0 ? fq(reg) + '+' : '') + parts.join('+');
 };
+// v6.22 ใบหน่วยงานที่พิมพ์แล้ว = ล็อกยอด (เหมือนใบ รพ.สต.) — ผู้เบิกแก้/ยกเลิกไม่ได้ แอดมินแก้ได้จนส่ง INVS · ถูกตีกลับ (Rejected) = ปลดล็อก
+const internalReqLockedForDept = (req, isAdmin) => !isAdmin && !!req && req.kind !== 'pharmacy' && !!req.is_printed && req.status !== 'Rejected';
 // v6.21 อ้างอิงใบเบิกด่วน/จ่ายล่วงหน้าที่รวมเข้าใบ (ใช้ทั้ง internal.html และ app.html)
 const receivedRefsFor = (req, urgents, predisps) => {
   const uIds = new Set((req && req.urgent_ids) || []), pIds = new Set((req && req.predisp_ids) || []);
@@ -1354,6 +1356,8 @@ const buildInternalReqFormHtml = (opts) => {
     '.totals .big{font-size:18px;font-weight:700;text-align:right}.totals .rt{text-align:right;font-weight:700}' +
     '.sigs{display:grid;grid-template-columns:1fr 1fr;gap:16px 28px;margin-top:22px;text-align:center;page-break-inside:avoid;font-size:12.5px}.nw{white-space:nowrap}' +
     '.blankrow td{height:22px}' +
+    // v6.22 ลายน้ำแนวทแยง "พิมพ์เมื่อ" ทุกหน้า (ใบหน่วยงาน) — ใบที่พิมพ์แล้วล็อกยอด
+    '.wm{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:44px;font-weight:700;line-height:1.25;color:rgba(0,0,0,0.075);text-align:center;white-space:nowrap;z-index:9;pointer-events:none;-webkit-print-color-adjust:exact;print-color-adjust:exact}.wm small{display:block;font-size:20px}' +
     // v6.20 ใบห้องยา: ความกว้างคอลัมน์ตายตัว (ไม่ให้ตัวเลขยาวดันคอลัมน์) · Lot ใช้ตัวอักษรแคบ
     '.items.ph{table-layout:fixed;font-size:10px}.items.ph th,.items.ph td{padding:2px 3px;overflow-wrap:anywhere}.items.ph th{font-size:9.5px}' +
     ".items.ph td.lotcell{font-family:'Roboto Condensed','Arial Narrow',Sarabun,sans-serif;font-size:9px;line-height:1.2;color:#1e3a8a}.lp{white-space:nowrap}" +
@@ -1361,6 +1365,7 @@ const buildInternalReqFormHtml = (opts) => {
     // v6.6.5 กลุ่มตำแหน่งเดียวกัน: จุดไข่ปลาเล็ก 0.1pt
     '.items tr.ldt td{border-top:0.1pt dotted #444}.items tr.ldb td{border-bottom:0.1pt dotted #444}' +
     '</style></head><body>' +
+    (!isPharmacy ? '<div class="wm">พิมพ์เมื่อ ' + esc(printedAt) + '<small>' + esc(safeText(opts.deptName || req.dept_name)) + ' · ' + esc(opts.formNo || '') + '</small></div>' : '') +
     '<h1>ใบเบิกวัสดุ/เวชภัณฑ์</h1>' +
     '<div class="meta"><div>เลขที่ <b>' + esc(opts.formNo) + '</b></div><div>วันที่ <b>' + esc(parts.day) + '</b> เดือน <b>' + esc(parts.month) + '</b> ปี <b>' + esc(parts.year) + '</b></div></div>' +
     '<div class="to">เรียน ผู้อำนวยการโรงพยาบาลสวี</div>' +

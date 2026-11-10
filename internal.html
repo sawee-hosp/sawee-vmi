@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.24.0"></script>
+  <script src="shared.js?v=6.25.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.24.0';
+      var need = '6.25.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -381,7 +381,44 @@
     };
 
     // ===== พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์ (แก้เลขที่/วันที่ได้ก่อนพิมพ์) =====
+    // ===== v6.25 ใบพิมพ์ห้องยา: รีเฟรชคงคลัง lot INVS ก่อนพิมพ์ (รายการ/จำนวนเบิกคงเดิม) · เลือกไม่ใส่ Lot/คงเหลือคลัง =====
+    const fetchPrintLots = async (ctx, items) => {
+      const ids = [...new Set((items || []).filter(it => toNonNegativeNumber(it.dispenseQty) > 0).map(it => String(it.drugId)))];
+      const lots = {};
+      for (let i = 0; i < ids.length; i += 1000) Object.assign(lots, (await callInvsBridge('invs_lots', '', { drug_ids: ids.slice(i, i + 1000), stock_id: safeText(ctx.dept?.invs_stock_id) })).lots || {});
+      ids.forEach(id => { if (!lots[id]) lots[id] = []; });
+      return lots;
+    };
+    // คิด Lot ที่จ่าย (FEFO) และคงเหลือคลังใหม่จาก lot ล่าสุด — ไม่แตะจำนวนเบิก/มูลค่า
+    const applyPrintLots = (items, lots) => !lots ? items : (items || []).map(it => {
+      const id = String(it.drugId); const disp = toNonNegativeNumber(it.dispenseQty);
+      if (!Object.prototype.hasOwnProperty.call(lots, id) || !(disp > 0)) return it;
+      const total = (lots[id] || []).reduce((a, l) => a + toNonNegativeNumber(l.qty), 0);
+      return { ...it, lotPlan: allocatePharmLots(lots[id], disp), lotStockAfter: Math.max(0, Math.round((total - disp) * 1000) / 1000) };
+    });
+    const PrintLotsControls = ({ ctx, items, lots, setLots, at, setAt, noLots, setNoLots }) => {
+      const [busy, setBusy] = useState(false);
+      const refresh = async () => {
+        setBusy(true);
+        try { setLots(await fetchPrintLots(ctx, items)); setAt(new Date()); setNoLots(false); ctx.showToast('ดึงคงคลัง lot INVS ล่าสุดแล้ว — จำนวนเบิกคงเดิม'); }
+        catch (e) { ctx.showToast('ดึงคงคลัง INVS ไม่สำเร็จ: ' + (e?.message || e) + ' — เลือก "ไม่ใส่ Lot" แล้วเขียนเองได้', 'error'); }
+        finally { setBusy(false); }
+      };
+      return (
+        <div id="print-lots-box" className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button id="print-lots-refresh" type="button" onClick={refresh} disabled={busy || noLots} className="px-3 py-1.5 rounded-lg bg-white border border-indigo-300 text-indigo-700 font-bold disabled:opacity-40"><i className={`fa-solid ${busy ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i>รีเฟรชคงคลัง lot INVS</button>
+            <span className="text-xs text-indigo-800">{at ? `ใช้คงคลังล่าสุด ${pad2(at.getHours())}:${pad2(at.getMinutes())} — คิด Lot ที่จ่าย/คงเหลือคลังใหม่ จำนวนเบิกคงเดิม` : 'ใช้ Lot/คงเหลือคลังที่บันทึกไว้ในใบ'}</span>
+          </div>
+          <label className="flex items-start gap-2 font-bold text-slate-700 cursor-pointer"><input id="print-no-lots" type="checkbox" checked={noLots} onChange={e => setNoLots(e.target.checked)} className="w-4 h-4 mt-0.5 accent-indigo-600" />
+            <span>ไม่ใส่ Lot และคงเหลือคลัง (พิมพ์เฉพาะยอดเบิก — เว้นช่องให้เขียนเอง เผื่อข้อมูล INVS ไม่ตรง)</span></label>
+        </div>
+      );
+    };
+
     const FormPrintModal = ({ ctx, req, onClose }) => {
+      const isPh = req.kind === 'pharmacy';
+      const [printLots, setPrintLots] = useState(null), [printLotsAt, setPrintLotsAt] = useState(null), [noLots, setNoLots] = useState(false);
       const [formNo, setFormNo] = useState(() => internalFormNoFor(req, ctx.reqs));
       const [formDate, setFormDate] = useState(() => safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at));
       // v6.6 ผู้ลงนาม 4 จุด — ใบนี้ → ใบก่อนของหน่วยงาน → ผู้สร้าง/ผู้อนุมัติ
@@ -415,8 +452,9 @@
           // v6.21 พิมพ์จากข้อมูลล่าสุด (กันรายการเก่าค้างในหน้าจอ) + อ้างอิงใบเบิกด่วน/จ่ายล่วงหน้าที่รวมเข้าใบนี้
           let fresh = req;
           try { const snap = await db.collection('internal_requisitions').doc(req.id).get(); if (snap.exists) fresh = { ...req, ...snap.data(), id: req.id }; } catch (e) { /* ใช้ข้อมูลในหน้าจอ */ }
+          if (isPh && printLots) fresh = { ...fresh, items: applyPrintLots(fresh.items, printLots) };
           await printHtmlDocument(buildInternalReqFormHtml({
-            req: fresh, formNo, formDate, deptName: fresh.dept_name || ctx.dept?.dept_name, drugTypes: ctx.drugTypes,
+            req: fresh, formNo, formDate, deptName: fresh.dept_name || ctx.dept?.dept_name, drugTypes: ctx.drugTypes, noLots: isPh && noLots,
             locOf: (id) => safeText(ctx.drugById.get(String(id))?.invs_location), oldCodeOf: (id) => ctx.drugById.get(String(id))?.old_code, signers,
             receivedRefs: receivedRefsFor(fresh, ctx.urgents || [], ctx.predispense || [])
           }));
@@ -433,6 +471,7 @@
             <label className="block"><span className="text-sm font-bold text-slate-600">วันที่</span>
               <input id="form-date" type="date" value={formDate} disabled={dateLocked} onChange={e => setFormDate(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl disabled:bg-slate-100 disabled:text-slate-500" />
               <span className="text-xs text-slate-500">{thaiDateLong(formDate)}{dateLocked && <span className="ml-2"><i className="fa-solid fa-lock mr-1"></i>{ctx.isAdmin ? 'ส่ง INVS แล้ว แก้วันที่ไม่ได้' : 'วันที่ล็อกไว้ — แก้ได้เฉพาะห้องยา (ก่อนส่ง INVS)'}</span>}</span></label>
+            {isPh && <PrintLotsControls ctx={ctx} items={req.items || []} lots={printLots} setLots={setPrintLots} at={printLotsAt} setAt={setPrintLotsAt} noLots={noLots} setNoLots={setNoLots} />}
             <InternalSignersEditor value={signers} onChange={setSigners} />
             <p className="text-xs text-slate-500">เลขที่สร้างอัตโนมัติ = ลำดับใบของหน่วยงานในปีงบประมาณ / ปีงบ (พ.ศ.) แก้ได้ก่อนพิมพ์</p>
             <div className="flex justify-end gap-2">
@@ -1177,6 +1216,7 @@ ORDER BY d.name`;
       const [asuData, setAsuData] = useState(null);   // { from, to, series: { icode: { ymd: qty } } }
       const [invsLots, setInvsLots] = useState(null); // { drugId: [{lot_no, expiry, qty}] } เรียง FEFO
       const [lotsAt, setLotsAt] = useState(null); // v6.20 เวลาที่ดึง lot INVS ล่าสุด
+      const [printLots, setPrintLots] = useState(null), [printLotsAt, setPrintLotsAt] = useState(null), [printNoLots, setPrintNoLots] = useState(false); // v6.25 ใบพิมพ์
       const [lotsErr, setLotsErr] = useState('');
       const [storedAsu] = useState(() => { const m = new Map(); if (editReq) (editReq.items || []).forEach(it => { if (it.asu) m.set(String(it.drugId), { stats: it.asu, lotPlan: it.lotPlan || [], dispense: toNonNegativeNumber(it.dispenseQty), stockAfter: it.lotStockAfter ?? null }); }); return m; });
       // v6.13 รวมยอดรายวันของ icode ทุกตัวที่ผูกกับยา INVS
@@ -1853,7 +1893,7 @@ ORDER BY d.name`;
             const typesSrc = ctx.drugTypes || DEFAULT_DRUG_TYPES;
             const rows = derived.filter(r => r.usage > 0 || r.dispense > 0 || r.source === 'manual'); // หมวดที่ซ่อน (5/6) ถูกกรองออกแล้วใน derived
             const roundT = (r) => { const pack = safePackSize(r.base.packSize); return roundTarget ? (pack > 1 ? Math.ceil(r.target / pack - 1e-9) * pack : Math.ceil(r.target - 1e-9)) : r.target; };
-            const items = rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source, lotPlan: r.lotPlan || [], lotStockAfter: r.lotStockAfter ?? null }));
+            const items = applyPrintLots(rows.map(r => ({ ...r.base, drugId: r.id, usage: r.usage, onHand: r.onHand, targetQty: roundT(r), requestQty: r.dispense, dispenseQty: r.dispense, source: r.source, lotPlan: r.lotPlan || [], lotStockAfter: r.lotStockAfter ?? null })), printLots);
             const cur = effEdit();
             const formNo = estForm.no;
             const formDate = estForm.date;
@@ -1874,7 +1914,7 @@ ORDER BY d.name`;
             };
             const fileBase = `ใบเบิก_${safeText(fakeReq.dept_name).replace(/[\\/:*?"<>|\s]+/g, '_')}_${safeText(formNo).replace(/\//g, '-') || toYmd(new Date())}`;
             const maybeSave = async () => { if (keepDraft) await saveDraft({ quiet: true }); };
-            const doPrint = async () => { await maybeSave(); await printHtmlDocument(buildInternalReqFormHtml({ req: fakeReq, formNo, formDate, deptName: fakeReq.dept_name, drugTypes: ctx.drugTypes, locOf, oldCodeOf: (id) => ctx.drugById.get(String(id))?.old_code, blankQty: !fillQty, includeUsed: true, signers })); };
+            const doPrint = async () => { await maybeSave(); await printHtmlDocument(buildInternalReqFormHtml({ req: fakeReq, noLots: printNoLots, formNo, formDate, deptName: fakeReq.dept_name, drugTypes: ctx.drugTypes, locOf, oldCodeOf: (id) => ctx.drugById.get(String(id))?.old_code, blankQty: !fillQty, includeUsed: true, signers })); };
             const doXlsx = async () => {
               if (typeof XLSX === 'undefined' || !XLSX.utils) return ctx.showToast('โหลดตัวสร้าง Excel ไม่สำเร็จ — ใช้ CSV แทน', 'error');
               await maybeSave();
@@ -1903,6 +1943,7 @@ ORDER BY d.name`;
                     <label className="flex items-start gap-2 text-sm font-bold text-slate-700 cursor-pointer"><input id="ph-est-round" type="checkbox" checked={roundTarget} onChange={e => setRoundTarget(e.target.checked)} className="w-4 h-4 mt-0.5" /><span>ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ<span className="block text-xs font-normal text-slate-500">เช่น 1,250 เม็ด บรรจุ 1,000 → 2,000</span></span></label>
                     <label className="flex items-start gap-2 text-sm font-bold text-slate-700 cursor-pointer"><input id="ph-est-keep" type="checkbox" checked={keepDraft && !sent} disabled={sent} onChange={e => setKeepDraft(e.target.checked)} className="w-4 h-4 mt-0.5" /><span>บันทึกเก็บไว้ใน "รอส่ง" ด้วย<span className="block text-xs font-normal text-slate-500">กลับมาแก้ไข/พิมพ์ซ้ำ/ส่งได้จาก "ใบเบิกของฉัน"{cur?.status === 'Draft' ? ' · ใบนี้บันทึกไว้แล้ว จะอัปเดตใบเดิม' : ''}</span></span></label>
                   </div>
+                  <PrintLotsControls ctx={ctx} items={items} lots={printLots} setLots={setPrintLots} at={printLotsAt} setAt={setPrintLotsAt} noLots={printNoLots} setNoLots={setPrintNoLots} />
                   <InternalSignersEditor value={signers} onChange={setSigners} />
                   <div className="text-xs text-slate-500">{items.length} รายการ · มูลค่า {fmtMoney(items.reduce((s, it) => s + internalItemValue(it), 0))} บาท</div>
                   <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">

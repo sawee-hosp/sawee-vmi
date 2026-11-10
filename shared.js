@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.23.0';
+const APP_VERSION = '6.25.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1255,12 +1255,14 @@ const buildInternalReqFormHtml = (opts) => {
   // v6.13 ห้องยา: Lot ที่ต้องหยิบ (FEFO) + ยอดเหลือใน lot หลังหยิบ ใต้ชื่อยา
   // v6.15 ช่องคงเหลือ: "10(3)" = คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (หน่วยใหญ่) แล้วตามด้วย lot ที่ต้องหยิบ "43831 [7], 48NVSFSD [3(150)]"
   // v6.20 แยกเป็น 2 ช่อง: คงเหลือคลัง (หน่วยใหญ่) · Lot ที่จ่าย [จำนวน] (ตัวอักษรแคบ ไม่ตัดกลาง lot)
+  // v6.25 opts.noLots = พิมพ์ยอดเบิกแต่เว้นคงเหลือคลัง/Lot ให้เขียนเอง (ข้อมูล INVS อาจไม่ตรง)
+  const noLots = !!opts.noLots;
   const stockAfterHtml = function (it, pack) {
-    if (!isPharmacy || blank || it.lotStockAfter == null || it.lotStockAfter === '' || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
+    if (!isPharmacy || blank || noLots || it.lotStockAfter == null || it.lotStockAfter === '' || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
     return esc(formatQty(Math.round(toSafeNumber(it.lotStockAfter)), pack));
   };
   const lotPickHtml = function (it, pack) {
-    if (!isPharmacy || blank || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
+    if (!isPharmacy || blank || noLots || !Array.isArray(it.lotPlan) || !it.lotPlan.length) return '';
     return it.lotPlan.map(function (l) { return '<span class="lp">' + esc(l.lot_no || '-') + ' [' + esc(formatQty(Math.round(toSafeNumber(l.qty) * 1000) / 1000, pack)) + ']</span>'; }).join(' ');
   };
   // v6.6.5 หน่วยงาน: มูลค่า = จำนวนเบิก × ราคา (ช่องจำนวนจ่ายเว้นว่างให้ห้องยาเขียน) · ห้องยา: คิดจากจำนวนจ่ายเหมือนเดิม
@@ -1288,7 +1290,10 @@ const buildInternalReqFormHtml = (opts) => {
         // รายการเพิ่มเอง (เช่น เวชภัณฑ์มิใช่ยา) ไม่มียอดจาก HOSxP — ช่องที่เป็น 0 เว้นว่างไว้เขียนเอง
         const man = it.source === 'manual';
         const z = function (v, s) { return man && !(toNonNegativeNumber(v) > 0) ? '' : s; };
-        const tgt = it.targetQty != null ? z(it.targetQty, qty(toNonNegativeNumber(it.targetQty), pack)) : '-';
+        // v6.25 ไม่เบิก (จำนวนจ่าย 0) = แสดง "-" แทน 0 ในช่อง Target / จำนวนจ่าย / มูลค่า
+        const none = !(disp > 0);
+        const dash = function (v, s) { return none && !(toNonNegativeNumber(v) > 0) ? (man ? '' : '-') : z(v, s); };
+        const tgt = it.targetQty != null ? dash(it.targetQty, qty(toNonNegativeNumber(it.targetQty), pack)) : '-';
         return trOpen(li) +
           '<td class="c">' + n + '</td>' +
           '<td class="name">' + esc(it.name) + '</td>' +
@@ -1297,9 +1302,9 @@ const buildInternalReqFormHtml = (opts) => {
           '<td class="c">' + z(usage, qty(usage, pack)) + '</td>' +
           '<td class="c blue">' + z(onHand, qty(onHand, pack)) + '</td>' +
           '<td class="c tgt">' + tgt + '</td>' +
-          '<td class="c b">' + (blank ? '' : z(disp, qty(disp, pack))) + '</td>' +
+          '<td class="c b">' + (blank ? '' : dash(disp, qty(disp, pack))) + '</td>' +
           '<td class="r">' + money(it.price) + '</td>' +
-          '<td class="r b">' + (blank ? '' : z(disp, money(valueOf(it)))) + '</td>' +
+          '<td class="r b">' + (blank ? '' : dash(disp, money(valueOf(it)))) + '</td>' +
           '<td class="c b">' + stockAfterHtml(it, pack) + '</td>' + // คงเหลือคลัง: คลังใหญ่รวมทุก lot หลังหยิบ · ไม่มีข้อมูล lot = เว้นให้เขียน
           '<td class="lotcell">' + lotPickHtml(it, pack) + '</td>' +
           '<td class="c code">' + esc(drugCodeLabel(it.drugId, oldCodeOf(it.drugId))) + '</td>' +

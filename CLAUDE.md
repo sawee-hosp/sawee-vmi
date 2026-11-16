@@ -271,3 +271,11 @@
 - **หน่วยสะดวกห้องยา** `master_drugs.pharm_round_unit` (หน่วยย่อย, ตั้งใต้ชื่อยาใน PharmacyReqView `ConvUnitInput`, rules ห้องยาเขียนได้) → ยอดแนะนำปัดเป็นทวีคูณใกล้สุด (กึ่งกลางปัดขึ้น · ปัดลงแล้วไม่พอถึงรอบหน้า = ปัดขึ้น) · หมายเหตุ "ปัดจาก 15 → 12"
 - **Sync จาก INVS** (`InvsMasterSyncModal`): + ชื่อยา (`drug_name_previous`) + ประเภท (`type_previous`, Bridge `type_code` จาก drug_gn คอลัมน์ `invs.type_column` หรือเดา DRUG_TYPE/TYPE_ID/...) + ชื่อประเภท → `config/drug_types` · ติ๊กเปิด/ปิดได้ · ชื่อหน่วยนับ master_unit ตาม sale_unit เสมอ
 - tests/v627.js
+
+## v6.28 ส่งออกข้อมูลวิจัย (แอดมิน · อ่านอย่างเดียว)
+- เมนู "ส่งออกข้อมูลวิจัย" (`ResearchExportView`, app.html) → zip `rxfill_research_YYYYMMDD_HHmm.zip` (JSZip 3.10.1 จาก cdnjs โหลดตอนกด)
+- `RESEARCH_COLS`: requisitions / rpst_emergency / stock_returns / vmi_stock_events (กรอง created_at) · vmi_stock_counts (count_date) · vmi_virtual_lots, config_par, master_drugs, master_hospitals (ทั้งหมด) · `deleted_docs.json` = cache_tombstones ของ collection ข้างบน (deleted_at ในช่วง) — ไม่ส่งออก users/LINE/pick_slips/หน่วยงานภายใน/ห้องยา/trace
+- อ่าน Firestore ตรง (ไม่ผ่านแคช shared.js) · ขั้น 1 นับด้วย `count()` → ขั้น 2 ยืนยันแล้วอ่าน + แสดงความคืบหน้า · ช่วงค่าเริ่มต้น 2026-08-01 ถึงวันนี้
+- ปกปิด (`researchAnonymize`): ฟิลด์ `*_uid`/`*Uid`/`*_by`/`by` + `*_by_name`/`*ByName`/actor_name/user_name/by_name/to_name → U001… (จับคู่ uid↔ชื่อจากทุกไฟล์ คนเดิมรหัสเดิม) · ลบ sign_names/sign_people/sign_roles, `line_*`, email/phone/tel/mobile · คง hospitalId/ชื่อ รพ.สต. · ข้อความอิสระไม่ปกปิด (ระบุใน manifest)
+- manifest.json (เวลา, APP_VERSION, ช่วงวันที่, ตัวกรอง, จำนวนเอกสาร, ฟิลด์ที่แทน/ลบ, หมายเหตุ) · data_dictionary.json (`researchDictionary`: ฟิลด์รวม items[].x, ชนิด, จำนวนเอกสารที่มีฟิลด์, ตัวอย่าง) · Timestamp → ISO 8601
+- tests/v628.js (fake-firebase เพิ่ม `count()`)

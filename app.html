@@ -8849,6 +8849,182 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+    // ===================== v6.28 ส่งออกข้อมูลวิจัย (แอดมิน · อ่านอย่างเดียว) =====================
+    // อ่านจาก Firestore ตรง (ไม่ผ่านแคช IndexedDB/delta sync) · ปกปิดตัวบุคคล (uid/ชื่อผู้ทำรายการ → U001…) · zip ด้วย JSZip
+    const RESEARCH_COLS = [
+      { col: 'requisitions', label: 'ใบเบิก รพ.สต. (ทุกสถานะ)', filter: 'ts', field: 'created_at' },
+      { col: 'rpst_emergency', label: 'ใบเบิกยาฉุกเฉิน (ใบ ฉ)', filter: 'ts', field: 'created_at' },
+      { col: 'stock_returns', label: 'ใบคืนยา รพ.สต.', filter: 'ts', field: 'created_at' },
+      { col: 'vmi_stock_counts', label: 'ผลตรวจนับคลัง รพ.สต.', filter: 'ymd', field: 'count_date' },
+      { col: 'vmi_stock_events', label: 'ประวัติเคลื่อนไหว lot (MANUAL_ADJUST ฯลฯ)', filter: 'ts', field: 'created_at' },
+      { col: 'vmi_virtual_lots', label: 'Lot คงเหลือ รพ.สต.', filter: 'none' },
+      { col: 'config_par', label: 'Target Stock (config_par)', filter: 'none' },
+      { col: 'master_drugs', label: 'รายการยา', filter: 'none' },
+      { col: 'master_hospitals', label: 'รพ.สต.', filter: 'none' }
+    ];
+    const RESEARCH_DROP_EXACT = new Set(['sign_names', 'sign_people', 'sign_roles', 'line_user_id', 'line_display_name']);
+    const researchDropKey = (k) => RESEARCH_DROP_EXACT.has(k) || /^line_/i.test(k) || /(^|_)(e?mail|email|phone|tel|telephone|mobile)(_|$)/i.test(k) || /(Email|Phone|Tel|Mobile)$/.test(k);
+    const researchUidKey = (k) => /(_uid|Uid)$/.test(k) || k === 'uid' || /_by$/.test(k) || k === 'by' || k === 'added_by' || k === 'reserved_by';
+    const researchNameKey = (k) => /(_by_name|ByName)$/.test(k) || ['actor_name', 'user_name', 'by_name', 'to_name'].includes(k);
+    const researchPairUid = (k) => k === 'by_name' ? 'by_uid' : k.endsWith('ByName') ? k.replace(/ByName$/, 'ByUid') : k.replace(/_name$/, '_uid');
+    const researchIso = (v) => { try { if (v && typeof v.toDate === 'function') return v.toDate().toISOString(); if (v && typeof v.seconds === 'number' && 'nanoseconds' in v) return new Date(v.seconds * 1000 + Math.floor(v.nanoseconds / 1e6)).toISOString(); } catch (e) {} return null; };
+    const researchPlain = (v) => { // Timestamp → ISO · ตัดค่าที่ serialize ไม่ได้
+      const iso = researchIso(v); if (iso) return iso;
+      if (Array.isArray(v)) return v.map(researchPlain);
+      if (v && typeof v === 'object') { const o = {}; Object.keys(v).forEach(k => { o[k] = researchPlain(v[k]); }); return o; }
+      return v;
+    };
+    // รอบ 1: เก็บคู่ uid↔ชื่อ ทุกไฟล์ · รอบ 2: แทนรหัส (คนเดิมได้รหัสเดิม) + ลบฟิลด์ส่วนบุคคล
+    const researchAnonymize = (byCol) => {
+      const codeOf = new Map(); const nameToUid = new Map(); let n = 0;
+      const code = (key) => { if (!codeOf.has(key)) codeOf.set(key, 'U' + String(++n).padStart(3, '0')); return codeOf.get(key); };
+      const walk1 = (o) => { if (Array.isArray(o)) return o.forEach(walk1); if (!o || typeof o !== 'object') return;
+        Object.keys(o).forEach(k => { const v = o[k];
+          if (researchNameKey(k) && typeof v === 'string' && v) { const u = o[researchPairUid(k)]; if (typeof u === 'string' && u && !nameToUid.has(v)) nameToUid.set(v, u); }
+          if (v && typeof v === 'object') walk1(v); }); };
+      Object.values(byCol).forEach(docs => docs.forEach(walk1));
+      const personVal = (v, isName) => { if (v === null || v === undefined || v === '') return v; const s = String(v);
+        if (isName) return code('uid:' + (nameToUid.has(s) ? nameToUid.get(s) : s));
+        return code(codeOf.has('uid:' + s) || !nameToUid.has(s) ? 'uid:' + s : 'uid:' + nameToUid.get(s)); };
+      const used = { removed: new Set(), pseudonymized: new Set() };
+      const walk2 = (o) => { if (Array.isArray(o)) return o.map(walk2); if (!o || typeof o !== 'object') return o;
+        const out = {};
+        Object.keys(o).forEach(k => { const v = o[k];
+          if (researchDropKey(k)) { used.removed.add(k); return; }
+          if (researchUidKey(k) && (typeof v === 'string' || typeof v === 'number')) { used.pseudonymized.add(k); out[k] = personVal(v, false); return; }
+          if (researchNameKey(k) && typeof v === 'string') { used.pseudonymized.add(k); out[k] = personVal(v, true); return; }
+          out[k] = walk2(v); });
+        return out; };
+      const result = {}; Object.keys(byCol).forEach(c => { result[c] = byCol[c].map(walk2); });
+      return { result, userCount: n, removed: [...used.removed].sort(), pseudonymized: [...used.pseudonymized].sort() };
+    };
+    // data dictionary: ฟิลด์ทั้งหมด (รวม items[].x) · ชนิด · จำนวนเอกสารที่มีฟิลด์ · ตัวอย่าง 1 ค่า
+    const researchDictionary = (docs) => {
+      const f = new Map();
+      const typeOf = (v) => v === null ? 'null' : Array.isArray(v) ? 'array' : (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) ? 'timestamp (ISO 8601)' : typeof v;
+      const sample = (v) => typeof v === 'string' ? v.slice(0, 80) : (v && typeof v === 'object') ? (Array.isArray(v) ? `[${v.length} รายการ]` : '{…}') : v;
+      docs.forEach(d => {
+        const seen = new Set();
+        const visit = (o, prefix, depth) => { Object.keys(o).forEach(k => { const v = o[k]; const p = prefix + k;
+          if (!f.has(p)) f.set(p, { types: new Set(), docs: 0, example: undefined });
+          const e = f.get(p); e.types.add(typeOf(v)); if (!seen.has(p)) { seen.add(p); e.docs++; }
+          if (e.example === undefined && v !== null && v !== '' && v !== undefined) e.example = sample(v);
+          if (depth < 3 && Array.isArray(v)) v.forEach(x => { if (x && typeof x === 'object' && !Array.isArray(x)) visit(x, p + '[].', depth + 1); });
+          else if (depth < 3 && v && typeof v === 'object' && !Array.isArray(v)) visit(v, p + '.', depth + 1); }); };
+        visit(d, '', 0);
+      });
+      return [...f.keys()].sort().map(k => ({ field: k, types: [...f.get(k).types].sort(), docs_with_field: f.get(k).docs, example: f.get(k).example === undefined ? null : f.get(k).example }));
+    };
+    const loadScriptOnce = (src) => new Promise((resolve, reject) => {
+      if (document.querySelector(`script[src="${src}"]`) && window.JSZip) return resolve();
+      const s = document.createElement('script'); s.src = src; s.onload = () => resolve(); s.onerror = () => reject(new Error('โหลดไลบรารีไม่สำเร็จ: ' + src)); document.head.appendChild(s);
+    });
+
+    const ResearchExportView = ({ ctx }) => {
+      const [from, setFrom] = useState('2026-08-01');
+      const [to, setTo] = useState(() => toYmd(new Date()));
+      const [counts, setCounts] = useState(null); // { col: number|null }
+      const [busy, setBusy] = useState('');
+      const [progress, setProgress] = useState([]);
+      const [done, setDone] = useState(null);
+      const queryOf = (c) => {
+        let q = db.collection(c.col);
+        if (c.filter === 'ts') q = q.where(c.field, '>=', firebase.firestore.Timestamp.fromDate(new Date(from + 'T00:00:00'))).where(c.field, '<', firebase.firestore.Timestamp.fromDate(new Date(addDaysYmd(to, 1) + 'T00:00:00')));
+        if (c.filter === 'ymd') q = q.where(c.field, '>=', from).where(c.field, '<=', to);
+        return q;
+      };
+      const tombQuery = () => db.collection('cache_tombstones').where('deleted_at', '>=', firebase.firestore.Timestamp.fromDate(new Date(from + 'T00:00:00'))).where('deleted_at', '<', firebase.firestore.Timestamp.fromDate(new Date(addDaysYmd(to, 1) + 'T00:00:00')));
+      const countOf = async (q) => { try { if (typeof q.count === 'function') { const s = await q.count().get(); return Number(s.data().count); } } catch (e) { console.warn('count', e); } return null; };
+      const valid = from && to && from <= to;
+      useEffect(() => { setCounts(null); setDone(null); }, [from, to]);
+      const doCount = async () => {
+        if (!valid) return ctx.showToast('ช่วงวันที่ไม่ถูกต้อง', 'error');
+        setBusy('count');
+        try { const out = {}; for (const c of RESEARCH_COLS) out[c.col] = await countOf(queryOf(c)); out.cache_tombstones = await countOf(tombQuery()); setCounts(out); }
+        catch (e) { ctx.showToast('นับจำนวนเอกสารไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const totalReads = counts ? Object.values(counts).reduce((s, v) => s + (Number(v) || 0), 0) : 0;
+      const unknown = counts ? Object.values(counts).some(v => v === null) : false;
+      const doExport = async () => {
+        setBusy('export'); setDone(null);
+        const log = []; const push = (x) => { log.push(x); setProgress([...log]); };
+        try {
+          if (!window.JSZip) await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+          const raw = {};
+          for (let i = 0; i < RESEARCH_COLS.length; i++) {
+            const c = RESEARCH_COLS[i]; push({ col: c.col, status: 'reading', n: 0, step: `${i + 1}/${RESEARCH_COLS.length + 1}` });
+            const snap = await queryOf(c).get(); // อ่านตรงจากเซิร์ฟเวอร์ (ไม่ผ่านแคชของ shared.js)
+            raw[c.col] = snap.docs.map(d => ({ _id: d.id, ...researchPlain(d.data()) }));
+            log[log.length - 1] = { ...log[log.length - 1], status: 'done', n: raw[c.col].length }; setProgress([...log]);
+          }
+          push({ col: 'cache_tombstones', status: 'reading', n: 0, step: `${RESEARCH_COLS.length + 1}/${RESEARCH_COLS.length + 1}` });
+          const wanted = new Set(RESEARCH_COLS.map(c => c.col));
+          const tomb = (await tombQuery().get()).docs.map(d => ({ _id: d.id, ...researchPlain(d.data()) })).filter(t => wanted.has(String(t.col)));
+          raw.deleted_docs = tomb;
+          log[log.length - 1] = { ...log[log.length - 1], status: 'done', n: tomb.length }; setProgress([...log]);
+          const anon = researchAnonymize(raw);
+          const zip = new window.JSZip();
+          const dict = {}; const docCounts = {};
+          Object.keys(anon.result).forEach(c => { zip.file(c + '.json', JSON.stringify(anon.result[c], null, 1)); dict[c] = researchDictionary(anon.result[c]); docCounts[c] = anon.result[c].length; });
+          const now = new Date();
+          zip.file('manifest.json', JSON.stringify({
+            exported_at: now.toISOString(), app_version: APP_VERSION, date_from: from, date_to: to,
+            date_filter: Object.fromEntries(RESEARCH_COLS.map(c => [c.col, c.filter === 'none' ? 'ทั้งหมด (ไม่กรองวันที่)' : `${c.field} ${from} ถึง ${to}`])),
+            doc_counts: docCounts, pseudonymized_user_count: anon.userCount,
+            pseudonymized_fields: anon.pseudonymized, removed_fields: anon.removed,
+            notes: [
+              'uid และชื่อผู้ทำรายการถูกแทนด้วยรหัสคงที่ U001… (คนเดิมรหัสเดิมทุกไฟล์) ไม่มีตารางจับคู่รหัสกับชื่อจริงในไฟล์นี้',
+              'ฟิลด์ข้อความอิสระ (เช่น note, reason, adminNote, admin_note, reject_reason) ไม่ได้ปกปิด อาจมีชื่อบุคคล',
+              'deleted_docs.json = ป้ายลบ (cache_tombstones) ของเอกสารที่ถูกลบจริง — เนื้อหาเอกสารไม่มีแล้ว',
+              'เอกสารที่ไม่มีฟิลด์วันที่ที่ใช้กรอง จะไม่ถูกส่งออกในชุดที่กรองตามวันที่',
+              'Timestamp ทั้งหมดเป็น ISO 8601 (UTC)'
+            ]
+          }, null, 1));
+          zip.file('data_dictionary.json', JSON.stringify(dict, null, 1));
+          const blob = await zip.generateAsync({ type: 'blob' });
+          const p2 = (x) => String(x).padStart(2, '0');
+          const name = `rxfill_research_${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}_${p2(now.getHours())}${p2(now.getMinutes())}.zip`;
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+          setDone({ name, docCounts, users: anon.userCount });
+          ctx.showToast('ส่งออกแล้ว: ' + name);
+        } catch (e) { ctx.showToast('ส่งออกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const confirmExport = () => ctx.setConfirmDialog({
+        title: 'ยืนยันอ่านข้อมูลเพื่อส่งออก?', icon: 'fa-file-zipper', iconColor: 'text-indigo-600', confirmBtnClass: 'bg-indigo-600 hover:bg-indigo-700', confirmText: 'อ่านและดาวน์โหลด',
+        message: `ระบบจะอ่านเอกสารจาก Firestore ประมาณ ${totalReads.toLocaleString('th-TH')} reads${unknown ? ' (บาง collection นับไม่ได้)' : ''} ช่วง ${from} ถึง ${to} — อ่านอย่างเดียว ไม่แก้ข้อมูล`,
+        onConfirm: doExport });
+      return (
+        <div className="space-y-5" id="research-export">
+          <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-file-zipper text-indigo-600 mr-2"></i>ส่งออกข้อมูลวิจัย</h2>
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-sm text-indigo-900 space-y-1">
+            <div>อ่านอย่างเดียวจาก Firestore โดยตรง (ไม่ใช้แคชในเครื่อง) · ไฟล์ JSON แยกต่อ collection + manifest.json + data_dictionary.json</div>
+            <div><b>ปกปิดตัวบุคคล:</b> uid/ชื่อผู้ทำรายการ → U001… · ลบชื่อ/ตำแหน่งผู้ลงนาม, LINE, อีเมล, เบอร์โทร · คงรหัสและชื่อ รพ.สต. · ไม่ส่งออกผู้ใช้/LINE/slip/หน่วยงานภายใน/ห้องยา/trace</div>
+            <div className="text-amber-800">ข้อความอิสระ (หมายเหตุ/เหตุผล) ไม่ได้ปกปิด — ตรวจก่อนเผยแพร่</div>
+          </div>
+          <div className="flex flex-wrap items-end gap-3 bg-white border rounded-2xl p-4">
+            <label className="text-xs font-bold text-slate-500">ตั้งแต่<input id="rx-from" type="date" value={from} onChange={e => setFrom(e.target.value)} className="block mt-1 p-2 border rounded-xl" /></label>
+            <label className="text-xs font-bold text-slate-500">ถึง<input id="rx-to" type="date" value={to} onChange={e => setTo(e.target.value)} className="block mt-1 p-2 border rounded-xl" /></label>
+            <button id="rx-count" onClick={doCount} disabled={!!busy || !valid} className="px-4 py-2.5 rounded-xl bg-slate-800 text-white font-bold disabled:opacity-40">{busy === 'count' ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : null}1) นับจำนวนเอกสาร</button>
+            <button id="rx-export" onClick={confirmExport} disabled={!!busy || !counts} className="px-4 py-2.5 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-40">{busy === 'export' ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : null}2) ยืนยันอ่าน + ดาวน์โหลด zip</button>
+          </div>
+          {counts && <div className="bg-white border rounded-2xl overflow-hidden">
+            <table className="w-full text-sm" id="rx-count-table"><thead className="bg-slate-100 text-xs"><tr><th className="p-2 text-left">Collection</th><th className="p-2 text-left">ข้อมูล</th><th className="p-2 text-left">กรองวันที่</th><th className="p-2 text-right">จำนวนเอกสาร</th></tr></thead>
+              <tbody>{[...RESEARCH_COLS, { col: 'cache_tombstones', label: 'ป้ายลบเอกสาร (→ deleted_docs.json, เฉพาะ collection ข้างบน)', filter: 'ts', field: 'deleted_at' }].map(c => <tr key={c.col} className="border-t" data-col={c.col}>
+                <td className="p-2 font-mono text-xs">{c.col}</td><td className="p-2">{c.label}</td><td className="p-2 text-xs text-slate-500">{c.filter === 'none' ? 'ทั้งหมด' : c.field}</td>
+                <td className="p-2 text-right font-bold rx-count">{counts[c.col] === null ? <span className="text-slate-400">นับไม่ได้</span> : counts[c.col].toLocaleString('th-TH')}</td></tr>)}
+                <tr className="border-t-2 bg-slate-50 font-black"><td colSpan="3" className="p-2 text-right">รวมโดยประมาณ (reads)</td><td className="p-2 text-right" id="rx-total">{totalReads.toLocaleString('th-TH')}{unknown ? '+' : ''}</td></tr></tbody></table>
+          </div>}
+          {progress.length > 0 && <div className="bg-white border rounded-2xl p-4 text-sm space-y-1" id="rx-progress">
+            {progress.map((p, i) => <div key={i}>{p.status === 'done' ? <i className="fa-solid fa-check text-emerald-600 mr-2"></i> : <i className="fa-solid fa-spinner fa-spin text-indigo-600 mr-2"></i>}[{p.step}] {p.col} {p.status === 'done' ? `— ${p.n.toLocaleString('th-TH')} เอกสาร` : 'กำลังอ่าน...'}</div>)}
+            {busy === 'export' && progress.every(p => p.status === 'done') && <div className="text-slate-500"><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังปกปิดข้อมูลและสร้าง zip...</div>}
+          </div>}
+          {done && <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-900" id="rx-done">ดาวน์โหลดแล้ว: <b>{done.name}</b> · ผู้ทำรายการ {done.users} รหัส</div>}
+        </div>
+      );
+    };
+
     const InvsMasterSyncModal = ({ ctx, onClose }) => {
       const [busy, setBusy] = useState('');
       const [plan, setPlan] = useState(null); // { creates, updates, units, total }
@@ -11862,6 +12038,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentUser?.role === 'admin' && <button onClick={() => requestView('count_status')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='count_status'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-clipboard-check w-6 text-center mr-2"></i> สถานะตรวจนับ รพ.สต.</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('ncds_mapping')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='ncds_mapping'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-link w-6 text-center mr-2"></i> จับคู่ยา NCDs</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('substock_sync')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='substock_sync'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-warehouse w-6 text-center mr-2"></i> คลังย่อย รพ.สต. → INVS</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('research_export')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='research_export'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-file-zipper w-6 text-center mr-2"></i> ส่งออกข้อมูลวิจัย</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('mr_pool')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='mr_pool'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> กองMR</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('line_console')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='line_console'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-brands fa-line w-6 text-center mr-2"></i> LINE Console</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
@@ -11895,6 +12072,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'line_console' && currentUser?.role === 'admin' && <LineConsoleView ctx={ctx} />}
               {currentView === 'mr_pool' && currentUser?.role === 'admin' && <MrPoolView ctx={ctx} />}
+              {currentView === 'research_export' && currentUser?.role === 'admin' && <ResearchExportView ctx={ctx} />}
               {currentView === 'substock_sync' && currentUser?.role === 'admin' && <SubstockSyncView ctx={ctx} />}
               {currentView === 'count_status' && currentUser?.role === 'admin' && <StockCountStatusView ctx={ctx} />}
               {currentView === 'ncds_mapping' && currentUser?.role === 'admin' && <NcdsMappingView ctx={ctx} />}

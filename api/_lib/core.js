@@ -116,8 +116,31 @@ async function quotaStatus() {
   return { month: monthKey(), limit, used, sent_by_system: Number(meta.sent) || 0, line_reported: lineUsed, tier, remaining: Math.max(0, limit - used) };
 }
 // ส่ง push ทีละคน — audience: 'admin' | 'staff' | 'test' · คืน { ok, skipped }
+// v6.26 สวิตช์แจ้งเตือน (line_meta/settings): staff_enabled / admin_enabled / work_hours_only (จ.–ศ. start–end เวลาไทย)
+const LINE_SETTINGS_DEFAULT = { staff_enabled: true, admin_enabled: true, work_hours_only: false, work_start: '08:30', work_end: '16:30' };
+async function lineSettings() { return { ...LINE_SETTINGS_DEFAULT, ...((await fsGet('line_meta/settings')) || {}) }; }
+function inWorkHours(st, now) {
+  const t = new Date((now || Date.now()) + 7 * 3600000); // เวลาไทย
+  const dow = t.getUTCDay(); if (dow === 0 || dow === 6) return false;
+  const m = t.getUTCHours() * 60 + t.getUTCMinutes();
+  const hm = v => { const [h, mm] = String(v || '').split(':').map(Number); return (h || 0) * 60 + (mm || 0); };
+  return m >= hm(st.work_start) && m < hm(st.work_end);
+}
+function settingsBlock(st, audience, now) {
+  if (audience === 'test') return '';
+  if (audience === 'admin') return st.admin_enabled === false ? 'disabled_admin' : '';
+  if (st.staff_enabled === false) return 'disabled_staff';
+  if (st.work_hours_only && !inWorkHours(st, now)) return 'off_hours';
+  return '';
+}
 async function pushText(lineUserId, text, info) {
   info = info || {};
+  const st = info.settings || await lineSettings();
+  const blk = settingsBlock(st, info.audience);
+  if (blk) {
+    await logLine({ type: info.type, to_uid: info.uid, ok: false, skipped: blk, preview: String(text).slice(0, 120) });
+    return { ok: false, skipped: blk };
+  }
   const q = info.quota || await quotaStatus();
   const isAdminMsg = info.audience === 'admin' || info.audience === 'test';
   if (q.used + 1 > q.limit || q.tier === 'stop' || (q.tier === 'admin_only' && !isAdminMsg)) {
@@ -160,5 +183,5 @@ async function readJson(req) {
 }
 const thb = (v) => Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-module.exports = { crypto, env, SITE, googleToken, fsGet, fsSet, fsPatch, fsAdd, fsDelete, fsQuery, nowTs, tsMs, lineApi, reply, quotaStatus, pushText, logLine,
+module.exports = { crypto, env, SITE, googleToken, fsGet, fsSet, fsPatch, fsAdd, fsDelete, fsQuery, nowTs, tsMs, lineApi, reply, quotaStatus, pushText, logLine, lineSettings, settingsBlock, inWorkHours, LINE_SETTINGS_DEFAULT,
   verifyUser, isAdminRole, sheetToken, sheetUrl, readJson, thb, monthKey };

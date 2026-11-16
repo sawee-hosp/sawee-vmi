@@ -1124,6 +1124,39 @@
       return data;
     };
 
+    // v6.26 สวิตช์ปิดแจ้งเตือน LINE (เก็บ line_meta/settings ผ่าน API — เซิร์ฟเวอร์ตรวจทุกครั้งก่อนส่ง)
+    const LineSettingsPanel = ({ status, ctx, onSaved }) => {
+      const base = status?.settings || null;
+      const [f, setF] = useState(null);
+      const [saving, setSaving] = useState(false);
+      useEffect(() => { if (base) setF({ staff_enabled: base.staff_enabled !== false, admin_enabled: base.admin_enabled !== false, work_hours_only: !!base.work_hours_only, work_start: base.work_start || '08:30', work_end: base.work_end || '16:30' }); }, [JSON.stringify(base)]);
+      if (!f) return null;
+      const save = async (next) => {
+        setF(next); setSaving(true);
+        try { await callLineApi('/api/line-notify', { action: 'settings', settings: next }); ctx.showToast('บันทึกการตั้งค่าแจ้งเตือนแล้ว'); onSaved && onSaved(); }
+        catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setSaving(false); }
+      };
+      const Tog = ({ id, k, label, sub }) => <label className="flex items-start gap-3 cursor-pointer"><input id={id} type="checkbox" className="mt-1 w-5 h-5 accent-green-600" checked={!!f[k]} disabled={saving} onChange={e => save({ ...f, [k]: e.target.checked })} /><span><b className="text-slate-800">{label}</b>{sub && <div className="text-xs text-slate-500">{sub}</div>}</span></label>;
+      return (
+        <div className="bg-white rounded-2xl border p-5 space-y-3" id="line-settings">
+          <div className="text-sm font-bold text-slate-500">การตั้งค่าแจ้งเตือน {saving && <i className="fa-solid fa-spinner fa-spin ml-1"></i>}</div>
+          {!f.staff_enabled && <div className="text-xs font-bold text-red-700 bg-red-50 rounded-lg p-2">ปิดแจ้งเตือนถึง จนท. รพ.สต. อยู่ — ไม่มีข้อความจัดยาเสร็จ/ยาใกล้หมดอายุ/เตือนตรวจนับ ถึง จนท.</div>}
+          <div className="grid md:grid-cols-3 gap-4">
+            <Tog id="line-set-staff" k="staff_enabled" label="ส่งถึง จนท. รพ.สต." sub="จัดยาเสร็จ · ยาใกล้หมดอายุ · เตือนตรวจนับ" />
+            <Tog id="line-set-admin" k="admin_enabled" label="ส่งถึงแอดมิน" sub="สรุปใบเบิกใหม่ · ยาใกล้หมดอายุ" />
+            <div>
+              <Tog id="line-set-hours" k="work_hours_only" label="ส่งถึง จนท. เฉพาะเวลาทำการ" sub="จ.–ศ. นอกเวลา = ไม่ส่ง (เช่น รับยาเข้าระบบตอนเย็น)" />
+              {f.work_hours_only && <div className="flex items-center gap-2 mt-2 ml-8 text-sm">
+                <input id="line-set-start" type="time" value={f.work_start} onChange={e => setF({ ...f, work_start: e.target.value })} onBlur={() => save(f)} className="border rounded px-2 py-1" />–
+                <input id="line-set-end" type="time" value={f.work_end} onChange={e => setF({ ...f, work_end: e.target.value })} onBlur={() => save(f)} className="border rounded px-2 py-1" />
+              </div>}
+            </div>
+          </div>
+          <div className="text-xs text-slate-400">ปุ่ม "ส่งทดสอบหาตัวเอง" ส่งได้เสมอ{base?.updated_by ? ` · แก้ล่าสุดโดย ${base.updated_by}` : ''}</div>
+        </div>
+      );
+    };
     const LineConsoleView = ({ ctx }) => {
       const [status, setStatus] = useState(null);
       const [logs, setLogs] = useState([]);
@@ -1194,7 +1227,10 @@
             </div>
           </div>
 
+          <LineSettingsPanel status={status} ctx={ctx} onSaved={load} />
+
           {preview && <div className="bg-white rounded-2xl border p-5 space-y-3" id="line-preview-box">
+            {(preview.blocked?.admin || preview.blocked?.staff) && <div className="text-xs font-bold text-amber-700 bg-amber-50 rounded-lg p-2">⚠ ตามการตั้งค่า: {preview.blocked.admin ? 'ไม่ส่งถึงแอดมิน ' : ''}{preview.blocked.staff === 'off_hours' ? 'ไม่ส่งถึง จนท. (นอกเวลาทำการ)' : preview.blocked.staff ? 'ไม่ส่งถึง จนท. (ปิดอยู่)' : ''}</div>}
             <div className="flex justify-between"><b>ตัวอย่างข้อความ (ยังไม่ส่ง)</b><button onClick={() => setPreview(null)} className="text-slate-400"><i className="fa-solid fa-xmark"></i></button></div>
             {preview.admin?.text ? <div><div className="text-xs font-bold text-slate-500">ถึงแอดมิน: {(preview.admin.to || []).join(', ') || '-'}</div><pre className="whitespace-pre-wrap text-sm bg-green-50 rounded-xl p-3 font-sans">{preview.admin.text}</pre></div> : <div className="text-sm text-slate-500">ไม่มีข้อความถึงแอดมิน (ไม่มีใบใหม่ และไม่มียาที่เพิ่งเข้าเกณฑ์ 180/30 วัน)</div>}
             {(preview.staff || []).map((s, i) => <div key={i}><div className="text-xs font-bold text-slate-500">{s.hospital} → {(s.to || []).join(', ') || 'ไม่มีผู้ผูก LINE'}</div><pre className="whitespace-pre-wrap text-sm bg-slate-50 rounded-xl p-3 font-sans">{s.text}</pre></div>)}
@@ -9080,14 +9116,46 @@ const AdminConfigView = ({ ctx }) => {
                 {(preflight.errors || []).length > 0 && <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700"><b>ต้องแก้ก่อนส่ง:</b><ul className="list-disc ml-5 mt-1">{preflight.errors.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
                 {(preflight.warnings || []).length > 0 && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800"><ul className="list-disc ml-5">{preflight.warnings.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
                 {preflight.live_send_enabled === false && <div className="bg-slate-100 rounded-xl p-3 text-sm">Bridge ตั้ง allow_live_send=false — ตรวจได้แต่ยังส่งจริงไม่ได้</div>}
-                <div className="overflow-x-auto max-h-80 border rounded-xl">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 sticky top-0"><tr><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">ชื่อ</th><th className="p-2 text-right">จำนวน</th><th className="p-2 text-left">Lot / หมดอายุ</th><th className="p-2 text-right">คงคลัง lot</th><th className="p-2 text-right bg-sky-50">คงคลังรวมทุก lot</th><th className="p-2 text-right bg-sky-50">เหลือหลังเบิก</th><th className="p-2 text-right">มูลค่า</th></tr></thead>
-                    <tbody>{(preflight.items || []).map(x => (
-                      <tr key={x.drug_id} className="border-t"><td className="p-2 font-mono">{x.drug_id}</td><td className="p-2">{x.drug_name}</td><td className="p-2 text-right">{iqNum(x.qty)}</td><td className="p-2">{x.lot_no} · {x.expiry}</td><td className="p-2 text-right">{iqNum(x.lot_qty_on_hand)}</td><td className="p-2 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className={`p-2 text-right font-bold bg-sky-50 ${x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty) ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, x.vmi_pack_size || x.pack_ratio) : '-'}</td><td className="p-2 text-right">{iqMoney(x.value)}</td></tr>
-                    ))}</tbody>
-                  </table>
-                </div>
+                {/* v6.26 layout แบบใบเบิก: หมวด → ตำแหน่ง (compareByLocation) · ลำดับที่ · เส้นจุดกลุ่มตำแหน่งเดียวกัน */}
+                {(() => {
+                  const types = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+                  const reqById = new Map(items.map(it => [String(it.drugId), it]));
+                  const rows = (preflight.items || []).map(x => {
+                    const d = ctx.findDrug(x.drug_id) || {}; const it = reqById.get(String(x.drug_id)) || {};
+                    return { x, d, it, type: String(it.type || d.type || '1'), loc: safeText(d.invs_location), name: it.name || d.drug_name || x.drug_name || '' };
+                  }).sort((a, b) => a.type.localeCompare(b.type, undefined, { numeric: true }) || compareByLocation(a.loc, a.name, b.loc, b.name));
+                  let n = 0, lastType = null, lastGrp = null;
+                  const body = [];
+                  rows.forEach(r => {
+                    const { x, d, it } = r; const pack = it.packSize || x.vmi_pack_size || x.pack_ratio;
+                    if (r.type !== lastType) { body.push(<tr key={'t' + r.type} className="bg-slate-100"><td colSpan="11" className="p-1.5 font-black text-slate-700">{types[r.type] || 'หมวด ' + r.type}</td></tr>); lastType = r.type; lastGrp = null; }
+                    const grp = locationGroupKey(r.loc); const same = lastGrp !== null && grp && grp === lastGrp; lastGrp = grp;
+                    n++;
+                    const short = x.stock_after !== undefined && toSafeNumber(x.stock_before) < toSafeNumber(x.qty);
+                    body.push(<tr key={x.drug_id} className="iq-pf-row" style={{ borderTop: same ? '1px dotted #94a3b8' : '1px solid #cbd5e1' }}>
+                      <td className="p-1.5 text-center">{n}</td>
+                      <td className="p-1.5"><div className="font-bold">{r.name}</div>{r.loc && <div className="text-[10px] text-slate-400">{r.loc}</div>}</td>
+                      <td className="p-1.5 text-center">{it.unit || d.unit || '-'}</td>
+                      <td className="p-1.5 text-center">{safePackSize(pack) > 1 ? safePackSize(pack) : '-'}</td>
+                      <td className="p-1.5 text-right">{it.drugId ? qtyWithReceivedText(it, it.dispenseQty, pack) : '-'}</td>
+                      <td className="p-1.5 text-right font-bold">{formatQty(x.qty, pack)}</td>
+                      <td className="p-1.5 font-mono text-[11px]">{x.lot_no || '-'}<div className="text-slate-400">{x.expiry || ''}{x.lot_qty_on_hand !== undefined ? ' · lot ' + formatQty(x.lot_qty_on_hand, pack) : ''}</div></td>
+                      <td className="p-1.5 text-right bg-sky-50">{x.stock_before !== undefined ? formatQty(x.stock_before, pack) : '-'}</td>
+                      <td className={`p-1.5 text-right font-bold bg-sky-50 ${short ? 'text-red-600' : 'text-sky-700'}`}>{x.stock_after !== undefined ? formatQty(x.stock_after, pack) : '-'}</td>
+                      <td className="p-1.5 text-right">{iqMoney(x.value)}</td>
+                      <td className="p-1.5 font-mono text-[11px]">{drugCodeLabel(x.drug_id, d.old_code)}</td>
+                    </tr>);
+                  });
+                  return (
+                    <div className="overflow-x-auto max-h-[60vh] border rounded-xl" id="iq-preflight-form">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 sticky top-0 z-10"><tr><th className="p-1.5">ที่</th><th className="p-1.5 text-left">รายการ</th><th className="p-1.5">หน่วย</th><th className="p-1.5">บรรจุ</th><th className="p-1.5 text-right">จำนวนเบิก</th><th className="p-1.5 text-right">ส่ง INVS</th><th className="p-1.5 text-left">Lot / EXP</th><th className="p-1.5 text-right bg-sky-50">คงคลังรวมทุก lot</th><th className="p-1.5 text-right bg-sky-50">เหลือหลังเบิก</th><th className="p-1.5 text-right">มูลค่า</th><th className="p-1.5 text-left">รหัส</th></tr></thead>
+                        <tbody>{body}</tbody>
+                        <tfoot><tr className="border-t-2 bg-slate-50 font-black"><td colSpan="9" className="p-1.5 text-right">รวม {n} รายการ</td><td className="p-1.5 text-right">{iqMoney(preflight.total_value)}</td><td></td></tr></tfoot>
+                      </table>
+                    </div>
+                  );
+                })()}
                 <div className="flex justify-end gap-2">
                   <button onClick={() => setPreflight(null)} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ปิด</button>
                   <button onClick={doSendAndApprove} disabled={!!busy || !preflight.ok || preflight.live_send_enabled === false} className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-40">

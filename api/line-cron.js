@@ -1,7 +1,7 @@
 // Sawee Rxfill — สรุปแจ้งเตือน LINE (เรียกโดย Vercel Cron ตาม vercel.json หรือแอดมินจาก LINE Console)
 // แอดมิน: ใบเบิกใหม่ทุกประเภท + ยาใกล้หมดอายุทุกรายการ (ส่งเมื่อมีอะไรใหม่/เปลี่ยน) · รพ.สต.: ล็อตของหน่วยตัวเองที่เพิ่งเข้าเกณฑ์ ≤180 / ≤30 วัน
 // auth: Authorization: Bearer <CRON_SECRET> (Vercel Cron) หรือ POST { idToken, dryRun } จากแอดมิน
-const { crypto, env, SITE, fsGet, fsSet, fsQuery, nowTs, tsMs, quotaStatus, pushText, verifyUser, isAdminRole, readJson, logLine } = require('./_lib/core');
+const { crypto, env, SITE, lineSettings, settingsBlock, fsGet, fsSet, fsQuery, nowTs, tsMs, quotaStatus, pushText, verifyUser, isAdminRole, readJson, logLine } = require('./_lib/core');
 
 const DISCLAIMER = 'เป็นข้อความจากระบบ กรุณาเช็คยาจริง\nหากวันหมดอายุ (EXP) ไม่ถูกต้อง สามารถแก้ไขได้ในหน้า "คลังยาของฉัน"';
 const daysTo = (raw) => {
@@ -76,6 +76,8 @@ async function runDigest({ dryRun }) {
 
   const out = { since, newReqCount: newReqs.length, near30: near30.length, near180: near180.length, admin: null, staff: [], sent: 0, skipped: 0 };
   const quota = dryRun ? await quotaStatus() : null;
+  const settings = await lineSettings();
+  out.blocked = { admin: settingsBlock(settings, 'admin'), staff: settingsBlock(settings, 'staff') };
 
   // ----- ล็อตที่เพิ่งข้ามเกณฑ์ 180 / 30 วัน — แจ้งครั้งเดียวต่อเกณฑ์ ไม่ส่งซ้ำวันถัดไป -----
   const levelsDoc = (await fsGet('line_meta/expiry_levels')) || {};

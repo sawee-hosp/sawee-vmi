@@ -3,7 +3,7 @@
 //   test       → ส่งข้อความทดสอบหาตัวเอง
 //   dispensed  (admin, reqId) → แจ้ง จนท.รพ.สต. ว่าห้องยาจัดยาเรียบร้อย + ลิงก์ใบสรุปการจ่าย
 //   unlink     (admin, uid) → ยกเลิกการผูก LINE ของผู้ใช้
-const { fsGet, fsPatch, fsQuery, quotaStatus, pushText, verifyUser, isAdminRole, readJson, sheetUrl, thb, SITE } = require('./_lib/core');
+const { fsGet, fsSet, fsPatch, fsQuery, quotaStatus, pushText, lineSettings, settingsBlock, verifyUser, isAdminRole, readJson, sheetUrl, thb, SITE } = require('./_lib/core');
 
 // รอบบิลแบบปีงบ เช่น 01/2570 (เดียวกับ formatBillRound)
 const roundText = (r) => {
@@ -20,6 +20,8 @@ async function notifyDispensed(reqId, admin) {
   const hosp = (await fsGet('master_hospitals/' + hid)) || {};
   const staff = (await fsQuery('users', [['hospital_id', 'EQUAL', hid]])).filter(u => u.line_user_id && !isAdminRole(u.role) && u.status !== 'Inactive');
   if (!staff.length) return { sent: 0, skipped: 0, note: 'ไม่มีผู้ใช้ รพ.สต. นี้ที่ผูก LINE' };
+  const blk = settingsBlock(await lineSettings(), 'staff');
+  if (blk) return { sent: 0, skipped: staff.length, blocked: blk, note: blk === 'off_hours' ? 'นอกเวลาทำการ — ไม่ส่ง LINE' : 'ปิดแจ้งเตือน จนท. ใน LINE Console' };
   const snap = Array.isArray(r.invs_request_lot_snapshot) ? r.invs_request_lot_snapshot : [];
   const itemCount = new Set(snap.map(x => String(x.drug_id))).size || Number(r.invs_total_item) || 0;
   const value = Number(r.invs_total_value) || snap.reduce((s, x) => s + (Number(x.value) || 0), 0);
@@ -53,8 +55,17 @@ module.exports = async (req, res) => {
     switch (body.action) {
       case 'status': {
         if (!admin) return res.status(403).json({ ok: false, error: 'admin only' });
-        const [quota, state] = await Promise.all([quotaStatus(), fsGet('line_meta/state')]);
-        return res.status(200).json({ ok: true, quota, state: state || {} });
+        const [quota, state, settings] = await Promise.all([quotaStatus(), fsGet('line_meta/state'), lineSettings()]);
+        return res.status(200).json({ ok: true, quota, state: state || {}, settings });
+      }
+      case 'settings': {
+        if (!admin) return res.status(403).json({ ok: false, error: 'admin only' });
+        const b = body.settings || {}, okHm = v => /^\d{2}:\d{2}$/.test(String(v || ''));
+        const next = { staff_enabled: b.staff_enabled !== false, admin_enabled: b.admin_enabled !== false, work_hours_only: !!b.work_hours_only,
+          work_start: okHm(b.work_start) ? b.work_start : '08:30', work_end: okHm(b.work_end) ? b.work_end : '16:30',
+          updated_by: user.name || user.uid, updated_at: { __ts: new Date().toISOString() } };
+        await fsSet('line_meta/settings', next, true);
+        return res.status(200).json({ ok: true, settings: next });
       }
       case 'test': {
         if (!user.line_user_id) return res.status(400).json({ ok: false, error: 'บัญชีนี้ยังไม่ได้ผูก LINE' });

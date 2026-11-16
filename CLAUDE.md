@@ -253,3 +253,9 @@
 - `buildInternalReqFormHtml` ห้องยา: ยาที่จำนวนจ่าย 0 แสดง "-" แทน 0 ในช่อง Target / จำนวนจ่าย / มูลค่า (รายการเพิ่มเองยังเว้นว่าง)
 - tests/v625.js
 
+
+## v6.26 หน้าตรวจก่อนส่ง INVS แบบใบเบิก · สวิตช์แจ้งเตือน LINE
+- คิวใบภายใน (app.html InternalReviewPanel) modal ตรวจก่อนส่ง INVS `#iq-preflight-form`: หมวด → ตำแหน่ง (`compareByLocation`) · ที่ · รายการ(+ตำแหน่ง) · หน่วย · บรรจุ · จำนวนเบิก (`qtyWithReceivedText`) · ส่ง INVS · Lot/EXP · คงคลังรวมทุก lot · เหลือหลังเบิก · มูลค่า · รหัส (`drugCodeLabel`) · เส้นจุดกลุ่มตำแหน่งเดียวกัน · รวม n รายการ
+- LINE Console `LineSettingsPanel` (`#line-settings`) → `line-notify` action `settings` (แอดมิน) เขียน `line_meta/settings` {staff_enabled, admin_enabled, work_hours_only, work_start, work_end}
+  - `core.pushText` ตรวจทุกครั้ง (`settingsBlock`): ปิด จนท./แอดมิน หรือนอกเวลาทำการ (จ.–ศ. เวลาไทย, เฉพาะ จนท.) = ไม่ส่ง + log skipped · test ส่งได้เสมอ · dispensed คืน `blocked` · cron dryRun แสดงคำเตือน
+- tests/v626.js

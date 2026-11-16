@@ -1,6 +1,7 @@
 <?php
 /**
  * Sawee Rxfill -> INVS Integrated API v2.3.0
+ *   v2.17.0: คงคลังรวมไม่พอ = error บล็อกส่ง (invs.block_if_stock_short ค่าเริ่มต้น true) · invs_master ส่ง type_code/type_name (ประเภทยา) ด้วย
  *   v2.16.0: preflight/send ใช้คงคลังจริง (inv_md_c) อย่างเดียว — ไม่หักเอกสารค้างยืนยันอีก (ยอดค้างใช้เฉพาะวางแผนคิว stock_projection)
  *   v2.15.0: action invs_doc_values (อ่านอย่างเดียว) มูลค่าจริงหลังยืนยันจ่ายใน INVS ต่อเอกสาร/ยา (บรรทัดที่ไม่ถูกยกเลิก) — เว็บบันทึกทับราคาประมาณการ
  *   v2.14.0: ยอดค้างในเอกสาร INVS ที่ยังไม่ยืนยัน (sm_po_c CONFIRM_FLAG<>'Y' คลังเดียวกัน) — preflight หักออกก่อนคิด stock_after/alloc/lots_after
@@ -32,7 +33,7 @@
 declare(strict_types=1);
 date_default_timezone_set('Asia/Bangkok');
 
-const BRIDGE_VERSION = '2.16.0';
+const BRIDGE_VERSION = '2.17.0';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const FIRESTORE_SCOPE = 'https://www.googleapis.com/auth/datastore';
 
@@ -604,7 +605,8 @@ function buildPreflight(mysqli $db,array $config,array $req,array $hospital,stri
             $all=totalOnHand($db,$drugId,$stockId);
             $msg="{$drugId}: ขอ {$qty} แต่ lot ตั้งต้น {$lot['LOT_NO']} เหลือ {$lotQty}";
             if ($all['qty']>=$qty) $warnings[]=$msg." — รวม {$all['lots']} lot ในคลังมี {$all['qty']} พอจ่าย: ส่งได้ ให้ตัดข้าม lot/ปรับจำนวนตอนยืนยันจ่ายใน INVS";
-            elseif (!empty($config['invs']['block_if_first_lot_short'])) $errors[]=$msg." และรวมทุก lot ในคลังมีแค่ {$all['qty']} (บล็อกการส่ง — ลดจำนวนจ่ายก่อน)";
+            // v2.17.0 คงคลังรวมไม่พอ = บล็อกเป็นค่าเริ่มต้น (เดิมส่งได้แล้ว INVS ตัดจนเหลือ 0) — ปิดได้ด้วย invs.block_if_stock_short=false
+            elseif (!empty($config['invs']['block_if_first_lot_short']) || (($config['invs']['block_if_stock_short'] ?? true) !== false)) $errors[]=$msg." และรวมทุก lot ในคลังมีแค่ {$all['qty']} (ของไม่พอ — แอดมินแก้จำนวน/รับของเพิ่ม/ดึงกองMR ก่อนส่ง)";
             else $warnings[]=$msg." และรวมทุก lot ในคลังมีแค่ {$all['qty']} — INVS จะจ่ายได้ไม่ครบ";
         }
         $allLots=lotsOnHand($db,$drugId,$stockId);
@@ -1021,6 +1023,21 @@ ORDER BY TRIM(g.WORKING_CODE) ASC
 SQL;
 }
 
+function invsMasterTypes(mysqli $db, array $config): array {
+    $colsOf=function(string $t) use ($db): array { $o=[]; $st=$db->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?"); $st->bind_param('s',$t); $st->execute(); $res=$st->get_result(); while ($r=$res->fetch_assoc()) $o[strtoupper((string)$r['COLUMN_NAME'])]=(string)$r['COLUMN_NAME']; $st->close(); return $o; };
+    $q=fn($x)=>'`'.str_replace('`','``',$x).'`';
+    $g=$colsOf('drug_gn'); $want=strtoupper(cleanText($config['invs']['type_column'] ?? ''));
+    $col=''; foreach (array_filter([$want,'DRUG_TYPE','TYPE_ID','TYPE_CODE','DG_TYPE','GROUP_ID','DRUG_GROUP']) as $c) if (isset($g[$c])) { $col=$g[$c]; break; }
+    if ($col==='') return [[],[],''];
+    $by=[]; $res=$db->query("SELECT TRIM(WORKING_CODE) wc, TRIM(CAST(".$q($col)." AS CHAR)) t FROM drug_gn");
+    while ($r=$res->fetch_assoc()) $by[cleanText($r['wc'])]=cleanText((string)$r['t']); $res->free();
+    $types=[];
+    $tt=cleanText($config['invs']['type_table'] ?? ''); $tid=cleanText($config['invs']['type_id_col'] ?? ''); $tnm=cleanText($config['invs']['type_name_col'] ?? '');
+    if ($tt==='') foreach (['drug_type','type_drug','drug_group','med_type'] as $c) { $cc=$colsOf($c); if ($cc) { $tt=$c; foreach (['TYPE_ID','DRUG_TYPE','TYPE_CODE','GROUP_ID','ID'] as $k) if (isset($cc[$k])) { $tid=$tid ?: $cc[$k]; break; } foreach (['TYPE_NAME','DRUG_TYPE_NAME','GROUP_NAME','NAME','DESCRIPTION'] as $k) if (isset($cc[$k])) { $tnm=$tnm ?: $cc[$k]; break; } break; } }
+    if ($tt!=='' && $tid!=='' && $tnm!=='') { try { $res=$db->query("SELECT TRIM(CAST(".$q($tid)." AS CHAR)) i, ".$q($tnm)." n FROM ".$q($tt)); while ($r=$res->fetch_assoc()) $types[]=['type_code'=>cleanText((string)$r['i']),'type_name'=>cleanText((string)$r['n'])]; $res->free(); } catch (Throwable $e) { $types=[]; } }
+    return [$by,$types,$col];
+}
+
 if ($action==='invs_master') {
     $admin=requireAdmin($config,$body);
     try {
@@ -1028,16 +1045,20 @@ if ($action==='invs_master') {
         $units=[]; $res=$db->query("SELECT SU_ID, SALE_UNIT, HIDE, SU_ID_EX FROM sale_unit ORDER BY SU_ID");
         while ($r=$res->fetch_assoc()) $units[]=['unit_id'=>cleanText((string)$r['SU_ID']),'unit_name'=>cleanText($r['SALE_UNIT'] ?? ''),'su_id_ex'=>cleanText($r['SU_ID_EX'] ?? ''),'hide'=>cleanText($r['HIDE'] ?? '')];
         $res->free();
+        // v2.17.0 ประเภทยา: คอลัมน์ใน drug_gn (config invs.type_column หรือเดาจากชื่อคอลัมน์) + ชื่อประเภท (invs.type_table/type_id_col/type_name_col ไม่บังคับ)
+        [$typeByDrug,$types,$typeCol]=invsMasterTypes($db,$config);
         $rows=[]; $res=$db->query(invsMasterSql(invsMasterUnitJoin($db)));
         while ($r=$res->fetch_assoc()) {
             $id=cleanText($r['drug_id'] ?? ''); if ($id==='') continue;
+            $r['type_code']=$typeByDrug[$id] ?? '';
             $rows[]=['drug_id'=>$id,'invs_drug_name'=>cleanText($r['invs_drug_name'] ?? ''),'unit_id'=>cleanText((string)($r['unit_id'] ?? '')),
                 'unit_name'=>cleanText($r['unit_name'] ?? ''),'unit_id_ex'=>cleanText($r['unit_id_ex'] ?? ''),
-                'pack_size'=>finiteNumber($r['pack_size'] ?? 0),'price'=>finiteNumber($r['price'] ?? 0),'last_datetime'=>cleanText((string)($r['last_datetime'] ?? ''))];
+                'pack_size'=>finiteNumber($r['pack_size'] ?? 0),'price'=>finiteNumber($r['price'] ?? 0),'last_datetime'=>cleanText((string)($r['last_datetime'] ?? '')),
+                'type_code'=>cleanText((string)$r['type_code'])];
         }
         $res->free(); $db->close();
         logBridge($config,'INFO','INVS_MASTER',['admin_uid'=>$admin['uid'],'rows'=>count($rows)]);
-        respond(['ok'=>true,'action'=>'invs_master','rows'=>$rows,'units'=>$units,'bridge_version'=>BRIDGE_VERSION]);
+        respond(['ok'=>true,'action'=>'invs_master','rows'=>$rows,'units'=>$units,'types'=>$types,'type_column'=>$typeCol,'bridge_version'=>BRIDGE_VERSION]);
     } catch (Throwable $e) {
         if (isset($db) && $db instanceof mysqli) { try { $db->close(); } catch (Throwable $ignore) {} }
         respondError('BRIDGE_ERROR',$e->getMessage(),500);

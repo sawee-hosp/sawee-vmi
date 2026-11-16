@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.26.0"></script>
+  <script src="shared.js?v=6.27.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.26.0';
+      var need = '6.27.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -2837,6 +2837,33 @@ const ReturnDrugView = ({ ctx }) => {
       );
     };
 
+    // v6.27 ดักสับสนหน่วยตอนส่งใบ: ทุกรายการที่ติดธงต้องเลือก "ใช่" / "เปลี่ยนเป็นแพ็ก" ก่อนส่ง (ตอบ "ใช่" = จำไว้ไม่เตือนซ้ำ)
+    const QtyCheckModal = ({ flags, scope, onClose, onApply }) => {
+      const [pick, setPick] = useState({});
+      const done = flags.every(f => pick[f.drugId]);
+      const apply = () => { const changes = new Map(); flags.forEach(f => { if (pick[f.drugId] === 'pack') changes.set(String(f.drugId), f.suggestPack); else qtyOkRemember(scope, f.drugId, f.qty); }); onApply(changes); };
+      return (
+        <Modal isOpen onClose={onClose} title="ตรวจหน่วยก่อนส่งใบเบิก" maxWidth="max-w-3xl">
+          <div className="space-y-3" id="qty-check-modal">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-900"><i className="fa-solid fa-triangle-exclamation mr-1"></i>รายการต่อไปนี้จำนวนอาจผิดหน่วย — กรุณายืนยันทีละรายการ (ถ้าเบิกจำนวนนี้จริง ระบบจะจำไว้และไม่ถามซ้ำ)</div>
+            {flags.map(f => { const pack = safePackSize(f.packSize); const p = pick[f.drugId];
+              return <div key={f.drugId} className="border rounded-xl p-3 space-y-2 qty-check-row" data-id={f.drugId}>
+                <div className="font-bold">{f.name} <span className="text-xs text-slate-400 font-mono">{f.drugId}</span></div>
+                <div className="text-lg">ขอ <b className="text-red-600">{f.qty.toLocaleString('th-TH')} {f.unit || 'หน่วยย่อย'}</b>{pack > 1 && <span className="text-sm text-slate-500"> (= {formatQty(f.qty, pack)} แพ็ก · 1 แพ็ก = {pack.toLocaleString('th-TH')} {f.unit || ''})</span>}</div>
+                <ul className="text-xs text-amber-800 list-disc ml-5">{f.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => setPick(x => ({ ...x, [f.drugId]: 'yes' }))} className={`qty-check-yes px-3 py-2 rounded-xl border-2 font-bold text-sm ${p === 'yes' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200'}`}>ใช่ เบิก {f.qty.toLocaleString('th-TH')} {f.unit || ''} จริง</button>
+                  {f.suggestPack > 0 && <button onClick={() => setPick(x => ({ ...x, [f.drugId]: 'pack' }))} className={`qty-check-pack px-3 py-2 rounded-xl border-2 font-bold text-sm ${p === 'pack' ? 'border-indigo-500 bg-indigo-50 text-indigo-800' : 'border-slate-200'}`}>เปลี่ยนเป็น {f.qty.toLocaleString('th-TH')} แพ็ก = {f.suggestPack.toLocaleString('th-TH')} {f.unit || ''}</button>}
+                </div>
+              </div>; })}
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">กลับไปแก้จำนวน</button>
+              <button id="qty-check-go" onClick={apply} disabled={!done} className="px-5 py-2 rounded-xl bg-emerald-600 text-white font-bold disabled:opacity-40">ยืนยัน ส่งใบต่อ</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    };
 const CreateReqView = ({ ctx, round = null }) => {
       const hospId = ctx.targetUploadHosp || ctx.currentUser.hospital_id; 
       const isAdmin = ctx.currentUser.role === 'admin';
@@ -3674,13 +3701,21 @@ return ctx.editReqId || savedNewIdRef.current || buildRequisitionId(hospId, curr
          }
       };
 
-      const handleSubmitPreCheck = () => {
+      const [qtyFlags, setQtyFlags] = useState(null);
+      const handleSubmitPreCheck = (skipQtyCheck) => {
+         if (skipQtyCheck !== true) skipQtyCheck = false;
          if (isSubmitting) return;
          if (duplicateCreateBlocked) return ctx.showToast(`เดือนนี้มีใบเบิกอยู่แล้ว (${existingReqForMonth.id}) กรุณาลบอันเก่าออกก่อน`, 'error');
          if(!excelFile && !uploadedExcelUrl && !editingReq?.excel_url && !isAdmin) return ctx.showToast('กรุณาแนบไฟล์ รบ.301 (.xlsx) เพื่อใช้เป็นหลักฐานประกอบการเบิก', 'error');
          if(items.filter(i => toNonNegativeNumber(i.usage) > 0 || toNonNegativeNumber(i.finalRequestedQty ?? i.dispenseQty) > 0).length === 0) return ctx.showToast('ไม่มีรายการเบิกใดๆ กรุณากรอกยอด', 'error');
          if(items.some(i => !Number.isFinite(Number(i.packSize)) || Number(i.packSize) <= 0 || toSafeNumber(i.usage) < 0 || toSafeNumber(i.requestMore) < 0)) return ctx.showToast('พบจำนวนยาหรือขนาดบรรจุไม่ถูกต้อง', 'error');
          
+         // v6.27 ดักสับสนหน่วย: เฉพาะรายการที่ผู้เบิกแก้จำนวนเอง/เพิ่มเอง (ยอดที่ระบบคำนวณไม่ต้องถาม)
+         if (!skipQtyCheck) {
+           const hist = qtyCheckHistory((ctx.appDb.requisitions || []).filter(r => String(r.hospitalId) === String(hospId)).map(r => ({ ...r, _sortKey: String(Number(r.year) * 100 + Number(r.month)) })), { excludeId: editingReq?.id, qtyOf: it => toNonNegativeNumber(it.dispenseQty) });
+           const flags = qtyCheckFlags(items.filter(i => i.manualQtyOverride || i.isAdjusted).map(i => ({ drugId: String(i.drugId), name: i.name, unit: i.unit, packSize: i.packSize, isUnpacked: !!i.isUnpacked, qty: toNonNegativeNumber(i.finalRequestedQty ?? i.dispenseQty) })), hist, 'h:' + hospId);
+           if (flags.length) return setQtyFlags(flags);
+         }
          ctx.setConfirmDialog({
             title: 'ยืนยันการส่งใบเบิก?',
             message: 'กรุณาตรวจสอบข้อมูลให้ครบถ้วน ยืนยันการส่งข้อมูลเข้าระบบหรือไม่?',
@@ -4070,7 +4105,12 @@ return ctx.editReqId || savedNewIdRef.current || buildRequisitionId(hospId, curr
                 <span className={`ml-3 font-bold ${isDirty?'text-amber-600':'text-emerald-600'}`}>{isDirty?'มีข้อมูลยังไม่บันทึก':'บันทึกล่าสุดแล้ว'}</span>
               </div>
               <div className="flex gap-2">
-                <button onClick={handleSubmitPreCheck} disabled={isSubmitting} className="h-10 px-5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50"><i className="fa-solid fa-paper-plane mr-2"></i>{isSubmitting?'กำลังบันทึก...':'ส่งใบเบิก'}</button>
+                {qtyFlags && <QtyCheckModal flags={qtyFlags} scope={'h:' + hospId} onClose={() => setQtyFlags(null)} onApply={(changes) => {
+                  setQtyFlags(null);
+                  if (!changes.size) return handleSubmitPreCheck(true);
+                  setItems(prev => prev.map(i => changes.has(String(i.drugId)) ? recalcWorkingItem(i, { finalRequestedQty: normalizeDispenseQty(changes.get(String(i.drugId)), i), manualQtyOverride: true }) : i));
+                  ctx.showToast('เปลี่ยนเป็นหน่วยแพ็กแล้ว — ตรวจยอดแล้วกด "ส่งใบเบิก" อีกครั้ง'); }} />}
+                <button onClick={() => handleSubmitPreCheck()} disabled={isSubmitting} className="h-10 px-5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50"><i className="fa-solid fa-paper-plane mr-2"></i>{isSubmitting?'กำลังบันทึก...':'ส่งใบเบิก'}</button>
               </div>
             </div>
           </div>
@@ -5791,6 +5831,9 @@ const ViewReqView = ({ ctx }) => {
 
                 {Array.isArray(invsPreflight.errors) && invsPreflight.errors.length>0 && <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-rose-800"><div className="font-black mb-1">ต้องแก้ก่อนส่ง</div>{invsPreflight.errors.map((x,i)=><div key={i}>• {x}</div>)}</div>}
                 {Array.isArray(invsPreflight.warnings) && invsPreflight.warnings.length>0 && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800"><div className="font-black mb-1">คำเตือน</div>{invsPreflight.warnings.map((x,i)=><div key={i}>• {x}</div>)}</div>}
+                <InvsShortBox ctx={ctx} preflight={invsPreflight} busy={isInvsBusy} onRecheck={() => handleInvsPreflight(approveAfterInvs)}
+                  fixMinus={s => toNonNegativeNumber(s.extraQty) + toNonNegativeNumber(editableItems.find(i => String(i.drugId) === s.drugId)?.emergencyQty)}
+                  onFix={(id, q) => { setEditableItems(prev => prev.map(i => String(i.drugId) === String(id) ? { ...i, dispenseQty: q, finalRequestedQty: q, dispensePack: q > 0 ? Math.ceil(q / safePackSize(i.packSize)) : 0, isAdjusted: true, adminNote: `${i.adminNote ? i.adminNote + ' · ' : ''}ของไม่พอ จ่าย ${q}` } : i)); ctx.showToast('แก้จำนวนจ่ายแล้ว — กด "ตรวจ INVS ใหม่" (ระบบบันทึกให้ก่อนตรวจ)'); }} />
 
                 <div className="overflow-auto max-h-[52vh] border rounded-xl">
                   <table className="w-full text-xs whitespace-nowrap">
@@ -5810,7 +5853,7 @@ const ViewReqView = ({ ctx }) => {
                 <div className="flex justify-end gap-2">
                   <button onClick={()=>{ setShowInvsModal(false); setApproveAfterInvs(false); }} disabled={isInvsBusy} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold">ปิด</button>
                   {approveAfterInvs && invsPreflight.already_sent && <button id="invs-approve-only" disabled={isInvsBusy || isApproving} onClick={async ()=>{ setShowInvsModal(false); setApproveAfterInvs(false); await ctx.refreshData(); await handleApprove(); }} className="px-4 py-2 rounded-xl bg-gradient-main text-white font-bold disabled:opacity-50"><i className="fa-solid fa-check-double mr-2"></i>ยืนยันจัดยา (มีใน INVS แล้ว)</button>}
-                  {!invsPreflight.already_sent && <button disabled={isInvsBusy || !invsPreflight.ok || !invsPreflight.live_send_enabled} onClick={()=>ctx.setConfirmDialog({title:'ยืนยันส่งเข้า INVS',message:`ระบบจะสร้าง SM_PO + SM_PO_C จำนวน ${invsPreflight.item_count || 0} รายการในฐาน INVS และล็อกการแก้ใบนี้ใน Sawee VMI หลังส่งสำเร็จ${approveAfterInvs ? ' แล้วยืนยันจัดยา (ตัดสต๊อก) ต่อทันที' : ''} ยืนยันหรือไม่?`,icon:'fa-database',iconColor:'text-cyan-600',confirmBtnClass:'bg-cyan-600 hover:bg-cyan-700',confirmText:approveAfterInvs ? 'ส่ง INVS + ยืนยันจัดยา' : 'ส่งเข้า INVS จริง',onConfirm:handleInvsSend})} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-black disabled:opacity-40"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{approveAfterInvs ? 'ส่ง INVS + ยืนยันจัดยา' : 'ส่งเข้า INVS จริง'}</button>}
+                  {!invsPreflight.already_sent && <button disabled={isInvsBusy || !invsPreflight.ok || !invsPreflight.live_send_enabled || invsShortItems(invsPreflight).length > 0} onClick={()=>ctx.setConfirmDialog({title:'ยืนยันส่งเข้า INVS',message:`ระบบจะสร้าง SM_PO + SM_PO_C จำนวน ${invsPreflight.item_count || 0} รายการในฐาน INVS และล็อกการแก้ใบนี้ใน Sawee VMI หลังส่งสำเร็จ${approveAfterInvs ? ' แล้วยืนยันจัดยา (ตัดสต๊อก) ต่อทันที' : ''} ยืนยันหรือไม่?`,icon:'fa-database',iconColor:'text-cyan-600',confirmBtnClass:'bg-cyan-600 hover:bg-cyan-700',confirmText:approveAfterInvs ? 'ส่ง INVS + ยืนยันจัดยา' : 'ส่งเข้า INVS จริง',onConfirm:handleInvsSend})} className="px-5 py-2 rounded-xl bg-cyan-600 text-white font-black disabled:opacity-40"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{approveAfterInvs ? 'ส่ง INVS + ยืนยันจัดยา' : 'ส่งเข้า INVS จริง'}</button>}
                 </div>
               </div>
             </Modal>
@@ -8568,11 +8611,250 @@ const AdminConfigView = ({ ctx }) => {
 
     // ===== v6.9 Sync รายการยาจาก INVS (ราคา / ขนาดบรรจุ / หน่วย + ยาใหม่) — ดูผลและเลือกก่อนบันทึก =====
     // หลักเดียวกับ cli/sync_master.php: ไม่ทับชื่อที่แสดง หมวด สถานะ fuzzy รอบจ่าย ตัวคูณ ของยาที่มีอยู่
+    // ===================== v6.27 ของไม่พอ = ล็อกการส่ง INVS · กองMR =====================
+    // รายการในผลตรวจ INVS ที่คงคลังรวมทุก lot < จำนวนที่จะส่ง (ต้องให้แอดมินแก้ก่อนส่ง)
+    const invsShortItems = (pf) => (pf && !pf.already_sent ? (pf.items || []) : [])
+      .filter(x => x.stock_before !== undefined && x.stock_before !== null && toSafeNumber(x.stock_before) + 1e-9 < toNonNegativeNumber(x.qty ?? x.QTY_ORDER))
+      .map(x => ({ drugId: String(x.drug_id || x.WORKING_CODE), name: x.drug_name || '', qty: toNonNegativeNumber(x.qty ?? x.QTY_ORDER), have: Math.max(0, toSafeNumber(x.stock_before)),
+        short: toNonNegativeNumber(x.qty ?? x.QTY_ORDER) - Math.max(0, toSafeNumber(x.stock_before)), pack: x.vmi_pack_size || x.pack_ratio, extraQty: toNonNegativeNumber(x.extra_qty) }));
+    // ยาในระบบกองMR = เวชภัณฑ์ (หมวด 32) ทั้งหมด + ยาที่ติ๊ก mr_pool เอง (mr_pool === false = เอาออก)
+    const isMrPoolDrug = (d) => !!d && d.mr_pool !== false && (d.mr_pool === true || String(d.type) === '32');
+    const loadMrPool = async (ids) => {
+      const out = new Map(); const list = [...new Set((ids || []).map(String))];
+      for (let i = 0; i < list.length; i += 10) {
+        const snap = await db.collection('mr_pool').where('drug_id', 'in', list.slice(i, i + 10)).get();
+        snap.docs.forEach(d => out.set(String(d.data().drug_id || d.id), { id: d.id, ...d.data() }));
+      }
+      return out;
+    };
+    const mrLotsFefo = (lots) => [...(lots || [])].filter(l => toNonNegativeNumber(l.qty) > 0).sort((a, b) => String(a.expiry || '99999999').localeCompare(String(b.expiry || '99999999')));
+    const mrAllocate = (lots, need) => { let left = need; const out = []; mrLotsFefo(lots).forEach(l => { if (left <= 0) return; const q = Math.min(left, toNonNegativeNumber(l.qty)); out.push({ lot_no: safeText(l.lot_no), expiry: safeText(l.expiry), qty: q }); left -= q; }); if (left > 1e-9) out.push({ lot_no: '', expiry: '', qty: left }); return out; };
+    const mrExp = (e) => { const s = String(e || '').replace(/\D/g, ''); return s.length >= 8 ? `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)}` : (e || '-'); };
+
+    // ดึงของจากกองMR = คืนจากห้องยาเข้าคลังใหญ่ใน INVS (แอดมินคีย์ในเมนูคืนยาของ INVS เอง ตาม lot/EXP ที่ระบบบอก) แล้วหักกองMR
+    const MrPullModal = ({ ctx, drugId, need, onDone, onClose }) => {
+      const drug = ctx.findDrug(drugId) || {};
+      const [pool, setPool] = useState(undefined);
+      const [qty, setQty] = useState(0);
+      const [busy, setBusy] = useState(false);
+      useEffect(() => { loadMrPool([drugId]).then(m => { const p = m.get(String(drugId)) || null; setPool(p); setQty(Math.min(toNonNegativeNumber(need), toNonNegativeNumber(p?.qty))); }).catch(() => setPool(null)); }, [drugId]);
+      const have = toNonNegativeNumber(pool?.qty);
+      const plan = mrAllocate(pool?.lots, Math.min(qty, have));
+      const pack = safePackSize(drug.pack_size);
+      const unit = ctx.findUnitName ? ctx.findUnitName(drug) : '';
+      const printList = () => printHtmlDocument(`<!doctype html><html><head><meta charset="utf-8"><title>คืนจากห้องยา ${safeText(drug.drug_name)}</title><style>body{font-family:Sarabun,Tahoma,sans-serif;font-size:12pt;padding:16px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:4px 6px}</style></head><body>
+        <h3>รายการคืนจากห้องยาเข้าคลังใหญ่ (กองMR)</h3><div>${safeText(drugId)} ${safeText(drug.drug_name)} · บรรจุ ${pack}</div><div>คีย์ในเมนู INVS: ระบบคลัง → คืนยา · คืนจาก ห้องยา → ให้กับ คลังใหญ่</div><br>
+        <table><tr><th>Lot No.</th><th>วันหมดอายุ</th><th>จำนวน (หน่วยย่อย)</th></tr>${plan.map(p => `<tr><td>${p.lot_no || '(ไม่ทราบ lot — ดูใน INVS)'}</td><td>${mrExp(p.expiry)}</td><td style="text-align:right">${toNonNegativeNumber(p.qty).toLocaleString('th-TH')}</td></tr>`).join('')}</table>
+        <p>พิมพ์เมื่อ ${new Date().toLocaleString('th-TH')}</p></body></html>`);
+      const confirm = async () => {
+        const q = Math.min(toNonNegativeNumber(qty), have); if (!(q > 0)) return ctx.showToast('จำนวนต้องมากกว่า 0', 'error');
+        setBusy(true);
+        try {
+          const ref = db.collection('mr_pool').doc(String(drugId)); const ts = firebase.firestore.FieldValue.serverTimestamp();
+          let used = [];
+          await db.runTransaction(async (tx) => {
+            const cur = (await tx.get(ref)).data() || {};
+            if (toNonNegativeNumber(cur.qty) + 1e-9 < q) throw new Error('ยอดกองMR เปลี่ยนแล้ว กรุณาเปิดใหม่');
+            used = mrAllocate(cur.lots, q);
+            const lots = mrLotsFefo(cur.lots).map(l => ({ ...l })); used.forEach(u => { const l = lots.find(x => safeText(x.lot_no) === u.lot_no && safeText(x.expiry) === u.expiry); if (l) l.qty = Math.max(0, toNonNegativeNumber(l.qty) - u.qty); });
+            tx.update(ref, { qty: Math.max(0, toNonNegativeNumber(cur.qty) - q), lots: lots.filter(l => toNonNegativeNumber(l.qty) > 0), last_pull_at: ts, updated_at: ts });
+          });
+          await db.collection('mr_pool_events').add({ type: 'PULL', drug_id: String(drugId), drug_name: safeText(drug.drug_name), qty: q, lots: used, note: 'คืนจากห้องยาเข้าคลังใหญ่ (คีย์ใน INVS แล้ว)', by_uid: ctx.currentUser.uid, by_name: safeText(ctx.currentUser.name), at: ts, updated_at: ts });
+          await writeAuditLog(ctx.currentUser, 'MR_POOL_PULL', 'mr_pool', String(drugId), { qty: q });
+          ctx.showToast(`หักกองMR ${q.toLocaleString('th-TH')} แล้ว — กด "ตรวจ INVS ใหม่" เพื่อดูคงคลังหลังคืน`);
+          onDone && onDone(q);
+        } catch (e) { ctx.showToast(e?.message || String(e), 'error'); }
+        finally { setBusy(false); }
+      };
+      return (
+        <Modal isOpen onClose={() => !busy && onClose()} title="ดึงจากกองMR (คืนจากห้องยาเข้าคลังใหญ่)" maxWidth="max-w-2xl">
+          {pool === undefined ? <div className="p-6 text-center text-slate-500"><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังโหลด...</div> : (
+            <div className="space-y-3 text-sm" id="mr-pull-modal">
+              <div><b>{drug.drug_name || drugId}</b> <span className="text-slate-400 font-mono">{drugId}</span> · บรรจุ {pack} {unit}</div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-red-50 rounded-xl p-2"><div className="text-xs text-red-600">ขาด</div><b>{formatQty(need, pack)}</b></div>
+                <div className="bg-amber-50 rounded-xl p-2"><div className="text-xs text-amber-700">กองMR มี</div><b id="mr-pull-have">{formatQty(have, pack)}</b></div>
+                <div className="bg-slate-50 rounded-xl p-2"><label className="text-xs text-slate-500 block" htmlFor="mr-pull-qty">คืนเข้าคลัง (หน่วยย่อย)</label><input id="mr-pull-qty" type="number" min="0" value={qty} onChange={e => setQty(Math.min(have, toNonNegativeNumber(e.target.value)))} className="w-full border rounded px-2 py-1" /></div>
+              </div>
+              {have <= 0 ? <div className="bg-slate-100 rounded-xl p-3">กองMR ไม่มียานี้ — แก้จำนวนจ่าย หรือรับของเข้าคลังก่อน</div> : <>
+                <table className="w-full text-sm border"><thead className="bg-slate-50"><tr><th className="p-1.5 text-left">Lot No.</th><th className="p-1.5 text-left">วันหมดอายุ</th><th className="p-1.5 text-right">จำนวน</th></tr></thead>
+                  <tbody>{plan.map((p, i) => <tr key={i} className="border-t"><td className="p-1.5 font-mono">{p.lot_no || <span className="text-amber-700">ไม่ทราบ lot — ดูใน INVS</span>}</td><td className="p-1.5">{mrExp(p.expiry)}</td><td className="p-1.5 text-right font-bold">{toNonNegativeNumber(p.qty).toLocaleString('th-TH')}</td></tr>)}</tbody></table>
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-xs text-indigo-900 space-y-1">
+                  <div><b>ขั้นตอน:</b> 1) INVS → ระบบคลัง → คืนยา: คืนจาก <b>ห้องยา</b> → ให้กับ <b>คลังใหญ่</b> คีย์ Lot/EXP/จำนวนตามตาราง · 2) กด "คีย์คืนใน INVS แล้ว" · 3) ตรวจ INVS ใหม่</div>
+                  <div className="text-red-700">INVS คืนแล้วยกเลิกไม่ได้ — ตรวจ Lot/EXP ให้ตรงก่อนกดบันทึกใน INVS (lot ไม่ตรง INVS จะแจ้ง error)</div>
+                </div>
+              </>}
+              <div className="flex justify-end gap-2">
+                <button onClick={onClose} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ปิด</button>
+                {have > 0 && <button onClick={printList} className="px-4 py-2 rounded-xl border font-bold"><i className="fa-solid fa-print mr-1"></i>พิมพ์รายการคืน</button>}
+                {have > 0 && <button id="mr-pull-confirm" onClick={confirm} disabled={busy || !(qty > 0)} className="px-4 py-2 rounded-xl bg-amber-600 text-white font-bold disabled:opacity-40">{busy ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : null}คีย์คืนใน INVS แล้ว — หักกองMR</button>}
+              </div>
+            </div>)}
+        </Modal>
+      );
+    };
+
+    // กล่องแดงในหน้าตรวจก่อนส่ง INVS: ยาที่คงคลังไม่พอ → ปุ่มแก้จำนวน / ดึงจากกองMR (ส่ง INVS ไม่ได้จนกว่าจะพอทุกรายการ)
+    const InvsShortBox = ({ ctx, preflight, onFix, onRecheck, busy, fixMinus }) => {
+      const shorts = invsShortItems(preflight);
+      const [pool, setPool] = useState(new Map());
+      const [pull, setPull] = useState(null);
+      const key = shorts.map(s => s.drugId).join(',');
+      useEffect(() => { if (shorts.length) loadMrPool(shorts.map(s => s.drugId)).then(setPool).catch(() => {}); }, [key]);
+      if (!shorts.length) return null;
+      return (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 text-sm space-y-2" id="invs-short-box">
+          <div className="font-black text-red-700"><i className="fa-solid fa-lock mr-1"></i>ของไม่พอ {shorts.length} รายการ — ส่ง INVS ไม่ได้จนกว่าแอดมินจะแก้ (ระบบไม่ตัดจนเหลือ 0 ให้เอง)</div>
+          <table className="w-full text-xs bg-white rounded-lg overflow-hidden">
+            <thead className="bg-red-100"><tr><th className="p-1.5 text-left">รายการ</th><th className="p-1.5 text-right">จะส่ง</th><th className="p-1.5 text-right">คงคลังรวมทุก lot</th><th className="p-1.5 text-right">ขาด</th><th className="p-1.5 text-left">แก้ไข</th></tr></thead>
+            <tbody>{shorts.map(s => { const p = pool.get(s.drugId); const fixTo = Math.max(0, s.have - toNonNegativeNumber(fixMinus ? fixMinus(s) : 0));
+              return <tr key={s.drugId} className="border-t invs-short-row">
+                <td className="p-1.5"><b>{s.name || ctx.findDrug(s.drugId)?.drug_name}</b> <span className="font-mono text-slate-400">{s.drugId}</span></td>
+                <td className="p-1.5 text-right">{formatQty(s.qty, s.pack)}</td><td className="p-1.5 text-right">{formatQty(s.have, s.pack)}</td><td className="p-1.5 text-right font-black text-red-700">{formatQty(s.short, s.pack)}</td>
+                <td className="p-1.5 space-x-1 whitespace-nowrap">
+                  {onFix && <button disabled={busy} onClick={() => onFix(s.drugId, fixTo)} className="invs-short-fix px-2 py-1 rounded-lg bg-slate-700 text-white font-bold">แก้จ่ายเป็น {formatQty(fixTo, s.pack)}</button>}
+                  {toNonNegativeNumber(p?.qty) > 0 && <button disabled={busy} onClick={() => setPull(s)} className="invs-short-mr px-2 py-1 rounded-lg bg-amber-500 text-white font-bold">ดึงจากกองMR (มี {formatQty(p.qty, s.pack)})</button>}
+                </td></tr>; })}</tbody>
+          </table>
+          <div className="text-xs text-red-700">รับของเข้าคลัง INVS แล้ว หรือคืนจากกองMR แล้ว → กด <button disabled={busy} onClick={onRecheck} className="underline font-black">ตรวจ INVS ใหม่</button></div>
+          {pull && <MrPullModal ctx={ctx} drugId={pull.drugId} need={pull.short} onClose={() => setPull(null)} onDone={() => { setPull(null); loadMrPool(shorts.map(s => s.drugId)).then(setPool).catch(() => {}); }} />}
+        </div>
+      );
+    };
+
+    // เมนู "กองMR": นับ (เริ่มต้น/นับซ้ำ) คลังใหญ่ + กองMR → ส่วนเกิน INVS = เข้ากองMR · ขาด = ตัดเข้าห้องยา (ใบเบิกห้องยา mr_adjust)
+    const MrPoolView = ({ ctx }) => {
+      const [pool, setPool] = useState(new Map());
+      const [events, setEvents] = useState([]);
+      const [lots, setLots] = useState(null); // drug_id -> INVS lots (คลังใหญ่)
+      const [count, setCount] = useState({}); // drug_id -> { main, pool, lot, exp }
+      const [q, setQ] = useState('');
+      const [onlyPool, setOnlyPool] = useState(false);
+      const [busy, setBusy] = useState('');
+      const [pull, setPull] = useState(null);
+      const drugs = useMemo(() => (ctx.appDb.drugs || []).filter(d => isMrPoolDrug(d) && !isDrugDiscontinued(d)).sort((a, b) => compareByLocation(safeText(a.invs_location), a.drug_name, safeText(b.invs_location), b.drug_name)), [ctx.appDb.drugs]);
+      const pharmDepts = (ctx.appDb.depts || []).filter(d => d.kind === 'pharmacy' && d.active !== false);
+      const [pharmId, setPharmId] = useState(() => pharmDepts[0]?.dept_id || '');
+      const load = async () => {
+        const snap = await db.collection('mr_pool').get(); const m = new Map(); snap.docs.forEach(d => m.set(String(d.data().drug_id || d.id), { id: d.id, ...d.data() })); setPool(m);
+        const ev = await db.collection('mr_pool_events').orderBy('at', 'desc').limit(30).get().catch(() => null); if (ev) setEvents(ev.docs.map(d => ({ id: d.id, ...d.data() })));
+      };
+      useEffect(() => { load(); }, []);
+      const fetchLots = async () => {
+        setBusy('lots');
+        try { const ids = drugs.map(d => String(d.drug_id)); const out = {};
+          for (let i = 0; i < ids.length; i += 1000) Object.assign(out, (await callInvsBridge('invs_lots', '', { drug_ids: ids.slice(i, i + 1000) })).lots || {});
+          setLots(out); ctx.showToast('ดึงคงคลัง INVS แล้ว'); }
+        catch (e) { ctx.showToast('ดึงคงคลัง INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const onHand = (id) => lots ? (lots[id] || []).reduce((s, l) => s + toNonNegativeNumber(l.qty), 0) : null;
+      const shown = drugs.filter(d => (!onlyPool || toNonNegativeNumber(pool.get(String(d.drug_id))?.qty) > 0) && (!q || `${d.drug_id} ${d.drug_name} ${d.old_code || ''} ${d.invs_location || ''}`.toLowerCase().includes(q.toLowerCase())));
+      const setC = (id, k, v) => setCount(p => ({ ...p, [id]: { ...(p[id] || {}), [k]: v } }));
+      // ผลนับ → ส่วนต่าง: ของจริงคลังใหญ่ − คลัง INVS (บวก = ของ MR ที่จ่ายไปแล้วแต่ยังอยู่ → เข้ากองMR · ลบ = ขาด → ตัดเข้าห้องยา)
+      const rowCalc = (d) => { const id = String(d.drug_id), c = count[id] || {}; const oh = onHand(id);
+        if (c.main === undefined || c.main === '' || oh === null) return null;
+        const diff = toSafeNumber(c.main) - oh; const poolCounted = c.pool === undefined || c.pool === '' ? toNonNegativeNumber(pool.get(id)?.qty) : toNonNegativeNumber(c.pool);
+        return { diff, newPool: poolCounted + Math.max(0, diff), cut: Math.max(0, -diff), oh }; };
+      const counted = drugs.map(d => ({ d, r: rowCalc(d) })).filter(x => x.r);
+      const printSheet = () => printHtmlDocument(`<!doctype html><html><head><meta charset="utf-8"><title>ใบนับกองMR ${new Date().toLocaleDateString('th-TH')}</title><style>body{font-family:Sarabun,Tahoma,sans-serif;font-size:10pt}table{border-collapse:collapse;width:100%}td,th{border:1px solid #444;padding:3px 5px}td.n{width:70px}</style></head><body>
+        <h3>ใบนับคลังใหญ่ + กองMR (นับร่วมห้องยา)</h3><table><tr><th>ที่</th><th>ตำแหน่ง</th><th>รหัส</th><th>รายการ</th><th>บรรจุ</th><th>คลัง INVS</th><th>นับคลังใหญ่ (เต็ม/เศษ)</th><th>นับกองMR + ห้องยาถือ</th><th>Lot/EXP กองMR</th></tr>
+        ${shown.map((d, i) => `<tr><td>${i + 1}</td><td>${safeText(d.invs_location)}</td><td>${drugCodeLabel(d.drug_id, d.old_code)}</td><td>${safeText(d.drug_name)}</td><td>${safePackSize(d.pack_size)}</td><td style="text-align:right">${onHand(String(d.drug_id)) === null ? '' : formatQty(onHand(String(d.drug_id)), d.pack_size)}</td><td class="n"></td><td class="n"></td><td class="n"></td></tr>`).join('')}</table>
+        <p>ผู้นับ ................................ ห้องยา ................................ วันที่ ..............</p></body></html>`);
+      const saveCount = async () => {
+        if (!counted.length) return ctx.showToast('ยังไม่มีรายการที่คีย์ผลนับ (ต้องดึงคงคลัง INVS ก่อน)', 'error');
+        const cuts = counted.filter(x => x.r.cut > 0);
+        if (cuts.length && !pharmId) return ctx.showToast('เลือกหน่วยห้องยาสำหรับตัด MR ก่อน', 'error');
+        setBusy('save');
+        try {
+          const ts = firebase.firestore.FieldValue.serverTimestamp(); const ops = [];
+          counted.forEach(({ d, r }) => { const id = String(d.drug_id), c = count[id] || {}, cur = pool.get(id) || {};
+            const lot = safeText(c.lot), exp = safeText(c.exp).replace(/\D/g, '');
+            let lotsNew = lot || exp ? [{ lot_no: lot, expiry: exp, qty: r.newPool }] : (() => { // ไม่ระบุ lot: คง lot เดิม ปรับให้รวมเท่ายอดใหม่ (ส่วนเพิ่ม = ไม่ทราบ lot)
+              const keep = mrAllocate(cur.lots, Math.min(r.newPool, toNonNegativeNumber(cur.qty))).filter(x => x.lot_no || x.expiry);
+              const rest = r.newPool - keep.reduce((s, x) => s + x.qty, 0); return rest > 1e-9 ? [...keep, { lot_no: '', expiry: '', qty: rest }] : keep; })();
+            lotsNew = lotsNew.filter(l => l.qty > 0);
+            ops.push({ type: 'set', ref: db.collection('mr_pool').doc(id), options: { merge: true }, data: { drug_id: id, drug_name: safeText(d.drug_name), qty: r.newPool, lots: lotsNew,
+              counted_at: ts, counted_by_name: safeText(ctx.currentUser.name), main_count: toSafeNumber(c.main), invs_on_hand_at_count: r.oh, updated_at: ts } });
+            ops.push({ type: 'set', ref: db.collection('mr_pool_events').doc(), data: { type: 'COUNT', drug_id: id, drug_name: safeText(d.drug_name), main_count: toSafeNumber(c.main), invs_on_hand: r.oh, diff: r.diff,
+              pool_before: toNonNegativeNumber(cur.qty), pool_after: r.newPool, cut_mr: r.cut, by_uid: ctx.currentUser.uid, by_name: safeText(ctx.currentUser.name), at: ts, updated_at: ts } });
+          });
+          let cutReqId = '';
+          if (cuts.length) { // ของขาด → ใบตัดเข้าห้องยา (ใบเบิกห้องยาแยก ไม่ปนใบห้องยาปกติ) รอส่ง INVS ในคิวใบเบิกภายใน
+            const dept = pharmDepts.find(x => String(x.dept_id) === String(pharmId)) || {};
+            const items = cuts.map(({ d, r }) => ({ drugId: String(d.drug_id), name: safeText(d.drug_name), unit: ctx.findUnitName ? ctx.findUnitName(d) : '', packSize: safePackSize(d.pack_size), price: toNonNegativeNumber(d.price), type: String(d.type || '1'), requestQty: r.cut, dispenseQty: r.cut, source: 'mr_adjust', note: 'ขาดจากนับกองMR' }));
+            const ref = db.collection('internal_requisitions').doc(); cutReqId = ref.id; const today = toYmd(new Date());
+            ops.push({ type: 'set', ref, data: { deptId: String(pharmId), dept_name: safeText(dept.dept_name) || 'ห้องยา', kind: 'pharmacy', status: 'Pending', mr_adjust: true, form_no: 'MR-' + today.replace(/-/g, '').slice(2), form_date: today,
+              items, total_value: Math.round(items.reduce((s, it) => s + internalItemValue(it), 0) * 100) / 100, admin_note: 'ตัดเข้าห้องยา (ของขาดจากการนับกองMR)', submitted_at: ts, created_at: ts, created_by_uid: ctx.currentUser.uid, created_by_name: safeText(ctx.currentUser.name), updated_at: ts } });
+          }
+          await executeBatchChunks(ops);
+          await writeAuditLog(ctx.currentUser, 'MR_POOL_COUNT', 'mr_pool', 'BATCH', { counted: counted.length, cut: cuts.length, cut_req: cutReqId });
+          ctx.showToast(`บันทึกผลนับ ${counted.length} รายการ${cuts.length ? ` · สร้างใบตัดเข้าห้องยา ${cuts.length} รายการ (คิวใบเบิกภายใน)` : ''}`);
+          setCount({}); await load(); if (cuts.length) await ctx.refreshData();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(''); }
+      };
+      const totalPoolValue = [...pool.values()].reduce((s, p) => { const d = ctx.findDrug(p.drug_id); return s + toNonNegativeNumber(p.qty) / safePackSize(d?.pack_size) * toNonNegativeNumber(d?.price); }, 0);
+      const fmt = v => { const d = v?.toDate ? v.toDate() : v ? new Date(v) : null; return d && !isNaN(d) ? d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '-'; };
+      return (
+        <div className="space-y-5" id="mr-pool-view">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-boxes-stacked text-amber-600 mr-2"></i>กองMR</h2>
+            <div className="flex flex-wrap gap-2">
+              <button id="mr-fetch-lots" onClick={fetchLots} disabled={!!busy} className="px-3 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm">{busy === 'lots' ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : <i className="fa-solid fa-database mr-1"></i>}ดึงคงคลัง INVS</button>
+              <button onClick={printSheet} className="px-3 py-2 rounded-xl border bg-white font-bold text-sm"><i className="fa-solid fa-print mr-1"></i>พิมพ์ใบนับ</button>
+            </div>
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-900 space-y-1">
+            <div><b>กองMR</b> = ของที่ INVS ตัดเป็นห้องยาไปแล้วแต่ยังวางอยู่ในคลัง (เศษ pack แบบเดิม) — แยกวาง/ติดป้าย "กองMR" · ใบเบิกหน่วยงานหยิบจากคลังใหญ่เท่านั้น · กองMR โผล่เฉพาะตอนของไม่พอ (ปุ่มดึงจากกองMR ในหน้าตรวจ INVS)</div>
+            <div><b>นับ:</b> คีย์ "คลังใหญ่" (ของบนชั้นไม่รวมกองMR) และ "กองMR + ห้องยาถือ" → ของจริงคลังใหญ่ <b>มากกว่า</b> INVS = ส่วนเกินย้ายเข้ากองMR · <b>น้อยกว่า</b> = ของขาด สร้างใบตัดเข้าห้องยาทันที</div>
+            <div>กติกาใหม่: เศษจากการแตก pack <b>ไม่ตัด MR</b> — คงอยู่ในคลังใหญ่ INVS ตามจริง</div>
+          </div>
+          <div className="grid md:grid-cols-4 gap-3 text-sm">
+            <div className="bg-white border rounded-xl p-3"><div className="text-xs text-slate-500">ยาในระบบกองMR</div><b className="text-lg">{drugs.length}</b></div>
+            <div className="bg-white border rounded-xl p-3"><div className="text-xs text-slate-500">มีของในกอง</div><b className="text-lg" id="mr-pool-count">{[...pool.values()].filter(p => toNonNegativeNumber(p.qty) > 0).length}</b></div>
+            <div className="bg-white border rounded-xl p-3"><div className="text-xs text-slate-500">มูลค่ากองMR (ประมาณ)</div><b className="text-lg">{totalPoolValue.toLocaleString('th-TH', { maximumFractionDigits: 2 })}</b></div>
+            <div className="bg-white border rounded-xl p-3"><label className="text-xs text-slate-500 block" htmlFor="mr-pharm">ตัด MR เข้าหน่วย</label><select id="mr-pharm" value={pharmId} onChange={e => setPharmId(e.target.value)} className="w-full border rounded px-2 py-1">{pharmDepts.map(d => <option key={d.dept_id} value={d.dept_id}>{d.dept_name}</option>)}</select></div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="ค้นหา รหัส/ชื่อ/ตำแหน่ง" className="border rounded-xl px-3 py-2 text-sm w-72" />
+            <label className="text-sm font-bold text-slate-600"><input type="checkbox" checked={onlyPool} onChange={e => setOnlyPool(e.target.checked)} className="mr-1" />เฉพาะที่มีของในกอง</label>
+            <button id="mr-save-count" onClick={saveCount} disabled={!!busy || !counted.length} className="ml-auto px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-sm disabled:opacity-40">{busy === 'save' ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : null}บันทึกผลนับ ({counted.length})</button>
+          </div>
+          <div className="bg-white border rounded-2xl overflow-auto max-h-[60vh]">
+            <table className="w-full text-sm" id="mr-table">
+              <thead className="bg-slate-100 text-xs sticky top-0"><tr><th className="p-2">ที่</th><th className="p-2 text-left">รายการ</th><th className="p-2">บรรจุ</th><th className="p-2 text-right">คลัง INVS</th><th className="p-2 text-right bg-amber-50">กองMR</th><th className="p-2">นับล่าสุด</th><th className="p-2">นับคลังใหญ่</th><th className="p-2">นับกองMR+ห้องยา</th><th className="p-2">Lot / EXP กอง</th><th className="p-2 text-right">ผล</th><th className="p-2"></th></tr></thead>
+              <tbody>{shown.map((d, i) => { const id = String(d.drug_id), p = pool.get(id), c = count[id] || {}, r = rowCalc(d), pack = safePackSize(d.pack_size), oh = onHand(id);
+                return <tr key={id} className="border-t mr-row" data-id={id}>
+                  <td className="p-2 text-center text-slate-400">{i + 1}</td>
+                  <td className="p-2"><div className="font-semibold">{d.drug_name}</div><div className="text-[11px] text-slate-400">{d.invs_location ? <b className="text-teal-700">{d.invs_location} </b> : null}<span className="font-mono">{drugCodeLabel(id, d.old_code)}</span></div></td>
+                  <td className="p-2 text-center">{pack}</td>
+                  <td className="p-2 text-right">{oh === null ? <span className="text-slate-300">-</span> : formatQty(oh, pack)}</td>
+                  <td className="p-2 text-right bg-amber-50 font-bold">{p ? formatQty(p.qty, pack) : '-'}</td>
+                  <td className="p-2 text-center text-xs">{fmt(p?.counted_at)}</td>
+                  <td className="p-1"><input aria-label={`นับคลังใหญ่ ${d.drug_name}`} className="mr-main w-24 border rounded px-2 py-1 text-right" type="number" min="0" value={c.main ?? ''} disabled={oh === null} placeholder={oh === null ? 'ดึง INVS' : ''} onChange={e => setC(id, 'main', e.target.value)} /></td>
+                  <td className="p-1"><input aria-label={`นับกองMR ${d.drug_name}`} className="mr-pool w-24 border rounded px-2 py-1 text-right" type="number" min="0" value={c.pool ?? ''} placeholder={p ? String(p.qty) : '0'} onChange={e => setC(id, 'pool', e.target.value)} /></td>
+                  <td className="p-1 whitespace-nowrap"><input className="w-20 border rounded px-1 py-1 text-xs" placeholder="Lot" value={c.lot ?? ''} onChange={e => setC(id, 'lot', e.target.value)} list={`mr-lots-${id}`} /><datalist id={`mr-lots-${id}`}>{(lots?.[id] || []).map(l => <option key={l.lot_no + l.expiry} value={l.lot_no}>{mrExp(l.expiry)}</option>)}</datalist>
+                    <input className="w-24 border rounded px-1 py-1 text-xs ml-1" placeholder="EXP yyyymmdd" value={c.exp ?? ''} onChange={e => setC(id, 'exp', e.target.value)} /></td>
+                  <td className="p-2 text-right text-xs whitespace-nowrap mr-result">{!r ? '' : r.diff > 0 ? <span className="text-amber-700 font-bold">เกิน INVS {formatQty(r.diff, pack)} → เข้ากอง · กอง {formatQty(r.newPool, pack)}</span> : r.diff < 0 ? <span className="text-red-600 font-bold">ขาด {formatQty(r.cut, pack)} → ตัดเข้าห้องยา</span> : <span className="text-emerald-700 font-bold">ตรง · กอง {formatQty(r.newPool, pack)}</span>}</td>
+                  <td className="p-2">{toNonNegativeNumber(p?.qty) > 0 && <button onClick={() => setPull({ drugId: id, need: p.qty })} className="text-xs text-amber-700 underline whitespace-nowrap">คืนเข้าคลัง</button>}</td>
+                </tr>; })}</tbody>
+            </table>
+          </div>
+          {events.length > 0 && <div className="bg-white border rounded-2xl p-4"><div className="font-bold text-slate-600 mb-2">ประวัติล่าสุด</div>
+            <table className="w-full text-xs"><tbody>{events.map(e => <tr key={e.id} className="border-t"><td className="p-1">{fmt(e.at)}</td><td className="p-1 font-bold">{e.type === 'COUNT' ? 'นับ' : e.type === 'PULL' ? 'คืนเข้าคลัง' : e.type}</td><td className="p-1">{e.drug_name || e.drug_id}</td>
+              <td className="p-1">{e.type === 'COUNT' ? `INVS ${e.invs_on_hand} · นับ ${e.main_count} · กอง ${e.pool_before}→${e.pool_after}${e.cut_mr ? ` · ตัด MR ${e.cut_mr}` : ''}` : `${e.qty} ${(e.lots || []).map(l => l.lot_no).filter(Boolean).join(', ')}`}</td><td className="p-1 text-slate-400">{e.by_name}</td></tr>)}</tbody></table></div>}
+          {pull && <MrPullModal ctx={ctx} drugId={pull.drugId} need={pull.need} onClose={() => setPull(null)} onDone={() => { setPull(null); load(); }} />}
+        </div>
+      );
+    };
+
     const InvsMasterSyncModal = ({ ctx, onClose }) => {
       const [busy, setBusy] = useState('');
       const [plan, setPlan] = useState(null); // { creates, updates, units, total }
       const [pick, setPick] = useState({});   // drug_id -> true
       const [tab, setTab] = useState('update');
+      const [syncOpt, setSyncOpt] = useState({ name: true, type: true }); // v6.27
       const fetchPlan = async () => {
         setBusy('fetch');
         try {
@@ -8587,12 +8869,19 @@ const AdminConfigView = ({ ctx }) => {
             const priceChanged = price > 0 && (oldPrice <= 0 || Math.abs(oldPrice - price) >= 0.01);
             const packChanged = pack > 0 && (oldPack <= 0 || Math.abs(oldPack - pack) >= 0.0001);
             const unitChanged = unit !== '' && oldUnit !== unit;
-            if (priceChanged || packChanged || unitChanged) updates.push({ r, id, d, price, pack, unit, oldPrice, oldPack, oldUnit, priceChanged, packChanged, unitChanged,
+            // v6.27 ชื่อยา + ประเภท จาก INVS (แหล่งเดียว)
+            const newName = safeText(r.invs_drug_name), oldName = safeText(d.drug_name);
+            const nameChanged = newName !== '' && newName !== oldName;
+            const newType = safeText(r.type_code), oldType = safeText(d.type);
+            const typeChanged = newType !== '' && newType !== oldType;
+            if (priceChanged || packChanged || unitChanged || nameChanged || typeChanged) updates.push({ r, id, d, price, pack, unit, oldPrice, oldPack, oldUnit, priceChanged, packChanged, unitChanged, nameChanged, newName, oldName, typeChanged, newType, oldType,
               pct: priceChanged && oldPrice > 0 ? (price - oldPrice) / oldPrice * 100 : null });
           });
           const unitMap = new Map((ctx.appDb.units || []).map(u => [String(u.unit_id), u]));
           const units = (data.units || []).filter(u => u.unit_id && (!unitMap.has(String(u.unit_id)) || safeText(unitMap.get(String(u.unit_id)).unit_name) !== safeText(u.unit_name)));
-          setPlan({ creates, updates, units, total: (data.rows || []).length });
+          const curTypes = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+          const types = (data.types || []).filter(t => t.type_code && safeText(t.type_name) && safeText(curTypes[t.type_code]) !== safeText(t.type_name));
+          setPlan({ creates, updates, units, types, typeColumn: data.type_column || '', total: (data.rows || []).length });
           const p = {}; updates.forEach(x => { p[x.id] = true; }); creates.forEach(x => { p[x.id] = true; }); setPick(p);
           setTab(updates.length ? 'update' : 'create');
         } catch (e) { ctx.showToast('ดึงรายการยาจาก INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
@@ -8615,11 +8904,14 @@ const AdminConfigView = ({ ctx }) => {
             if (x.priceChanged) Object.assign(data, { price_previous: x.oldPrice, price: x.price, price_source: 'INVS_LATEST_PRICE', price_invs_last_datetime: safeText(x.r.last_datetime), price_updated_at: fv.serverTimestamp() });
             if (x.packChanged) Object.assign(data, { pack_size_previous: x.oldPack, pack_size: x.pack, invs_pack_size: x.pack, pack_size_updated_at: fv.serverTimestamp() });
             if (x.unitChanged) Object.assign(data, { unit_id_previous: x.oldUnit, unit_id: x.unit, unit_updated_at: fv.serverTimestamp() });
+            if (x.nameChanged && syncOpt.name) Object.assign(data, { drug_name_previous: x.oldName, drug_name: x.newName, drug_name_updated_at: fv.serverTimestamp() });
+            if (x.typeChanged && syncOpt.type) Object.assign(data, { type_previous: x.oldType, type: x.newType, type_updated_at: fv.serverTimestamp() });
             ops.push({ type: 'update', ref: db.collection('master_drugs').doc(x.id), data });
           });
+          if ((plan.types || []).length) ops.push({ type: 'set', ref: db.collection('config').doc('drug_types'), options: { merge: true }, data: Object.fromEntries(plan.types.map(t => [String(t.type_code), safeText(t.type_name)])) });
           crs.forEach(x => ops.push({ type: 'set', ref: db.collection('master_drugs').doc(x.id), data: {
             drug_id: x.id, drug_name: safeText(x.r.invs_drug_name) || x.id, price: x.price, pack_size: x.pack, unit_id: x.unit,
-            status: 'Active', unpacked: false, dispense_step: x.pack, usage_multiplier: 1, fuzzy: '', type: '1', needs_vmi_setup: true, created_source: 'INVS',
+            status: 'Active', unpacked: false, dispense_step: x.pack, usage_multiplier: 1, fuzzy: '', type: safeText(x.r.type_code) || '1', needs_vmi_setup: true, created_source: 'INVS',
             invs_drug_name: safeText(x.r.invs_drug_name), invs_pack_size: x.pack, invs_sale_unit: safeText(x.r.unit_name), invs_su_id: x.unit, invs_su_id_ex: safeText(x.r.unit_id_ex),
             master_sync_source: 'INVS', master_sync_version: 'web-6.9', price_source: 'INVS_LATEST_PRICE', price_invs_last_datetime: safeText(x.r.last_datetime),
             price_updated_at: fv.serverTimestamp(), pack_size_updated_at: fv.serverTimestamp(), unit_updated_at: fv.serverTimestamp(), invs_master_synced_at: fv.serverTimestamp(),
@@ -8639,21 +8931,25 @@ const AdminConfigView = ({ ctx }) => {
       return (
         <Modal isOpen onClose={() => !busy && onClose()} title="Sync รายการยาจาก INVS" maxWidth="max-w-6xl">
           <div className="space-y-4">
-            <p className="text-sm text-slate-500">ดึงราคา / ขนาดบรรจุ / หน่วยล่าสุดจาก INVS และยาใหม่ที่ยังไม่มีในระบบ · <b>ไม่ทับ</b> ชื่อที่แสดง หมวด สถานะ ชื่อพ้อง รอบจ่าย ตัวคูณ ของยาที่มีอยู่ · ติ๊กเฉพาะรายการที่ต้องการแล้วกดบันทึก</p>
+            <p className="text-sm text-slate-500">ดึงราคา / ขนาดบรรจุ / หน่วย / <b>ชื่อยา / ประเภท</b> ล่าสุดจาก INVS และยาใหม่ · ชื่อหน่วยนับ (sale_unit) อัปเดตตาม INVS เสมอ (เช่น piece → ชิ้น) · <b>ไม่ทับ</b> สถานะ ชื่อพ้อง รอบจ่าย ตัวคูณ · ติ๊กเฉพาะรายการที่ต้องการแล้วกดบันทึก</p>
+            <div className="flex flex-wrap gap-4 text-sm font-bold text-slate-600" id="invs-sync-opts">
+              <label><input id="invs-sync-name" type="checkbox" checked={syncOpt.name} onChange={e => setSyncOpt(o => ({ ...o, name: e.target.checked }))} className="mr-1" />ซิงก์ชื่อยาตาม INVS</label>
+              <label><input id="invs-sync-type" type="checkbox" checked={syncOpt.type} onChange={e => setSyncOpt(o => ({ ...o, type: e.target.checked }))} className="mr-1" />ซิงก์ประเภท (หมวด) ตาม INVS{plan && !plan.typeColumn ? <span className="text-amber-600 font-normal"> — Bridge ไม่พบคอลัมน์ประเภท (ตั้ง invs.type_column ใน config.php)</span> : null}</label>
+            </div>
             {busy === 'fetch' && <div className="p-8 text-center text-slate-500"><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังอ่านรายการยาจาก INVS...</div>}
             {plan && (<>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                 <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">ยาใน INVS</div><b className="text-lg">{plan.total.toLocaleString('th-TH')}</b></div>
-                <button onClick={() => setTab('update')} className={`text-left rounded-xl p-3 border ${tab === 'update' ? 'border-indigo-400 bg-indigo-50' : 'bg-white'}`}><div className="text-xs text-slate-500">ราคา/บรรจุ/หน่วยเปลี่ยน</div><b className="text-lg">{plan.updates.length}</b></button>
+                <button onClick={() => setTab('update')} className={`text-left rounded-xl p-3 border ${tab === 'update' ? 'border-indigo-400 bg-indigo-50' : 'bg-white'}`}><div className="text-xs text-slate-500">เปลี่ยนจาก INVS (ราคา/บรรจุ/หน่วย/ชื่อ/ประเภท)</div><b className="text-lg">{plan.updates.length}</b></button>
                 <button onClick={() => setTab('create')} className={`text-left rounded-xl p-3 border ${tab === 'create' ? 'border-indigo-400 bg-indigo-50' : 'bg-white'}`}><div className="text-xs text-slate-500">ยาใหม่ (ยังไม่มีในระบบ)</div><b className="text-lg">{plan.creates.length}</b></button>
-                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">หน่วยนับใหม่/เปลี่ยนชื่อ</div><b className="text-lg">{plan.units.length}</b></div>
+                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">หน่วยนับใหม่/เปลี่ยนชื่อ · ประเภทใหม่</div><b className="text-lg">{plan.units.length} · {(plan.types || []).length}</b>{plan.units.length > 0 && <div className="text-[11px] text-slate-500 mt-1 max-h-16 overflow-auto">{plan.units.slice(0, 8).map(u => `${unitName(u.unit_id) !== u.unit_name ? unitName(u.unit_id) + '→' : ''}${u.unit_name}`).join(' · ')}</div>}</div>
               </div>
               <div className="overflow-auto max-h-[50vh] border rounded-xl">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-100 text-xs sticky top-0"><tr>
                     <th className="p-2 w-10"><input type="checkbox" checked={allOn} onChange={toggleAll} aria-label="เลือกทั้งหมด" /></th>
                     <th className="p-2 text-left">รหัส / ชื่อ</th>
-                    {tab === 'update' ? <><th className="p-2 text-right">ราคา/Pack เดิม → ใหม่</th><th className="p-2 text-right">บรรจุ เดิม → ใหม่</th><th className="p-2 text-left">หน่วย เดิม → ใหม่</th></>
+                    {tab === 'update' ? <><th className="p-2 text-right">ราคา/Pack เดิม → ใหม่</th><th className="p-2 text-right">บรรจุ เดิม → ใหม่</th><th className="p-2 text-left">หน่วย เดิม → ใหม่</th><th className="p-2 text-left">ชื่อ / ประเภท</th></>
                       : <><th className="p-2 text-right">ราคา/Pack</th><th className="p-2 text-right">บรรจุ</th><th className="p-2 text-left">หน่วย</th></>}
                   </tr></thead>
                   <tbody>{list.map(x => (
@@ -8664,6 +8960,7 @@ const AdminConfigView = ({ ctx }) => {
                         <td className="p-2 text-right">{x.priceChanged ? <><span className="text-slate-400 line-through">{money(x.oldPrice)}</span> → <b>{money(x.price)}</b>{x.pct !== null && <div className={`text-[11px] font-bold ${Math.abs(x.pct) >= 30 ? 'text-amber-700' : 'text-slate-500'}`}>{x.pct > 0 ? '+' : ''}{x.pct.toFixed(1)}%</div>}</> : <span className="text-slate-300">-</span>}</td>
                         <td className="p-2 text-right">{x.packChanged ? <><span className="text-slate-400 line-through">{x.oldPack}</span> → <b>{x.pack}</b></> : <span className="text-slate-300">-</span>}</td>
                         <td className="p-2">{x.unitChanged ? <><span className="text-slate-400 line-through">{unitName(x.oldUnit)}</span> → <b>{unitName(x.unit)}</b></> : <span className="text-slate-300">-</span>}</td>
+                        <td className="p-2 text-xs">{x.nameChanged && syncOpt.name && <div className="invs-name-change"><span className="text-slate-400 line-through">{x.oldName}</span> → <b>{x.newName}</b></div>}{x.typeChanged && syncOpt.type && <div>หมวด <span className="text-slate-400 line-through">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[x.oldType] || x.oldType}</span> → <b>{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[x.newType] || (plan.types || []).find(t => t.type_code === x.newType)?.type_name || x.newType}</b></div>}{!(x.nameChanged && syncOpt.name) && !(x.typeChanged && syncOpt.type) && <span className="text-slate-300">-</span>}</td>
                       </> : <>
                         <td className="p-2 text-right">{x.price > 0 ? money(x.price) : <span className="text-red-500 text-xs">ไม่พบราคา</span>}</td>
                         <td className="p-2 text-right">{x.pack}</td>
@@ -8842,6 +9139,24 @@ const AdminConfigView = ({ ctx }) => {
       const shownItems = sortByLoc ? [...items].sort((a, b) => String(a.type || '1').localeCompare(String(b.type || '1'), undefined, { numeric: true }) || compareByLocation(locOf(a.drugId), a.name, locOf(b.drugId), b.name)) : items;
       const setQty = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, dispenseQty: toNonNegativeNumber(v) } : it));
       const setNote = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, adminNote: v } : it));
+      // v6.27 แอดมินเพิ่มยาในใบหน่วยงาน/ห้องยาก่อนส่ง INVS (บันทึกทันที · ติดป้าย "แอดมินเพิ่ม" · ลบได้จนกว่าจะส่ง INVS)
+      const [addCode, setAddCode] = useState(''); const [addCand, setAddCand] = useState(null); const [addQty, setAddQty] = useState(''); const [addMode, setAddMode] = useState('unit');
+      const pickAdd = () => {
+        const t = safeText(addCode); const d = ctx.findDrug(t) || ctx.appDb.drugs.find(x => safeText(x.drug_name).toLowerCase() === t.toLowerCase() || safeText(x.old_code) === t);
+        if (!d) return ctx.showToast('ไม่พบยา — เลือกจากรายการ', 'error');
+        if (isDrugDiscontinued(d)) return ctx.showToast('ยานี้ยกเลิกใช้แล้ว', 'error');
+        if (items.some(it => String(it.drugId) === String(d.drug_id))) return ctx.showToast('ยานี้อยู่ในใบแล้ว — แก้จำนวนจ่ายในตาราง', 'error');
+        const c = { drugId: String(d.drug_id), name: d.drug_name, unit: ctx.findUnitName ? ctx.findUnitName(d) : (d.unit_id || ''), packSize: safePackSize(d.pack_size), isUnpacked: !!d.unpacked, price: toNonNegativeNumber(d.price), type: String(d.type || '1') };
+        setAddCand(c); setAddMode(defaultPackMode(c)); setAddQty('');
+      };
+      const addItem = () => run('add', async () => {
+        const q = packModeQty(addQty, addMode, addCand); if (!(q > 0)) throw new Error('ใส่จำนวน');
+        const next = [...items, { ...addCand, requestQty: q, dispenseQty: q, source: 'admin_added', admin_added: true, admin_added_by_name: safeText(ctx.currentUser.name), adminNote: 'แอดมินเพิ่ม' }];
+        await saveEdits(next); setItems(next); setAddCand(null); setAddCode(''); setAddQty('');
+        await writeAuditLog(ctx.currentUser, 'INTERNAL_REQ_ADMIN_ADD_DRUG', 'internal_requisitions', req.id, { drug_id: addCand.drugId, qty: q });
+        ctx.showToast(`เพิ่ม ${addCand.name} แล้ว`);
+      });
+      const removeAdded = (id) => run('add', async () => { const next = items.filter(it => String(it.drugId) !== String(id)); await saveEdits(next); setItems(next); ctx.showToast('ลบรายการที่แอดมินเพิ่มแล้ว'); });
 
       // v6.15 ใบเบิกด่วนของหน่วยงานที่ยังไม่รวม (Active) — รวมเข้าใบนี้ได้ตอนตรวจ (รอบเดียวกัน = รวมอัตโนมัติก่อนตรวจ INVS)
       const [urgents, setUrgents] = useState([]);
@@ -9049,6 +9364,17 @@ const AdminConfigView = ({ ctx }) => {
             {!invsSent && <PickPlanBadge source="internal" reqId={req.id} ctx={ctx} />}
             <PickSlipButton req={invsSent ? req : { ...req, items }} ctx={ctx} source="internal" unitTitle={req.dept_name || ''} />
           </div>
+          {editable && <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-2" id="iq-add-box">
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="font-bold text-slate-600 text-sm"><i className="fa-solid fa-plus mr-1 text-indigo-600"></i>แอดมินเพิ่มยาในใบนี้</span>
+              <input id="iq-add-drug" list="iq-add-drugs" value={addCode} onChange={e => setAddCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') pickAdd(); }} placeholder="รหัส / ชื่อยา / รหัสเก่า" className="flex-1 min-w-[14rem] p-2 border rounded-xl text-sm" />
+              <datalist id="iq-add-drugs">{ctx.appDb.drugs.filter(d => !isDrugDiscontinued(d)).map(d => <option key={d.drug_id} value={d.drug_id}>{d.drug_name}{d.old_code ? ` (${d.old_code})` : ''}</option>)}</datalist>
+              <button id="iq-add-pick" onClick={pickAdd} className="px-4 py-2 rounded-xl bg-slate-800 text-white font-bold text-sm">เลือก</button>
+            </div>
+            {addCand && <div className="border-2 border-indigo-300 rounded-xl p-3 space-y-2"><div className="font-bold">{addCand.name} <span className="text-xs text-slate-400 font-mono">{addCand.drugId}</span></div>
+              <PackUnitQtyField item={addCand} mode={addMode} onMode={setAddMode} value={addQty} onChange={setAddQty} onEnter={addItem} idPrefix="iq-add" />
+              <div className="flex justify-end gap-2"><button onClick={() => setAddCand(null)} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ยกเลิก</button><button id="iq-add-confirm" onClick={addItem} disabled={!!busy} className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold">เพิ่มลงใบ</button></div></div>}
+          </div>}
           <div className="bg-white rounded-2xl border shadow-sm overflow-auto max-h-[65vh]">
             <table className="w-full text-sm" id="iq-form-table">
               <thead className="text-xs text-slate-600 bg-slate-100 sticky top-0 z-10"><tr>
@@ -9068,7 +9394,7 @@ const AdminConfigView = ({ ctx }) => {
                   out.push(
                     <tr key={it.drugId} className={it.dispenseQty > 0 ? '' : 'text-slate-400'} style={{ borderTop: same ? '1px dotted #94a3b8' : '1px solid #e2e8f0' }}>
                       <td className="p-2 text-center text-slate-500">{i + 1}</td>
-                      <td className="p-2"><div className="font-semibold">{it.name}</div><div className="text-[11px] text-slate-400">{loc ? <span className="font-bold text-teal-700">{loc}</span> : null}{it.note ? ` · ผู้เบิก: ${it.note}` : ''}{isPharmacy && it.followSuggest === false ? ' · แก้จากที่แนะนำ' : ''}</div></td>
+                      <td className="p-2"><div className="font-semibold">{it.name}{it.admin_added && <span className="ml-1 text-[10px] font-black text-indigo-700 bg-indigo-100 border border-indigo-300 rounded px-1">แอดมินเพิ่ม</span>}{it.admin_added && editable && <button onClick={() => removeAdded(it.drugId)} className="ml-1 text-red-500 text-xs" aria-label={`ลบ ${it.name}`}><i className="fa-solid fa-xmark"></i></button>}</div><div className="text-[11px] text-slate-400">{loc ? <span className="font-bold text-teal-700">{loc}</span> : null}{it.note ? ` · ผู้เบิก: ${it.note}` : ''}{isPharmacy && it.followSuggest === false ? ' · แก้จากที่แนะนำ' : ''}</div></td>
                       <td className="p-2 text-center text-xs">{it.unit || '-'}</td>
                       <td className="p-2 text-center text-xs">{pack > 1 ? pack : '-'}</td>
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.usage)}</td>}
@@ -9123,6 +9449,8 @@ const AdminConfigView = ({ ctx }) => {
                 {(preflight.errors || []).length > 0 && <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700"><b>ต้องแก้ก่อนส่ง:</b><ul className="list-disc ml-5 mt-1">{preflight.errors.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
                 {(preflight.warnings || []).length > 0 && <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800"><ul className="list-disc ml-5">{preflight.warnings.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
                 {preflight.live_send_enabled === false && <div className="bg-slate-100 rounded-xl p-3 text-sm">Bridge ตั้ง allow_live_send=false — ตรวจได้แต่ยังส่งจริงไม่ได้</div>}
+                <InvsShortBox ctx={ctx} preflight={preflight} busy={!!busy} onRecheck={doPreflight}
+                  onFix={(id, q) => run('fix', async () => { const next = items.map(it => String(it.drugId) === String(id) ? { ...it, dispenseQty: q, adminNote: `${it.adminNote ? it.adminNote + ' · ' : ''}ของไม่พอ จ่าย ${q}` } : it); setItems(next); await saveEdits(next); await reload(); const data = await callInvsBridge('preflight', req.id, { source: 'internal', request_date: invsReqDateArg() }).catch(e => e?.payload || null); if (data) setPreflight(data); ctx.showToast('แก้จำนวนจ่ายแล้ว'); })} />
                 {/* v6.26 layout แบบใบเบิก: หมวด → ตำแหน่ง (compareByLocation) · ลำดับที่ · เส้นจุดกลุ่มตำแหน่งเดียวกัน */}
                 {(() => {
                   const types = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
@@ -9165,7 +9493,7 @@ const AdminConfigView = ({ ctx }) => {
                 })()}
                 <div className="flex justify-end gap-2">
                   <button onClick={() => setPreflight(null)} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">ปิด</button>
-                  <button onClick={doSendAndApprove} disabled={!!busy || !preflight.ok || preflight.live_send_enabled === false} className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-40">
+                  <button onClick={doSendAndApprove} disabled={!!busy || !preflight.ok || preflight.live_send_enabled === false || (!preflight.already_sent && invsShortItems(preflight).length > 0)} className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-40">
                     {busy === 'send' ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-paper-plane mr-2"></i>}{preflight.already_sent ? 'อนุมัติ (มีใน INVS แล้ว)' : 'ส่งเข้า INVS และอนุมัติ'}
                   </button>
                 </div>
@@ -11534,6 +11862,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentUser?.role === 'admin' && <button onClick={() => requestView('count_status')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='count_status'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-clipboard-check w-6 text-center mr-2"></i> สถานะตรวจนับ รพ.สต.</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('ncds_mapping')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='ncds_mapping'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-link w-6 text-center mr-2"></i> จับคู่ยา NCDs</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('substock_sync')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='substock_sync'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-warehouse w-6 text-center mr-2"></i> คลังย่อย รพ.สต. → INVS</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('mr_pool')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='mr_pool'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> กองMR</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('line_console')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='line_console'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-brands fa-line w-6 text-center mr-2"></i> LINE Console</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
               
@@ -11565,6 +11894,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'map_dashboard' && currentUser?.role === 'admin' && <MapDashboardView ctx={ctx} />}
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'line_console' && currentUser?.role === 'admin' && <LineConsoleView ctx={ctx} />}
+              {currentView === 'mr_pool' && currentUser?.role === 'admin' && <MrPoolView ctx={ctx} />}
               {currentView === 'substock_sync' && currentUser?.role === 'admin' && <SubstockSyncView ctx={ctx} />}
               {currentView === 'count_status' && currentUser?.role === 'admin' && <StockCountStatusView ctx={ctx} />}
               {currentView === 'ncds_mapping' && currentUser?.role === 'admin' && <NcdsMappingView ctx={ctx} />}

@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.26.0"></script>
+  <script src="shared.js?v=6.27.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.26.0';
+      var need = '6.27.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -376,12 +376,22 @@
             </button>
           )}
           {hasPack && mode === 'pack' && qty > 0 && <span className="text-[11px] text-slate-400 whitespace-nowrap">= {fmtNum(qty)} {item.unit}</span>}
+          {hasPack && mode === 'unit' && qty > 0 && <span className={`qty-unit-hint text-[11px] font-bold whitespace-nowrap ${qty < pack ? 'text-red-600' : 'text-amber-700'}`}>= {fmtNum(qty)} {item.unit || 'หน่วยย่อย'}{qty < pack ? ` (ไม่ถึง 1 แพ็ค ×${pack})` : ` (${formatQty(qty, pack)} แพ็ค)`}</span>}
         </div>
       );
     };
 
     // ===== พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์ (แก้เลขที่/วันที่ได้ก่อนพิมพ์) =====
     // ===== v6.25 ใบพิมพ์ห้องยา: รีเฟรชคงคลัง lot INVS ก่อนพิมพ์ (รายการ/จำนวนเบิกคงเดิม) · เลือกไม่ใส่ Lot/คงเหลือคลัง =====
+    // v6.27 ช่องหน่วยสะดวก (ใต้ชื่อยาในหน้าเบิกห้องยา) — บันทึกเมื่อออกจากช่อง/กด Enter
+    const ConvUnitInput = ({ r, onSave }) => {
+      const cur = toNonNegativeNumber(r.drug?.pharm_round_unit);
+      const [v, setV] = useState(cur ? String(cur) : '');
+      useEffect(() => { setV(cur ? String(cur) : ''); }, [cur]);
+      const commit = () => { const n = toNonNegativeNumber(v); if (Math.abs(n - cur) > 1e-9) onSave(r.id, n); };
+      return <label className="inline-flex items-center gap-1 text-[10px] text-slate-500" title="หน่วยสะดวก: ยอดแนะนำปัดเป็นทวีคูณของจำนวนนี้ (หน่วยย่อย) เช่น lotion 12">
+        หน่วยสะดวก<input aria-label={`หน่วยสะดวก ${r.base.name}`} className="conv-unit w-12 border border-slate-200 rounded px-1 py-0 text-right" value={v} placeholder="-" onChange={e => setV(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /></label>;
+    };
     const fetchPrintLots = async (ctx, items) => {
       const ids = [...new Set((items || []).filter(it => toNonNegativeNumber(it.dispenseQty) > 0).map(it => String(it.drugId)))];
       const lots = {};
@@ -672,6 +682,33 @@
       .filter(r => r.kind !== 'pharmacy' && r.status !== 'Cancelled' && (r.items || []).length)
       .sort((a, b) => tsToMillis(b.submitted_at || b.created_at) - tsToMillis(a.submitted_at || a.created_at))[0] || null;
 
+    // v6.27 ดักสับสนหน่วยตอนส่งใบ: ทุกรายการที่ติดธงต้องเลือก "ใช่" / "เปลี่ยนเป็นแพ็ก" ก่อนส่ง (ตอบ "ใช่" = จำไว้ไม่เตือนซ้ำ)
+    const QtyCheckModal = ({ flags, scope, onClose, onApply }) => {
+      const [pick, setPick] = useState({});
+      const done = flags.every(f => pick[f.drugId]);
+      const apply = () => { const changes = new Map(); flags.forEach(f => { if (pick[f.drugId] === 'pack') changes.set(String(f.drugId), f.suggestPack); else qtyOkRemember(scope, f.drugId, f.qty); }); onApply(changes); };
+      return (
+        <Modal isOpen onClose={onClose} title="ตรวจหน่วยก่อนส่งใบเบิก" maxWidth="max-w-3xl">
+          <div className="space-y-3" id="qty-check-modal">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-900"><i className="fa-solid fa-triangle-exclamation mr-1"></i>รายการต่อไปนี้จำนวนอาจผิดหน่วย — กรุณายืนยันทีละรายการ (ถ้าเบิกจำนวนนี้จริง ระบบจะจำไว้และไม่ถามซ้ำ)</div>
+            {flags.map(f => { const pack = safePackSize(f.packSize); const p = pick[f.drugId];
+              return <div key={f.drugId} className="border rounded-xl p-3 space-y-2 qty-check-row" data-id={f.drugId}>
+                <div className="font-bold">{f.name} <span className="text-xs text-slate-400 font-mono">{f.drugId}</span></div>
+                <div className="text-lg">ขอ <b className="text-red-600">{f.qty.toLocaleString('th-TH')} {f.unit || 'หน่วยย่อย'}</b>{pack > 1 && <span className="text-sm text-slate-500"> (= {formatQty(f.qty, pack)} แพ็ก · 1 แพ็ก = {pack.toLocaleString('th-TH')} {f.unit || ''})</span>}</div>
+                <ul className="text-xs text-amber-800 list-disc ml-5">{f.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => setPick(x => ({ ...x, [f.drugId]: 'yes' }))} className={`qty-check-yes px-3 py-2 rounded-xl border-2 font-bold text-sm ${p === 'yes' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-200'}`}>ใช่ เบิก {f.qty.toLocaleString('th-TH')} {f.unit || ''} จริง</button>
+                  {f.suggestPack > 0 && <button onClick={() => setPick(x => ({ ...x, [f.drugId]: 'pack' }))} className={`qty-check-pack px-3 py-2 rounded-xl border-2 font-bold text-sm ${p === 'pack' ? 'border-indigo-500 bg-indigo-50 text-indigo-800' : 'border-slate-200'}`}>เปลี่ยนเป็น {f.qty.toLocaleString('th-TH')} แพ็ก = {f.suggestPack.toLocaleString('th-TH')} {f.unit || ''}</button>}
+                </div>
+              </div>; })}
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-100 font-bold">กลับไปแก้จำนวน</button>
+              <button id="qty-check-go" onClick={apply} disabled={!done} className="px-5 py-2 rounded-xl bg-teal-600 text-white font-bold disabled:opacity-40">ยืนยัน ส่งใบต่อ</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    };
     const DeptReqView = ({ ctx, editReq, round, onDone }) => {
       const [template] = useState(() => editReq ? null : lastDeptTemplate(ctx));
       // v6.9 ใบเบิกด่วนของรอบนี้ที่ยังไม่รวม → รวมยอดเข้าใบเบิกจริง
@@ -784,10 +821,21 @@
       const total = valid.reduce((s, it) => s + internalItemValue(it), 0);
       const hasPendingOther = ctx.reqs.some(r => r.status === 'Pending' && r.id !== editReq?.id);
 
-      const submit = () => {
+      const [qtyFlags, setQtyFlags] = useState(null);
+      const qtyScope = 'd:' + String(ctx.dept?.dept_id || '');
+      const submit = (itemsArg, skipCheck) => {
+        const itemsNow = Array.isArray(itemsArg) ? itemsArg : items;
+        const valid = itemsNow.filter(it => toNonNegativeNumber(it.requestQty) > 0);
+        const total = valid.reduce((s, it) => s + internalItemValue(it), 0);
         if (editReq && internalReqLockedForDept(ctx.reqs.find(r => r.id === editReq.id) || editReq, ctx.isAdmin)) return ctx.showToast('ใบนี้พิมพ์แล้ว ยอดถูกล็อก — แก้ได้เฉพาะแอดมิน (จนกว่าจะส่ง INVS)', 'error');
         if (!valid.length) return ctx.showToast('ยังไม่มีรายการที่ใส่จำนวนเบิก', 'error');
-        const zero = items.length - valid.length;
+        // v6.27 ดักสับสนหน่วย (ยอดเบิกปกติ ไม่นับส่วนรับแล้ว)
+        if (!skipCheck) {
+          const hist = qtyCheckHistory(ctx.reqs, { excludeId: editReq?.id, qtyOf: it => regularQtyOf(it) });
+          const flags = qtyCheckFlags(valid.map(it => ({ drugId: String(it.drugId), name: it.name, unit: it.unit, packSize: it.packSize, isUnpacked: !!ctx.drugById.get(String(it.drugId))?.unpacked, qty: regularQtyOf(it) })), hist, qtyScope);
+          if (flags.length) return setQtyFlags({ flags, itemsNow });
+        }
+        const zero = itemsNow.length - valid.length;
         ctx.setConfirmDialog({
           title: editReq ? 'ส่งใบเบิกที่แก้ไขแล้ว?' : 'ยืนยันส่งใบเบิก?',
           message: `${valid.length} รายการ · มูลค่าประมาณ ${fmtMoney(total)} บาท${zero ? `\nรายการที่จำนวนเป็น 0 (${zero} รายการ) จะไม่ถูกส่ง` : ''}\nใบเบิกจะเข้าคิวรอห้องยาตรวจสอบ`,
@@ -813,6 +861,9 @@
 
       return (
         <div className="space-y-5 animate-fade-in">
+          {qtyFlags && <QtyCheckModal flags={qtyFlags.flags} scope={qtyScope} onClose={() => setQtyFlags(null)} onApply={(changes) => {
+            const next = qtyFlags.itemsNow.map(it => changes.has(String(it.drugId)) ? { ...it, requestQty: changes.get(String(it.drugId)) + receivedQtyOf(it), dispenseQty: changes.get(String(it.drugId)) + receivedQtyOf(it), requestMode: 'pack' } : it);
+            setItems(next); setQtyFlags(null); submit(next, true); }} />}
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <div className="text-xs font-bold text-teal-700 tracking-wide">ใบเบิกยาหน่วยงาน</div>
@@ -941,7 +992,7 @@
               <div className="text-sm text-slate-500">{valid.length} รายการ · <span className="font-bold text-slate-800 tnum">{fmtMoney(total)}</span> บาท</div>
               <div className="flex gap-2 justify-end">
                 <button onClick={onDone} className="px-5 py-3 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">ยกเลิก</button>
-                <button onClick={submit} disabled={saving || !valid.length} className="px-7 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40">
+                <button onClick={() => submit()} disabled={saving || !valid.length} className="px-7 py-3 rounded-xl bg-gradient-main text-white font-bold shadow-lg disabled:opacity-40">
                   {saving ? <><i className="fa-solid fa-spinner fa-spin mr-2"></i>กำลังส่ง...</> : <><i className="fa-solid fa-paper-plane mr-2"></i>{editReq ? 'ส่งใบที่แก้ไข' : 'ส่งใบเบิก'}</>}
                 </button>
               </div>
@@ -1355,7 +1406,11 @@ ORDER BY d.name`;
           const plan = asuStats ? calcPharmacyPlanV2({ stats: asuStats, onHand, inTransit, item: base, ven: drugVen(drug), lots, minOrderValue }) : null;
           const sug = plan ? { dailyAvg: plan.dbar, target: plan.S > 0 ? Math.ceil(plan.S / safePackSize(base.packSize) - 1e-9) * safePackSize(base.packSize) : 0, suggested: plan.suggested, skipReason: plan.suggested > 0 ? '' : plan.reason, coverRounds: plan.coverRounds }
             : calcPharmacySuggestion({ usage, days: calcDays, coverDays, roundDays, minOrderValue, onHand, inTransit, item: base });
-          const suggested = blocked ? 0 : sug.suggested;
+          // v6.27 หน่วยสะดวก (master_drugs.pharm_round_unit หน่วยย่อย) → ปัดยอดแนะนำเป็นทวีคูณที่ใกล้ที่สุด (กึ่งกลางปัดขึ้น) · ปัดลงแล้วไม่พอถึงรอบหน้า = ปัดขึ้น
+          const convUnit = toNonNegativeNumber(drug?.pharm_round_unit);
+          const convFrom = !blocked && convUnit > 0 && sug.suggested > 0 && reqMode !== 'all' ? sug.suggested : 0;
+          const convQty = convFrom ? (() => { let r = Math.round(convFrom / convUnit) * convUnit; if (r < convFrom - 1e-9 && toSafeNumber(onHand) + toSafeNumber(inTransit) + r < toNonNegativeNumber(sug.dailyAvg) * toNonNegativeNumber(roundDays) - 1e-9) r += convUnit; return Math.max(convUnit, r); })() : 0;
+          const suggested = blocked ? 0 : convFrom ? convQty : sug.suggested;
           const follow = st.dispenseManual === null || st.dispenseManual === undefined;
           // v6.19 คงคลังใหญ่รวมทุก lot (ดึง lot แล้ว หรือคำนวณจากที่บันทึกในใบ) — เบิกจริงห้ามเกินยอดนี้
           const lotTotal = lots ? Math.round(lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) * 1000) / 1000
@@ -1364,7 +1419,7 @@ ORDER BY d.name`;
           const dispenseCapped = lotTotal !== null && rawDispense > lotTotal + 1e-9;
           const dispense = dispenseCapped ? lotTotal : rawDispense;
           // Lot ที่ต้องหยิบ + เหลือหลังหยิบ (ตามจำนวนเบิกจริง) — ไม่มี lot ใหม่ใช้ของที่บันทึกไว้ถ้าจำนวนเท่าเดิม
-          const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan && !dispenseCapped && reqMode !== 'all' ? plan.lotPlan : allocatePharmLots(lots, dispense))
+          const lotPlan = blocked || dispense <= 0 ? [] : lots ? (follow && plan && !dispenseCapped && reqMode !== 'all' && !(convFrom && Math.abs(convQty - convFrom) > 1e-9) ? plan.lotPlan : allocatePharmLots(lots, dispense))
             : (sAsu && Math.abs(sAsu.dispense - dispense) < 1e-9 ? sAsu.lotPlan : []);
           // v6.15 คลังใหญ่รวมทุก lot ที่เหลือหลังหยิบ (ใช้ในช่องคงเหลือของใบพิมพ์)
           const lotStockAfter = lotTotal !== null ? Math.max(0, Math.round((lotTotal - dispense) * 1000) / 1000) : null;
@@ -1378,6 +1433,7 @@ ORDER BY d.name`;
             stockBal, hasStock: !!stockDoc, onHand, onHandTouched, inTransit, countYmd, usageAfterCount,
             dailyAvg: sug.dailyAvg, target: sug.target, suggested: reqMode === 'all' && !blocked ? (lotTotal ?? 0) : suggested, follow, dispense, blocked, source, reqMode,
             skipReason: blocked ? '' : reqMode === 'all' ? (lotTotal === null ? 'เบิกทั้งหมด — กด "คงคลัง lot INVS ล่าสุด"' : lotTotal <= 0 ? 'เบิกทั้งหมด — คลังใหญ่ไม่มีของ' : '') : sug.skipReason, coverRounds: sug.coverRounds,
+            convUnit, convFrom: convFrom && Math.abs(convQty - convFrom) > 1e-9 ? convFrom : 0,
             asu: asuStats, plan, lotPlan, lotStockAfter, lotTotal, dispenseCapped, lotsLeftCount, lotsLoaded: !!lots, roomLots, lotMeta, lotShort: !!lots && dispense > lots.reduce((a, l) => a + toNonNegativeNumber(l.qty), 0) + 1e-9, ven: drugVen(drug),
             value: internalItemValue({ dispenseQty: dispense, packSize: base.packSize, price: base.price }),
             note: st.note || ''
@@ -1472,6 +1528,14 @@ ORDER BY d.name`;
           ctx.showToast(mode === 'all' ? 'ตั้งเป็น "เบิกทั้งหมด" — เบิกคงคลังทุก lot ของคลังใหญ่' : mode === 'exclude' ? 'ตั้งเป็น "คลังพิเศษ" — ไม่อยู่ในใบเบิกห้องยา' : 'ตั้งเป็นเบิกปกติ');
           if (mode === 'all' && !invsLots) fetchLatestLots(true);
         } catch (e) { ctx.showToast('บันทึกโหมดเบิกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+      };
+      // v6.27 หน่วยสะดวกห้องยา (หน่วยย่อย) — 0/ว่าง = ไม่ปัด
+      const saveRoundUnit = async (drugId, v) => {
+        try {
+          await db.collection('master_drugs').doc(String(drugId)).update({ pharm_round_unit: toNonNegativeNumber(v), pharm_round_unit_updated_at: firebase.firestore.FieldValue.serverTimestamp(), pharm_round_unit_updated_by: safeText(ctx.currentUser.name) });
+          await ctx.reloadMasters(); patchRow(String(drugId), {});
+          ctx.showToast(toNonNegativeNumber(v) > 0 ? `ตั้งหน่วยสะดวก ${toNonNegativeNumber(v)} แล้ว — ยอดแนะนำปัดตามนี้` : 'ยกเลิกหน่วยสะดวก');
+        } catch (e) { ctx.showToast('บันทึกหน่วยสะดวกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
       };
       const saveVen = async (drugId, ven) => {
         try {
@@ -1817,6 +1881,8 @@ ORDER BY d.name`;
                             {r.reqMode === 'all' && <span className="text-indigo-700 font-bold">เบิกทั้งหมด</span>}
                             {r.drug && <select aria-label={`โหมดเบิก ${r.base.name}`} value={r.reqMode} onChange={e => saveReqMode(r.id, e.target.value)} title="โหมดเบิกของห้องยา (มีผลเฉพาะห้องยา)" className="text-[10px] border border-slate-200 rounded px-1 py-0 bg-white text-slate-600">
                               <option value="normal">เบิกปกติ</option><option value="all">เบิกทั้งหมด (ทุก lot ในคลัง)</option><option value="exclude">ไม่เบิก (คลังพิเศษ)</option></select>}
+                            {r.drug && r.reqMode !== 'all' && <ConvUnitInput r={r} onSave={saveRoundUnit} />}
+                            {r.convFrom > 0 && r.follow && <span className="text-indigo-700 font-bold conv-note">ปัดจาก {fmtNum(r.convFrom)} → {fmtNum(r.suggested)} (หน่วยสะดวก {fmtNum(r.convUnit)})</span>}
                           </div>
                         </td>
                         <td className="p-2 text-right tnum">{r.opdRaw ? fmtNum(r.opdRaw) : '-'}</td>

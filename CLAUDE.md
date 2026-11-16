@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.25.0 · Bridge v2.16.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.26.0 · Bridge v2.16.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -255,7 +255,8 @@
 
 
 ## v6.26 หน้าตรวจก่อนส่ง INVS แบบใบเบิก · สวิตช์แจ้งเตือน LINE
-- คิวใบภายใน (app.html InternalReviewPanel) modal ตรวจก่อนส่ง INVS `#iq-preflight-form`: หมวด → ตำแหน่ง (`compareByLocation`) · ที่ · รายการ(+ตำแหน่ง) · หน่วย · บรรจุ · จำนวนเบิก (`qtyWithReceivedText`) · ส่ง INVS · Lot/EXP · คงคลังรวมทุก lot · เหลือหลังเบิก · มูลค่า · รหัส (`drugCodeLabel`) · เส้นจุดกลุ่มตำแหน่งเดียวกัน · รวม n รายการ
+- คิวใบภายใน (app.html InternalReviewPanel) ตารางหลัก `#iq-form-table` แบบใบเบิก: ค่าเริ่มต้น "เรียงแบบใบเบิก" (หมวด → ตำแหน่ง, แถวหัวหมวด, เส้นจุดกลุ่มตำแหน่ง) · ที่ · รายการ(+ตำแหน่ง) · หน่วย · บรรจุ · [ห้องยา: ใช้/คงเหลือ/แนะนำ] · จำนวนเบิก · จำนวนจ่าย (แก้ได้) · ราคา/หน่วย · มูลค่า · รหัส · หมายเหตุ
+- modal ตรวจก่อนส่ง INVS `#iq-preflight-form`: หมวด → ตำแหน่ง (`compareByLocation`) · ที่ · รายการ(+ตำแหน่ง) · หน่วย · บรรจุ · จำนวนเบิก (`qtyWithReceivedText`) · ส่ง INVS · Lot/EXP · คงคลังรวมทุก lot · เหลือหลังเบิก · มูลค่า · รหัส (`drugCodeLabel`) · เส้นจุดกลุ่มตำแหน่งเดียวกัน · รวม n รายการ
 - LINE Console `LineSettingsPanel` (`#line-settings`) → `line-notify` action `settings` (แอดมิน) เขียน `line_meta/settings` {staff_enabled, admin_enabled, work_hours_only, work_start, work_end}
   - `core.pushText` ตรวจทุกครั้ง (`settingsBlock`): ปิด จนท./แอดมิน หรือนอกเวลาทำการ (จ.–ศ. เวลาไทย, เฉพาะ จนท.) = ไม่ส่ง + log skipped · test ส่งได้เสมอ · dispensed คืน `blocked` · cron dryRun แสดงคำเตือน
 - tests/v626.js

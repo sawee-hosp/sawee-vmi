@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.25.0"></script>
+  <script src="shared.js?v=6.26.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.25.0';
+      var need = '6.26.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -8836,10 +8836,10 @@ const AdminConfigView = ({ ctx }) => {
       const total = items.reduce((s, it) => s + internalItemValue(it), 0);
       const isPharmacy = req.kind === 'pharmacy';
 
-      const [sortByLoc, setSortByLoc] = useState(false);
+      const [sortByLoc, setSortByLoc] = useState(true); // v6.26 ค่าเริ่มต้นเรียงแบบใบเบิก (หมวด → ตำแหน่ง)
       const [showForm, setShowForm] = useState(false);
       const locOf = (id) => safeText(ctx.findDrug(id)?.invs_location);
-      const shownItems = sortByLoc ? [...items].sort((a, b) => compareByLocation(locOf(a.drugId), a.name, locOf(b.drugId), b.name)) : items;
+      const shownItems = sortByLoc ? [...items].sort((a, b) => String(a.type || '1').localeCompare(String(b.type || '1'), undefined, { numeric: true }) || compareByLocation(locOf(a.drugId), a.name, locOf(b.drugId), b.name)) : items;
       const setQty = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, dispenseQty: toNonNegativeNumber(v) } : it));
       const setNote = (id, v) => setItems(prev => prev.map(it => String(it.drugId) === String(id) ? { ...it, adminNote: v } : it));
 
@@ -9044,39 +9044,46 @@ const AdminConfigView = ({ ctx }) => {
           </div>
 
           <div className="flex flex-wrap gap-2 justify-end">
-            <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 cursor-pointer mr-auto"><input type="checkbox" checked={sortByLoc} onChange={e => setSortByLoc(e.target.checked)} className="w-4 h-4" /> เรียงตามตำแหน่งยา (INVS)</label>
+            <label className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 cursor-pointer mr-auto"><input type="checkbox" checked={sortByLoc} onChange={e => setSortByLoc(e.target.checked)} className="w-4 h-4" /> เรียงแบบใบเบิก (หมวด → ตำแหน่งยา)</label>
             <button onClick={() => setShowForm(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 font-bold text-sm"><i className="fa-solid fa-file-lines mr-2"></i>พิมพ์ใบเบิก</button>
             {!invsSent && <PickPlanBadge source="internal" reqId={req.id} ctx={ctx} />}
             <PickSlipButton req={invsSent ? req : { ...req, items }} ctx={ctx} source="internal" unitTitle={req.dept_name || ''} />
           </div>
           <div className="bg-white rounded-2xl border shadow-sm overflow-auto max-h-[65vh]">
-            <table className="w-full text-sm">
-              <thead className="text-xs text-slate-500 bg-slate-100 sticky top-0 z-10"><tr>
-                <th className="p-2 text-left">#</th><th className="p-2 text-left">ตำแหน่ง</th><th className="p-2 text-left">รายการ</th>
+            <table className="w-full text-sm" id="iq-form-table">
+              <thead className="text-xs text-slate-600 bg-slate-100 sticky top-0 z-10"><tr>
+                <th className="p-2 text-center">ที่</th><th className="p-2 text-left">รายการ</th><th className="p-2 text-center">หน่วย</th><th className="p-2 text-center">บรรจุ</th>
                 {isPharmacy && <th className="p-2 text-right">ใช้ OPD+IPD</th>}{isPharmacy && <th className="p-2 text-right">คงเหลือ</th>}{isPharmacy && <th className="p-2 text-right">แนะนำ</th>}
-                <th className="p-2 text-right">ขอเบิก</th><th className="p-2 text-right">อนุมัติจ่าย</th><th className="p-2 text-right">มูลค่า</th><th className="p-2 text-left">หมายเหตุ</th>
+                <th className="p-2 text-right">จำนวนเบิก</th><th className="p-2 text-right">จำนวนจ่าย</th><th className="p-2 text-right">ราคา/หน่วย</th><th className="p-2 text-right">มูลค่า</th><th className="p-2 text-left">รหัส</th><th className="p-2 text-left">หมายเหตุ</th>
               </tr></thead>
               <tbody>
-                {shownItems.map((it, i) => {
+                {(() => { const types = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES; let lastType = null, lastGrp = null; const out = [];
+                  shownItems.forEach((it, i) => {
                   const req0 = toNonNegativeNumber(it.requestQty ?? it.dispenseQty);
                   const changed = Math.abs(toNonNegativeNumber(it.dispenseQty) - req0) > 1e-9;
                   const pack = safePackSize(it.packSize);
-                  return (
-                    <tr key={it.drugId} className={`border-t ${it.dispenseQty > 0 ? '' : 'text-slate-400'}`}>
-                      <td className="p-2 text-slate-400">{i + 1}</td>
-                      <td className="p-2 font-bold text-teal-700 whitespace-nowrap">{locOf(it.drugId) || <span className="text-slate-300 font-normal">-</span>}</td>
-                      <td className="p-2"><div className="font-semibold">{it.name}</div><div className="text-[11px] text-slate-400 font-mono">{it.drugId} · {it.unit}{pack > 1 ? ` ×${pack}` : ''}{it.note ? ` · ผู้เบิก: ${it.note}` : ''}{isPharmacy && it.followSuggest === false ? ' · แก้จากที่แนะนำ' : ''}</div></td>
+                  const loc = locOf(it.drugId); const tp = String(it.type || '1');
+                  if (sortByLoc && tp !== lastType) { out.push(<tr key={'type-' + tp} className="bg-slate-50 border-t-2 border-slate-300"><td colSpan={isPharmacy ? 13 : 10} className="px-2 py-1.5 font-black text-slate-700">{types[tp] || 'หมวด ' + tp}</td></tr>); lastType = tp; lastGrp = null; }
+                  const grp = locationGroupKey(loc); const same = sortByLoc && lastGrp !== null && grp && grp === lastGrp; lastGrp = grp;
+                  out.push(
+                    <tr key={it.drugId} className={it.dispenseQty > 0 ? '' : 'text-slate-400'} style={{ borderTop: same ? '1px dotted #94a3b8' : '1px solid #e2e8f0' }}>
+                      <td className="p-2 text-center text-slate-500">{i + 1}</td>
+                      <td className="p-2"><div className="font-semibold">{it.name}</div><div className="text-[11px] text-slate-400">{loc ? <span className="font-bold text-teal-700">{loc}</span> : null}{it.note ? ` · ผู้เบิก: ${it.note}` : ''}{isPharmacy && it.followSuggest === false ? ' · แก้จากที่แนะนำ' : ''}</div></td>
+                      <td className="p-2 text-center text-xs">{it.unit || '-'}</td>
+                      <td className="p-2 text-center text-xs">{pack > 1 ? pack : '-'}</td>
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.usage)}</td>}
                       {isPharmacy && <td className="p-2 text-right tabular-nums">{iqNum(it.onHand)}</td>}
                       {isPharmacy && <td className="p-2 text-right tabular-nums text-teal-700">{iqNum(it.suggestedQty)}</td>}
-                      <td className="p-2 text-right tabular-nums">{pack > 1 && req0 > 0 ? <><b>{formatQty(req0, pack)}</b> <span className="text-[10px] text-slate-400">แพ็ค</span><div className="text-[10px] text-slate-400">= {iqNum(req0)} {it.unit}{it.requestMode === 'unit' ? ' (ขอหน่วยย่อย)' : ''}</div></> : iqNum(req0)}</td>
-                      <td className="p-2 text-right">{editable ? <IqNumCell value={it.dispenseQty} touched={changed} ariaLabel={`อนุมัติจ่าย ${it.name}`} onCommit={v => setQty(it.drugId, v)} /> : <b className="tabular-nums">{iqNum(it.dispenseQty)}</b>}{receivedQtyOf(it) > 0 && <div className="text-[10px] font-bold text-emerald-700 whitespace-nowrap">{qtyWithReceivedText(it, it.dispenseQty)}</div>}
+                      <td className="p-2 text-right tabular-nums">{receivedQtyOf(it) > 0 ? <b className="text-emerald-700">{qtyWithReceivedText(it, req0)}</b> : pack > 1 && req0 > 0 ? <b>{formatQty(req0, pack)}</b> : iqNum(req0)}{pack > 1 && req0 > 0 && <div className="text-[10px] text-slate-400">= {iqNum(req0)}{it.requestMode === 'unit' ? ' (ขอหน่วยย่อย)' : ''}</div>}</td>
+                      <td className="p-2 text-right">{editable ? <IqNumCell value={it.dispenseQty} touched={changed} ariaLabel={`อนุมัติจ่าย ${it.name}`} onCommit={v => setQty(it.drugId, v)} /> : <b className="tabular-nums">{iqNum(it.dispenseQty)}</b>}
                         {pack > 1 && it.dispenseQty > 0 && <div className="text-[10px] text-slate-400">{formatQty(it.dispenseQty, pack)} แพ็ค</div>}</td>
+                      <td className="p-2 text-right tabular-nums text-xs">{iqMoney(toSafeNumber(it.price))}</td>
                       <td className="p-2 text-right tabular-nums">{iqMoney(internalItemValue(it))}</td>
+                      <td className="p-2 font-mono text-[11px] text-slate-500 whitespace-nowrap">{drugCodeLabel(it.drugId, ctx.findDrug(it.drugId)?.old_code)}</td>
                       <td className="p-2">{editable ? <input value={it.adminNote || ''} onChange={e => setNote(it.drugId, e.target.value)} placeholder="-" aria-label={`หมายเหตุห้องยา ${it.name}`} className="w-full min-w-[7rem] px-2 py-1 border border-slate-200 rounded-lg text-xs" /> : <span className="text-xs text-slate-500">{it.adminNote}</span>}</td>
                     </tr>
-                  );
-                })}
+                  ); });
+                  return out; })()}
               </tbody>
             </table>
           </div>

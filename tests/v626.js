@@ -28,6 +28,10 @@ fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:
   await p.goto('file://'+path.join(DIR,'t_app.html')); await p.waitForTimeout(1500);
   await p.click('text=คิวใบเบิกภายใน รพ.'); await p.waitForTimeout(600);
   await p.click('tr:has-text("ตึกผู้ป่วยหญิง")'); await p.waitForTimeout(600);
+  const ft=(await p.innerText('#iq-form-table')).replace(/\s+/g,' ');
+  const o2=['จำนวนเบิก','ยา','Paracetamol','เวชภัณฑ์','Gauze','Syringe','D1(259)'].map(k=>ft.indexOf(k));
+  check('review table: form layout (type groups, location order, code)', o2.every((v,i)=>v>=0&&(i===0||v>o2[i-1])) && ft.includes('ราคา/หน่วย'), ft.slice(0,300));
+  await p.screenshot({path:path.join(DIR,'v626_review.png')});
   await p.click('button:has-text("ตรวจ INVS แล้วอนุมัติ")'); await p.waitForTimeout(1200);
   const t=(await p.innerText('#iq-preflight-form').catch(()=>'')).replace(/\s+/g,' ');
   const order=['ยา','Paracetamol','เวชภัณฑ์','Gauze','Syringe'].map(k=>t.indexOf(k));

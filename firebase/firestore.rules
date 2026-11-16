@@ -1,5 +1,5 @@
 rules_version = '2';
-// Sawee Rxfill Firestore Rules v6.22 (ใบหน่วยงานพิมพ์แล้วล็อกยอด) · v6.17 (pick_slips slip จัดยา) · v6.16 (จ่ายล่วงหน้า รับแล้ว) · v6.14 (คลังห้องยาแยก lot) · v6.9 (LINE แจ้งเตือน · เบิกยาด่วน · แก้ Lot/EXP) · v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
+// Sawee Rxfill Firestore Rules v6.27 (กองMR · หน่วยสะดวกห้องยา) · v6.22 (ใบหน่วยงานพิมพ์แล้วล็อกยอด) · v6.17 (pick_slips slip จัดยา) · v6.16 (จ่ายล่วงหน้า รับแล้ว) · v6.14 (คลังห้องยาแยก lot) · v6.9 (LINE แจ้งเตือน · เบิกยาด่วน · แก้ Lot/EXP) · v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -152,7 +152,9 @@ service cloud.firestore {
                         && request.resource.data.diff(resource.data).affectedKeys()
                              .hasOnly(['hosxp_multiplier', 'hosxp_multiplier_updated_at', 'hosxp_multiplier_updated_by', 'updated_at',
                                        // v6.22 โหมดเบิกห้องยา (เบิกทั้งหมด / คลังพิเศษ)
-                                       'pharm_req_mode', 'pharm_req_mode_updated_at', 'pharm_req_mode_updated_by']));
+                                       'pharm_req_mode', 'pharm_req_mode_updated_at', 'pharm_req_mode_updated_by',
+                                       // v6.27 หน่วยสะดวกห้องยา
+                                       'pharm_round_unit', 'pharm_round_unit_updated_at', 'pharm_round_unit_updated_by']));
     }
 
     match /master_unit/{docId} {
@@ -505,6 +507,15 @@ service cloud.firestore {
                         && request.resource.data.balance >= 0);
 
       allow delete: if isAdmin();
+    }
+
+    // v6.27 กองMR: ยอดของห้องยา (MR) ที่วางอยู่ในคลัง + ประวัติ — แอดมินเท่านั้น
+    match /mr_pool/{docId} {
+      allow read, write: if isAdmin();
+    }
+    match /mr_pool_events/{docId} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
     }
 
     // v6.14 คลังห้องยาแยก lot: lot ที่นับ initial / รับเข้า + วันนับ initial ต่อยา — ห้องยาของตัวเองเขียนได้ (ลบจริงเฉพาะแอดมิน; ห้องยาปิด lot ด้วย active=false)

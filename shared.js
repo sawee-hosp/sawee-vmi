@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.26.0';
+const APP_VERSION = '6.27.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1083,6 +1083,35 @@ const pharmUsageSince = (series, seriesFrom, seriesTo, initialYmd, multiplier) =
 
 // ===== v6.16 ยอด "รับแล้ว" ในใบเบิกหน่วยงาน: ใบเบิกด่วน (urgentQty) + จ่ายล่วงหน้าโดยแอดมิน เช่น น้ำเกลือ (predispQty) =====
 // requestQty/dispenseQty = ยอดรวม (เบิกปกติ + รับแล้ว) · แสดง "3+2(รับแล้ว)"
+// v6.27 ดักสับสนหน่วย (ผู้เบิกหน่วยงาน/รพ.สต.): ยอดย้อนหลัง 6 ใบล่าสุดต่อยา → ธงตอนกดส่งใบ (ยืนยันแล้วจำไว้ ไม่เตือนซ้ำ)
+const qtyCheckHistory = (reqs, opts) => {
+  const o = opts || {}; const qtyOf = o.qtyOf || ((it) => toNonNegativeNumber(it.requestQty != null ? it.requestQty : it.dispenseQty));
+  const list = (reqs || []).filter((r) => r && r.id !== o.excludeId && !['Cancelled', 'Draft', 'Rejected'].includes(String(r.status || '')) && !String(r.id || '').startsWith('HIST-'))
+    .sort((a, b) => String(b._sortKey || b.form_date || b.round_date || ((b.year || 0) * 100 + (b.month || 0))).localeCompare(String(a._sortKey || a.form_date || a.round_date || ((a.year || 0) * 100 + (a.month || 0))))).slice(0, 6);
+  const m = new Map();
+  list.forEach((r) => (r.items || []).forEach((it) => { const q = qtyOf(it); if (q > 0) { const k = String(it.drugId); if (!m.has(k)) m.set(k, []); m.get(k).push(q); } }));
+  return m;
+};
+const qtyMedian = (arr) => { const a = (arr || []).slice().sort((x, y) => x - y); if (!a.length) return 0; const h = Math.floor(a.length / 2); return a.length % 2 ? a[h] : (a[h - 1] + a[h]) / 2; };
+const QTY_OK_KEY = 'rxfill_qty_ok';
+const qtyOkGet = () => { try { return JSON.parse(localStorage.getItem(QTY_OK_KEY) || '{}') || {}; } catch (e) { return {}; } };
+const qtyOkRemember = (scope, drugId, qty) => { try { const m = qtyOkGet(); m[scope + '|' + drugId + '|' + qty] = Date.now(); localStorage.setItem(QTY_OK_KEY, JSON.stringify(m)); } catch (e) {} };
+// items: [{drugId,name,unit,packSize,qty(หน่วยย่อยที่ผู้เบิกใส่), isUnpacked}] → [{...item, reasons[], median, suggestPack}]
+const qtyCheckFlags = (items, hist, scope) => {
+  const ok = qtyOkGet(); const out = [];
+  (items || []).forEach((it) => {
+    const q = toNonNegativeNumber(it.qty); if (!(q > 0)) return;
+    if (ok[scope + '|' + it.drugId + '|' + q]) return;
+    const pack = safePackSize(it.packSize); const h = hist.get(String(it.drugId)) || []; const med = qtyMedian(h);
+    const reasons = [];
+    if (pack > 1 && q < pack && (med >= pack || (!h.length && !it.isUnpacked))) reasons.push('ขอเป็นหน่วยย่อย น้อยกว่า 1 แพ็ก (1 แพ็ก = ' + pack.toLocaleString('th-TH') + ')');
+    if (med > 0 && h.length >= 2 && q * 10 <= med) reasons.push('น้อยกว่าที่เคยเบิกมาก (ปกติ ~' + med.toLocaleString('th-TH') + ')');
+    if (med > 0 && h.length >= 2 && q >= med * 10) reasons.push('มากกว่าที่เคยเบิกมาก (ปกติ ~' + med.toLocaleString('th-TH') + ')');
+    if (q === 1 && med >= 20 && !reasons.length) reasons.push('เบิก 1 ในยาที่ปกติเบิก ~' + med.toLocaleString('th-TH'));
+    if (reasons.length) out.push(Object.assign({}, it, { qty: q, reasons: reasons, median: med, suggestPack: pack > 1 && q < pack ? q * pack : 0 }));
+  });
+  return out;
+};
 const receivedQtyOf = (it) => toNonNegativeNumber(it && it.urgentQty) + toNonNegativeNumber(it && it.predispQty);
 const regularQtyOf = (it, total) => Math.max(0, Math.round((toNonNegativeNumber(total != null ? total : (it && (it.requestQty != null ? it.requestQty : it.dispenseQty))) - receivedQtyOf(it)) * 1000) / 1000);
 const qtyWithReceivedText = (it, total, pack) => {
@@ -1296,7 +1325,7 @@ const buildInternalReqFormHtml = (opts) => {
         const tgt = it.targetQty != null ? dash(it.targetQty, qty(toNonNegativeNumber(it.targetQty), pack)) : '-';
         return trOpen(li) +
           '<td class="c">' + n + '</td>' +
-          '<td class="name">' + esc(it.name) + '</td>' +
+          '<td class="name">' + esc(it.name) + (it.admin_added ? ' <span style="font-size:7pt;border:0.5pt solid #555;padding:0 2px">แอดมินเพิ่ม</span>' : '') + '</td>' +
           '<td class="c muted">' + esc(it.unit) + '</td>' +
           '<td class="c">' + pack + '</td>' +
           '<td class="c">' + z(usage, qty(usage, pack)) + '</td>' +
@@ -1312,7 +1341,7 @@ const buildInternalReqFormHtml = (opts) => {
       }
       return trOpen(li) +
         '<td class="c">' + n + '</td>' +
-        '<td class="name">' + esc(it.name) + '</td>' +
+        '<td class="name">' + esc(it.name) + (it.admin_added ? ' <span style="font-size:7pt;border:0.5pt solid #555;padding:0 2px">แอดมินเพิ่ม</span>' : '') + '</td>' +
         '<td class="c muted">' + esc(it.unit) + '</td>' +
         '<td class="c">' + pack + '</td>' +
         '<td class="c b">' + (receivedQtyOf(it) > 0 ? esc(qtyWithReceivedText(it, req0, pack)) : qty(req0, pack)) + '</td>' + // v6.16 "3+2(รับแล้ว)"

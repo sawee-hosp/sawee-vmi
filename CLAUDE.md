@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.26.0 · Bridge v2.16.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.27.0 · Bridge v2.17.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -260,3 +260,14 @@
 - LINE Console `LineSettingsPanel` (`#line-settings`) → `line-notify` action `settings` (แอดมิน) เขียน `line_meta/settings` {staff_enabled, admin_enabled, work_hours_only, work_start, work_end}
   - `core.pushText` ตรวจทุกครั้ง (`settingsBlock`): ปิด จนท./แอดมิน หรือนอกเวลาทำการ (จ.–ศ. เวลาไทย, เฉพาะ จนท.) = ไม่ส่ง + log skipped · test ส่งได้เสมอ · dispensed คืน `blocked` · cron dryRun แสดงคำเตือน
 - tests/v626.js
+
+## v6.27 ของไม่พอ = ล็อก · กองMR · แอดมินเพิ่มยา · ดักหน่วย · หน่วยสะดวก · Sync ชื่อ/ประเภท (Bridge 2.17.0)
+- **ของไม่พอ = ส่ง INVS ไม่ได้:** `invsShortItems(preflight)` (stock_before < qty) → `InvsShortBox` (`#invs-short-box`) ในหน้าตรวจ INVS ทั้งคิวใบภายในและใบ รพ.สต. · ปุ่มส่งล็อก · "แก้จ่ายเป็น X" (รพ.สต. หัก emergency+extra) · "ดึงจากกองMR" · "ตรวจ INVS ใหม่" · Bridge 2.17.0 คงคลังรวมไม่พอ = error (`invs.block_if_stock_short` ค่าเริ่มต้น true)
+- **กองMR** (ของที่ INVS ตัดเป็นห้องยาแล้วแต่ยังวางในคลัง): ยาในระบบ = `isMrPoolDrug` (หมวด 32 + `master_drugs.mr_pool===true`, false = เอาออก) · `mr_pool/{drug}` {qty หน่วยย่อย, lots[{lot_no,expiry,qty}], counted_at, main_count, invs_on_hand_at_count} · `mr_pool_events` COUNT/PULL (rules v6.27 แอดมิน, events แก้/ลบไม่ได้)
+  - เมนูแอดมิน "กองMR" (`MrPoolView`): ดึงคงคลัง INVS (invs_lots) · พิมพ์ใบนับ · คีย์นับคลังใหญ่ + กองMR/ห้องยาถือ + Lot/EXP · ของจริง > INVS = ส่วนเกินเข้ากอง · < INVS = ใบตัดเข้าห้องยาทันที (internal_requisitions kind pharmacy `mr_adjust:true` Pending, source mr_adjust → ส่งผ่านคิวใบภายในปกติ)
+  - `MrPullModal`: คืนจากห้องยาเข้าคลังใหญ่ — ระบบบอก Lot/EXP (FEFO จาก mr_pool.lots) ให้คีย์ในเมนูคืนยา INVS เอง (Bridge ไม่เขียน) → "คีย์คืนใน INVS แล้ว" หักกองMR · ตอนตัดจ่ายปกติกองMR ไม่แสดง
+- **แอดมินเพิ่มยา** ในหน้าตรวจใบหน่วยงาน/ห้องยา (`#iq-add-box`, PackUnitQtyField) → item `admin_added: true` ป้าย "แอดมินเพิ่ม" (จอ + ใบพิมพ์) ลบได้จนส่ง INVS
+- **ดักสับสนหน่วย:** shared.js `qtyCheckHistory` (6 ใบล่าสุด) / `qtyCheckFlags` (ขอหน่วยย่อย < 1 แพ็ก · ต่างค่ากลาง ≥10 เท่า · เบิก 1 ในยาที่ปกติ ≥20) / `qtyOkRemember` (localStorage `rxfill_qty_ok`) → `QtyCheckModal` (`#qty-check-modal`) ตอนกดส่งใบ ทั้ง DeptReqView และ CreateReqView (รพ.สต. เฉพาะรายการ manualQtyOverride/isAdjusted) · PackQtyInput แสดง "= 2 ชิ้น (ไม่ถึง 1 แพ็ค ×100)"
+- **หน่วยสะดวกห้องยา** `master_drugs.pharm_round_unit` (หน่วยย่อย, ตั้งใต้ชื่อยาใน PharmacyReqView `ConvUnitInput`, rules ห้องยาเขียนได้) → ยอดแนะนำปัดเป็นทวีคูณใกล้สุด (กึ่งกลางปัดขึ้น · ปัดลงแล้วไม่พอถึงรอบหน้า = ปัดขึ้น) · หมายเหตุ "ปัดจาก 15 → 12"
+- **Sync จาก INVS** (`InvsMasterSyncModal`): + ชื่อยา (`drug_name_previous`) + ประเภท (`type_previous`, Bridge `type_code` จาก drug_gn คอลัมน์ `invs.type_column` หรือเดา DRUG_TYPE/TYPE_ID/...) + ชื่อประเภท → `config/drug_types` · ติ๊กเปิด/ปิดได้ · ชื่อหน่วยนับ master_unit ตาม sale_unit เสมอ
+- tests/v627.js

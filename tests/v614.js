@@ -44,7 +44,7 @@ const seed=(uid,extra)=>fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED
     await p.click('button:has-text("ดึงยอดใช้จาก HOSxP")'); await p.waitForSelector('text=Ibuprofen 400 mg tab');
     await p.click('#asu-fetch'); await p.waitForTimeout(800);
     const row=(await p.locator('tr',{hasText:'Ibuprofen 400 mg tab'}).first().innerText()).replace(/\s+/g,' ');
-    const credit=await p.locator('tr',{hasText:'Ibuprofen 400 mg tab'}).first().locator('input').nth(1).inputValue().catch(()=>'');
+    const credit=await p.locator('tr',{hasText:'Ibuprofen 400 mg tab'}).first().locator('input:not(.conv-unit)').nth(1).inputValue().catch(()=>'');
     check('formula: on-hand from room lots (100 − 6 = 94)', /lot ห้องยา 2 lot/.test(row) && (credit==='94' || row.includes(' 94 ')), 'credit='+credit+' · '+row.slice(0,220));
     // Trace
     await p.click('button:has-text("ย้อนรอย lot (Trace)")'); await p.waitForSelector('#trace-view');

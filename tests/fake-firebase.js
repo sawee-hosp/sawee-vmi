@@ -86,6 +86,7 @@
       countReads(c, Math.max(1, docs.length));
       return { docs, size: docs.length, empty: !docs.length };
     },
+    count: () => ({ get: async () => { const n = [...col(c).values()].filter(d => filters.every(f => matches(d, f))).length; countReads(c, 1); return { data: () => ({ count: n }) }; } }),
     doc: (id) => new DocRef(c, id || ('auto' + Math.random().toString(36).slice(2))),
     add: async (data) => { const id = 'auto' + Math.random().toString(36).slice(2); col(c).set(id, apply(null, data)); return new DocRef(c, id); }
   });

@@ -279,3 +279,8 @@
 - ปกปิด (`researchAnonymize`): ฟิลด์ `*_uid`/`*Uid`/`*_by`/`by` + `*_by_name`/`*ByName`/actor_name/user_name/by_name/to_name → U001… (จับคู่ uid↔ชื่อจากทุกไฟล์ คนเดิมรหัสเดิม) · ลบ sign_names/sign_people/sign_roles, `line_*`, email/phone/tel/mobile · คง hospitalId/ชื่อ รพ.สต. · ข้อความอิสระไม่ปกปิด (ระบุใน manifest)
 - manifest.json (เวลา, APP_VERSION, ช่วงวันที่, ตัวกรอง, จำนวนเอกสาร, ฟิลด์ที่แทน/ลบ, หมายเหตุ) · data_dictionary.json (`researchDictionary`: ฟิลด์รวม items[].x, ชนิด, จำนวนเอกสารที่มีฟิลด์, ตัวอย่าง) · Timestamp → ISO 8601
 - tests/v628.js (fake-firebase เพิ่ม `count()`)
+
+## v6.29 สำรวจคงคลัง คลังยาใหญ่
+- เมนูแอดมิน "สำรวจคงคลัง" (`StockSurveyView`, app.html): ดึง `invs_lots` (คลังจ่ายค่าเริ่มต้น) ทุกยาที่ไม่ยกเลิก · เลือกประเภท (localStorage `rxfill_survey_types`) · เรียง ตำแหน่ง/ชื่อ/รหัส (`surveySorter`, localStorage `rxfill_survey_sort`) · ซ่อนคงคลัง 0 (ติ๊กรวมได้)
+- `buildStockSurveySlipHtml` slip 80 มม. ยาวตามเนื้อหา: ตำแหน่ง · ชื่อ · รหัส(old_code) · คงเหลือหน่วยใหญ่ · ทุก lot (EXP, จำนวน, ช่องนับ) · "นับได้ ......" · ผู้สำรวจ/ผู้ตรวจสอบ — อ่านอย่างเดียว ไม่บันทึกผล
+- tests/v629.js

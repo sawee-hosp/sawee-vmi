@@ -9025,6 +9025,99 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+    // ===================== v6.29 สำรวจคงคลัง คลังยาใหญ่ (INVS) · slip ยาว 80 มม. =====================
+    const SURVEY_SORTS = { loc: 'ตำแหน่ง (Location)', name: 'ชื่อ', code: 'รหัส' };
+    const surveySorter = (mode) => (a, b) => mode === 'name' ? String(a.name).localeCompare(String(b.name), 'th') || String(a.id).localeCompare(String(b.id))
+      : mode === 'code' ? String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
+      : compareByLocation(a.loc, a.name, b.loc, b.name);
+    const buildStockSurveySlipHtml = ({ rows, mode, typeNames, stockLabel, widthMm }) => {
+      const W = Math.max(48, Number(widthMm) || PICK_SLIP_WIDTH_MM); const fs = W >= 100 ? 12.5 : W >= 80 ? 11.5 : 10;
+      const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const exp = (raw) => { const v = String(raw || '').replace(/\D/g, '').slice(0, 8); if (v.length !== 8) return esc(raw || '-'); const y = Number(v.slice(0, 4)); return `${v.slice(6, 8)}/${v.slice(4, 6)}/${String(y < 2400 ? y + 543 : y).slice(-2)}`; };
+      const q = (v, pack) => esc(safePackSize(pack) > 1 ? formatQty(Math.round(toSafeNumber(v) * 1000) / 1000, pack) : toSafeNumber(v).toLocaleString('th-TH', { maximumFractionDigits: 2 }));
+      const now = new Date().toLocaleString('th-TH');
+      const body = rows.map((r, i) => `<div class="it">
+        <div class="hd"><span class="loc">${esc(r.loc || '—')}</span><span class="nm"><span class="no">${i + 1}.</span> <b>${esc(r.name)}</b></span><span class="rt">คงเหลือ <b>${q(r.total, r.pack)}</b></span></div>
+        <div class="ln"><span class="sm">${esc(r.code)} · ${esc(r.unit)}${r.pack > 1 ? ' ×' + r.pack : ''}</span><span class="cnt">นับได้ ..........</span></div>
+        ${r.lots.length ? r.lots.map(l => `<div class="lot">☐ <b>${esc(l.lot_no || '-')}</b> <span class="sm">EXP ${exp(l.expiry)}</span><span class="lq">${q(l.qty, r.pack)}</span><span class="ck">.......</span></div>`).join('') : '<div class="lot sm">ไม่มี lot ในคลัง · พบจริง ......</div>'}
+      </div>`).join('');
+      return '<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบสำรวจคลัง ' + esc(new Date().toLocaleDateString('th-TH')) + '</title>' +
+        '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=block" rel="stylesheet">' +
+        `<style id="pg">@page{size:${W}mm 200mm;margin:0}</style><style>` +
+        `*{box-sizing:border-box}html,body{margin:0;padding:0}body{width:${W}mm;padding:2mm 3mm 6mm;font-family:Sarabun,Tahoma,sans-serif;font-size:${fs}px;line-height:1.25;color:#000}` +
+        `.t{text-align:center;font-weight:700;font-size:${fs + 3}px}.m{display:flex;justify-content:space-between;flex-wrap:wrap;gap:0 6px;font-size:${fs - 1}px}` +
+        `.it{border-top:0.5px dashed #000;padding:0.6mm 0;page-break-inside:avoid}.hd{display:flex;align-items:baseline;gap:3px;font-size:${fs + 0.5}px}.nm{flex:1;min-width:0}.rt{white-space:nowrap}` +
+        `.loc{display:inline-block;border:1px solid #000;padding:0 3px;font-weight:700;font-family:Consolas,monospace;white-space:nowrap}.no{font-weight:700}` +
+        `.ln{display:flex;justify-content:space-between}.cnt{font-size:${fs - 1}px}.lot{display:flex;gap:4px;align-items:baseline;padding-left:2mm;font-family:Consolas,monospace}` +
+        `.lot .lq{margin-left:auto;font-weight:700}.ck{font-size:${fs - 2}px}.sm{font-size:${fs - 2}px}.end{border-top:1px solid #000;margin-top:1.5mm;padding-top:1mm}` +
+        `.sig{margin-top:5mm;display:flex;justify-content:space-between;gap:4mm;font-size:${fs - 1}px}.sig div{flex:1;border-top:1px dotted #000;text-align:center;padding-top:1mm}` +
+        '</style></head><body>' +
+        `<div class="t">ใบสำรวจคงคลัง</div><div class="m"><span>${esc(stockLabel || 'คลังยาใหญ่')}</span><span>${rows.length} รายการ</span></div>` +
+        `<div class="m"><span>เรียงตาม${esc(SURVEY_SORTS[mode] || '')}</span><span>พิมพ์ ${esc(now)}</span></div>` +
+        `<div class="m sm"><span>${esc(typeNames)}</span></div>` + body +
+        `<div class="end sm">คงเหลือ = INVS ตอนพิมพ์ · จำนวน = หน่วยใหญ่(หน่วยย่อย) · เขียนยอดนับได้ต่อ lot ที่ช่อง .......</div>` +
+        '<div class="sig"><div>ผู้สำรวจ</div><div>ผู้ตรวจสอบ</div></div>' +
+        `<script>(function(){function fit(){var h=Math.ceil(document.documentElement.scrollHeight*25.4/96)+4;document.getElementById('pg').textContent='@page{size:${W}mm '+h+'mm;margin:0}';}fit();if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);window.addEventListener('load',fit);})();<\/script>` +
+        '</body></html>';
+    };
+    const StockSurveyView = ({ ctx }) => {
+      const types = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
+      const drugs = useMemo(() => (ctx.appDb.drugs || []).filter(d => !isDrugDiscontinued(d)), [ctx.appDb.drugs]);
+      const typeKeys = useMemo(() => [...new Set(drugs.map(d => String(d.type || '1')))].sort((a, b) => Number(a) - Number(b)), [drugs]);
+      const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
+      const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+      const [mode, setMode] = useState(() => lsGet('rxfill_survey_sort', 'loc'));
+      const [sel, setSel] = useState(() => lsGet('rxfill_survey_types', null));
+      const [withZero, setWithZero] = useState(false);
+      const [lots, setLots] = useState(null); const [at, setAt] = useState(null);
+      const [busy, setBusy] = useState(false); const [q, setQ] = useState('');
+      const selected = sel || typeKeys;
+      useEffect(() => { lsSet('rxfill_survey_sort', mode); }, [mode]);
+      const toggleType = (t) => { const next = selected.includes(t) ? selected.filter(x => x !== t) : [...selected, t]; setSel(next); lsSet('rxfill_survey_types', next); };
+      const fetchLots = async () => {
+        setBusy(true);
+        try { const ids = drugs.map(d => String(d.drug_id)); const out = {};
+          for (let i = 0; i < ids.length; i += 1000) Object.assign(out, (await callInvsBridge('invs_lots', '', { drug_ids: ids.slice(i, i + 1000) })).lots || {});
+          setLots(out); setAt(new Date()); ctx.showToast('ดึงคงคลัง INVS แล้ว'); }
+        catch (e) { ctx.showToast('ดึงคงคลัง INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+        finally { setBusy(false); }
+      };
+      const rows = useMemo(() => !lots ? [] : drugs.filter(d => selected.includes(String(d.type || '1'))).map(d => {
+        const id = String(d.drug_id); const ls = (lots[id] || []).filter(l => toNonNegativeNumber(l.qty) > 0);
+        return { id, name: d.drug_name, loc: safeText(d.invs_location), code: drugCodeLabel(id, d.old_code), type: String(d.type || '1'), pack: safePackSize(d.pack_size), unit: ctx.findUnitName ? ctx.findUnitName(d) : '', lots: ls, total: ls.reduce((s, l) => s + toNonNegativeNumber(l.qty), 0) };
+      }).filter(r => withZero || r.total > 0).sort(surveySorter(mode)), [lots, drugs, selected, withZero, mode]);
+      const shown = q ? rows.filter(r => `${r.id} ${r.name} ${r.loc} ${r.code}`.toLowerCase().includes(q.toLowerCase())) : rows;
+      const print = () => printHtmlDocument(buildStockSurveySlipHtml({ rows, mode, typeNames: selected.map(t => types[t] || 'หมวด ' + t).join(', ') }));
+      return (
+        <div className="space-y-5" id="stock-survey">
+          <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-clipboard-list text-teal-600 mr-2"></i>สำรวจคงคลัง (คลังยาใหญ่)</h2>
+          <div className="bg-white border rounded-2xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm"><b className="text-slate-600 mr-1">ประเภท:</b>
+              {typeKeys.map(t => <label key={t} className={`px-3 py-1.5 rounded-xl border cursor-pointer font-bold ${selected.includes(t) ? 'bg-teal-50 border-teal-400 text-teal-800' : 'bg-white text-slate-400'}`}><input type="checkbox" className="survey-type mr-1" data-type={t} checked={selected.includes(t)} onChange={() => toggleType(t)} />{types[t] || 'หมวด ' + t}</label>)}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-sm"><b className="text-slate-600 mr-1">เรียงตาม:</b>
+              {Object.entries(SURVEY_SORTS).map(([k, v]) => <button key={k} id={`survey-sort-${k}`} onClick={() => setMode(k)} className={`px-3 py-1.5 rounded-xl border font-bold ${mode === k ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'}`}>{v}</button>)}
+              <label className="ml-3 font-bold text-slate-600"><input id="survey-zero" type="checkbox" checked={withZero} onChange={e => setWithZero(e.target.checked)} className="mr-1" />รวมยาที่คงคลัง 0</label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button id="survey-fetch" onClick={fetchLots} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold">{busy ? <i className="fa-solid fa-spinner fa-spin mr-1"></i> : <i className="fa-solid fa-database mr-1"></i>}{lots ? 'ดึงคงคลัง INVS ใหม่' : 'ดึงคงคลัง INVS'}</button>
+              <button id="survey-print" onClick={print} disabled={!rows.length} className="px-4 py-2 rounded-xl bg-teal-600 text-white font-bold disabled:opacity-40"><i className="fa-solid fa-receipt mr-1"></i>พิมพ์ slip สำรวจคลัง ({rows.length})</button>
+              {at && <span className="text-xs text-slate-500 self-center">คงคลัง ณ {at.toLocaleTimeString('th-TH')}</span>}
+              <input value={q} onChange={e => setQ(e.target.value)} placeholder="ค้นหา" className="ml-auto border rounded-xl px-3 py-2 text-sm w-56" />
+            </div>
+          </div>
+          {lots && <div className="bg-white border rounded-2xl overflow-auto max-h-[60vh]">
+            <table className="w-full text-sm" id="survey-table"><thead className="bg-slate-100 text-xs sticky top-0"><tr><th className="p-2">ที่</th><th className="p-2 text-left">ตำแหน่ง</th><th className="p-2 text-left">รายการ</th><th className="p-2 text-left">รหัส</th><th className="p-2 text-right">คงเหลือ</th><th className="p-2 text-left">Lot · EXP · จำนวน</th></tr></thead>
+              <tbody>{shown.map((r, i) => <tr key={r.id} className="border-t survey-row" data-id={r.id}>
+                <td className="p-2 text-center text-slate-400">{i + 1}</td><td className="p-2 font-bold text-teal-700 whitespace-nowrap">{r.loc || '-'}</td>
+                <td className="p-2"><div className="font-semibold">{r.name}</div><div className="text-[11px] text-slate-400">{types[r.type] || r.type} · {r.unit}{r.pack > 1 ? ` ×${r.pack}` : ''}</div></td>
+                <td className="p-2 font-mono text-xs">{r.code}</td><td className="p-2 text-right font-black">{formatQty(r.total, r.pack)}</td>
+                <td className="p-2 text-xs font-mono">{r.lots.length ? r.lots.map((l, j) => <div key={j}>{l.lot_no || '-'} · {mrExp(l.expiry)} · <b>{formatQty(l.qty, r.pack)}</b></div>) : <span className="text-slate-300">ไม่มี lot</span>}</td></tr>)}</tbody></table>
+          </div>}
+        </div>
+      );
+    };
+
     const InvsMasterSyncModal = ({ ctx, onClose }) => {
       const [busy, setBusy] = useState('');
       const [plan, setPlan] = useState(null); // { creates, updates, units, total }
@@ -12039,6 +12132,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentUser?.role === 'admin' && <button onClick={() => requestView('ncds_mapping')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='ncds_mapping'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-link w-6 text-center mr-2"></i> จับคู่ยา NCDs</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('substock_sync')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='substock_sync'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-warehouse w-6 text-center mr-2"></i> คลังย่อย รพ.สต. → INVS</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('research_export')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='research_export'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-file-zipper w-6 text-center mr-2"></i> ส่งออกข้อมูลวิจัย</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('stock_survey')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='stock_survey'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-clipboard-list w-6 text-center mr-2"></i> สำรวจคงคลัง</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('mr_pool')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='mr_pool'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> กองMR</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('line_console')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='line_console'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-brands fa-line w-6 text-center mr-2"></i> LINE Console</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('config')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='config'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-database w-6 text-center mr-2"></i> จัดการฐานข้อมูล</button>}
@@ -12072,6 +12166,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'config' && <AdminConfigView ctx={ctx} />}
               {currentView === 'line_console' && currentUser?.role === 'admin' && <LineConsoleView ctx={ctx} />}
               {currentView === 'mr_pool' && currentUser?.role === 'admin' && <MrPoolView ctx={ctx} />}
+              {currentView === 'stock_survey' && currentUser?.role === 'admin' && <StockSurveyView ctx={ctx} />}
               {currentView === 'research_export' && currentUser?.role === 'admin' && <ResearchExportView ctx={ctx} />}
               {currentView === 'substock_sync' && currentUser?.role === 'admin' && <SubstockSyncView ctx={ctx} />}
               {currentView === 'count_status' && currentUser?.role === 'admin' && <StockCountStatusView ctx={ctx} />}

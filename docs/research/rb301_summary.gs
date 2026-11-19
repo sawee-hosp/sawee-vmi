@@ -3,7 +3,7 @@
  *
  * วิธีใช้
  * 1) เปิด https://script.google.com → New project → วางโค้ดนี้ทั้งหมด
- * 2) เมนูซ้าย Services (+) → เพิ่ม "Drive API" (Advanced Drive Service) แล้วกด Add
+ * 2) (ไม่ต้องเพิ่ม Services ใด ๆ)
  * 3) เลือกฟังก์ชัน runRb301Summary → Run → อนุญาตสิทธิ์ Drive / Sheets
  * 4) เสร็จแล้วดูลิงก์ Sheet ผลลัพธ์ใน Execution log (สร้างไฟล์ใหม่ "สรุป รบ.301 ..." ใน My Drive)
  *
@@ -100,10 +100,18 @@ function runRb301Summary() {
 
 // แปลง xls/xlsx เป็น Google Sheet ชั่วคราว อ่านค่า แล้วลบไฟล์ชั่วคราวทิ้ง
 function readRows_(file) {
-  const tmp = Drive.Files.copy({ title: 'tmp_rb301', name: 'tmp_rb301', mimeType: MimeType.GOOGLE_SHEETS }, file.getId(), { convert: true });
-  try { return SpreadsheetApp.openById(tmp.id).getSheets()[0].getDataRange().getDisplayValues(); }
-  finally { DriveApp.getFileById(tmp.id).setTrashed(true); }
+  // ใช้ Drive REST API ตรง (ไม่ต้องเปิด Advanced Drive Service)
+  const res = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + file.getId() + '/copy', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    payload: JSON.stringify({ name: 'tmp_rb301', mimeType: 'application/vnd.google-apps.spreadsheet' })
+  });
+  if (res.getResponseCode() !== 200) throw new Error('แปลงไฟล์ไม่ได้ ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 150));
+  const id = JSON.parse(res.getContentText()).id;
+  try { return SpreadsheetApp.openById(id).getSheets()[0].getDataRange().getDisplayValues(); }
+  finally { DriveApp.getFileById(id).setTrashed(true); }
 }
+// (บรรทัดนี้ทำให้ Apps Script ขอสิทธิ์ Drive แบบเต็ม: DriveApp.createFile)
 
 function parseRb301_(rows) {
   const out = { hospInfo: '', periodText: '', from: null, to: null, items: [], totalValue: null };

@@ -234,11 +234,11 @@
   <div id="root" class="flex-grow"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.27.0"></script>
+  <script src="shared.js?v=6.30.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.27.0';
+      var need = '6.30.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -1319,9 +1319,27 @@
       const isAdmin = ctx.currentUser?.role === 'admin';
       
       const [adminSelectedCard, setAdminSelectedCard] = useState('pending');
+      // v6.28 ค้นหาใบเบิก (เลขที่/รพ.สต./รอบบิล/เดือน) + แบ่งหน้า — เดิมแสดงแค่ 20 ใบล่าสุด
+      const [reqQuery, setReqQuery] = useState('');
+      const [reqPage, setReqPage] = useState(1);
+      const REQ_PAGE_SIZE = 20;
+      useEffect(() => { setReqPage(1); }, [reqQuery, adminSelectedCard]);
 
       const myReqs = isHospital ? ctx.appDb.requisitions.filter(r => r.hospitalId === ctx.currentUser?.hospital_id) : ctx.appDb.requisitions;
       const validReqs = myReqs.filter(r => !r.id.startsWith('HIST-'));
+      const listReqs = validReqs.filter(r => {
+        if (!isAdmin) return true;
+        if (adminSelectedCard === 'pending') return ['Draft','Pending'].includes(r.status);
+        if (adminSelectedCard === 'completed') return r.status === 'Completed';
+        return true;
+      }).filter(r => {
+        const q = safeText(reqQuery).toLowerCase(); if (!q) return true;
+        const hn = safeText(ctx.findHospital(r.hospitalId)?.hospital_name).toLowerCase();
+        return `${r.id} ${r.hospitalId} ${hn} ${formatBillRound(r, ctx.appDb.requisitions)} ${r.month}/${r.year} ${THAI_MONTHS[Number(r.month) - 1] || ''} ${r.invs_sub_po_no || ''} ${r.requisition_no || ''}`.toLowerCase().includes(q);
+      }).sort((a, b) => tsToMillis(b.submitted_at || b.created_at) - tsToMillis(a.submitted_at || a.created_at));
+      const reqPages = Math.max(1, Math.ceil(listReqs.length / REQ_PAGE_SIZE));
+      const reqPageNow = Math.min(reqPage, reqPages);
+      const pagedReqs = listReqs.slice((reqPageNow - 1) * REQ_PAGE_SIZE, reqPageNow * REQ_PAGE_SIZE);
 
       const today = new Date();
       const currentDay = today.getDate();
@@ -1506,6 +1524,7 @@
              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in w-full">
                <div className="p-5 border-b border-slate-100 font-bold text-slate-800 bg-slate-50 flex justify-between items-center">
                  <span><i className="fa-solid fa-list-ul text-emerald-500 mr-2"></i> ประวัติการเติมยา {adminSelectedCard === 'pending' && <span className="text-red-500 ml-2">(แสดงเฉพาะที่รอจัด)</span>}</span>
+               <input id="req-search" value={reqQuery} onChange={e => setReqQuery(e.target.value)} placeholder="ค้นหา เลขที่ใบ / รพ.สต. / รอบบิล / เดือน / เลข INVS" className="ml-auto w-80 max-w-full border rounded-lg px-3 py-1.5 text-sm font-normal" />
                </div>
                <div className="overflow-x-auto w-full">
                  <table className="w-full text-left border-collapse whitespace-nowrap">
@@ -1521,13 +1540,7 @@
                      </tr>
                    </thead>
                    <tbody>
-                     {validReqs.filter(r => {
-                        if (!isAdmin) return true;
-                        if (adminSelectedCard === 'all') return true;
-                        if (adminSelectedCard === 'pending') return ['Draft','Pending'].includes(r.status);
-                        if (adminSelectedCard === 'completed') return r.status === 'Completed';
-                        return true;
-                     }).sort((a, b) => tsToMillis(b.submitted_at || b.created_at) - tsToMillis(a.submitted_at || a.created_at)).slice(0,20).map(req => { // v6.6.4 ใหม่ → เก่า ตามเวลาส่ง
+                     {pagedReqs.map(req => { // v6.6.4 ใหม่ → เก่า ตามเวลาส่ง · v6.28 แบ่งหน้า
                        const isPendingHighlight = isAdmin && adminSelectedCard === 'pending';
                        return (
                           <tr key={req.id} className={`border-b transition cursor-pointer ${isPendingHighlight ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-slate-50'}`} onClick={() => { ctx.setCurrentReqId(req.id); ctx.setCurrentView('view_req'); }}>
@@ -1560,10 +1573,18 @@
                           </tr>
                        )
                      })}
-                     {validReqs.length === 0 && <tr><td colSpan={isAdmin ? 7 : 6} className="p-8 text-center text-slate-400">ไม่มีข้อมูลการเบิกยา</td></tr>}
+                     {listReqs.length === 0 && <tr><td colSpan={isAdmin ? 7 : 6} className="p-8 text-center text-slate-400">{reqQuery ? 'ไม่พบใบเบิกที่ค้นหา' : 'ไม่มีข้อมูลการเบิกยา'}</td></tr>}
                    </tbody>
                  </table>
                </div>
+               {listReqs.length > 0 && <div className="flex flex-wrap items-center justify-between gap-2 p-4 border-t text-sm text-slate-600" id="req-pager">
+                 <span>แสดง {(reqPageNow - 1) * REQ_PAGE_SIZE + 1}–{Math.min(reqPageNow * REQ_PAGE_SIZE, listReqs.length)} จาก {listReqs.length} ใบ</span>
+                 <div className="flex items-center gap-1">
+                   <button id="req-page-prev" disabled={reqPageNow <= 1} onClick={() => setReqPage(reqPageNow - 1)} className="px-3 py-1.5 rounded-lg border disabled:opacity-40">‹ ก่อนหน้า</button>
+                   {Array.from({ length: reqPages }, (_, k) => k + 1).map(n => <button key={n} onClick={() => setReqPage(n)} className={`req-page-btn px-3 py-1.5 rounded-lg border ${n === reqPageNow ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white'}`}>{n}</button>)}
+                   <button id="req-page-next" disabled={reqPageNow >= reqPages} onClick={() => setReqPage(reqPageNow + 1)} className="px-3 py-1.5 rounded-lg border disabled:opacity-40">ถัดไป ›</button>
+                 </div>
+               </div>}
              </div>
           )}
         </div>
@@ -3354,7 +3375,10 @@ const CreateReqView = ({ ctx, round = null }) => {
             return { ...item, mappedDrugId: mappedId, wasAutoMatched: !!mappedId };
           });
 
-          setImportData({ hospInfo, periodInfo, isDateValid, items: extracted });
+          // v6.28 ช่วงวันที่ตัดยอดในไฟล์ → เทียบกับรอบเบิกของใบ (เก็บลงใบด้วย ไว้ตรวจย้อนหลัง)
+          const rbMeta = rb301ParseRows(dataRows);
+          const rbCheck = rb301PeriodCheck(rbMeta.from, rbMeta.to, currentMonth, currentYear);
+          setImportData({ hospInfo, periodInfo, isDateValid, items: extracted, rbMeta: { from: rbMeta.from, to: rbMeta.to, text: rbMeta.periodText, totalValue: rbMeta.totalValue }, rbCheck });
           setShowImportModal(true);
           setIsProcessing(false);
         };
@@ -3560,6 +3584,7 @@ const CreateReqView = ({ ctx, round = null }) => {
                    schema_version: APP_SCHEMA_VERSION
                  };
                  if (fileUrl) payload.excel_url = fileUrl;
+                 if (excelFile && importData.rbMeta) Object.assign(payload, rb301MetaFields(importData));
                  tx.update(reqRef, payload);
                  auditDetails = { hospital_id: current.hospitalId, month: current.month, year: current.year, fiscal_year:resolvedFiscalYear, fiscal_term:resolvedFiscalTerm, requisition_no:resolvedRequisitionNo, revision: payload.revision };
                });
@@ -3626,6 +3651,7 @@ savedNewIdRef.current = newId;
                status: finalStatus,
                is_printed: false,
                excel_url: fileUrl || '',
+               ...(excelFile && importData.rbMeta ? rb301MetaFields(importData) : {}),
                items: sanitizedItems,
                skipped_items: skipped,
                created_by_uid: ctx.currentUser?.uid || '',
@@ -3717,8 +3743,8 @@ return ctx.editReqId || savedNewIdRef.current || buildRequisitionId(hospId, curr
            if (flags.length) return setQtyFlags(flags);
          }
          ctx.setConfirmDialog({
-            title: 'ยืนยันการส่งใบเบิก?',
-            message: 'กรุณาตรวจสอบข้อมูลให้ครบถ้วน ยืนยันการส่งข้อมูลเข้าระบบหรือไม่?',
+            title: excelFile && importData.rbCheck?.status === 'wrong' ? '⚠ ไฟล์ รบ.301 อาจผิดรอบ — ยืนยันส่ง?' : 'ยืนยันการส่งใบเบิก?',
+            message: (excelFile && importData.rbCheck && importData.rbCheck.status !== 'ok' ? importData.rbCheck.text + '\n\n' : '') + 'กรุณาตรวจสอบข้อมูลให้ครบถ้วน ยืนยันการส่งข้อมูลเข้าระบบหรือไม่?',
             icon: 'fa-paper-plane',
             confirmText: 'ส่งใบเบิก',
             onConfirm: () => {
@@ -4183,6 +4209,7 @@ return ctx.editReqId || savedNewIdRef.current || buildRequisitionId(hospId, curr
                   <div className={`bg-white p-4 rounded-xl border ${importData.isDateValid ? 'border-slate-200' : 'border-red-400 bg-red-50'}`}>
                      <p className="text-xs text-slate-500 font-bold mb-1">ช่วงเวลาในไฟล์</p>
                      <p className="font-semibold text-slate-800 text-sm">{importData.periodInfo || 'ไม่พบข้อมูล'}</p>
+                     {importData.rbCheck && <p id="rb-import-check" className={`mt-1 text-xs font-bold rounded px-2 py-1 ${rbBadge(importData.rbCheck.status)}`}>{importData.rbCheck.status === 'ok' ? '✔ ' : importData.rbCheck.status === 'wrong' ? '✖ ' : '⚠ '}{importData.rbCheck.text}</p>}
                      <p className="text-xs text-slate-400 mt-1">รอบที่ควรใช้: วันที่ {uploadPeriodLabel}</p>
                      {!importData.isDateValid && <p className="text-xs text-red-600 mt-1"><i className="fa-solid fa-calendar-xmark"></i> วันที่ในไฟล์อาจไม่ถูกต้องตามรอบที่กำหนด</p>}
                   </div>
@@ -5413,6 +5440,33 @@ const ViewReqView = ({ ctx }) => {
          }
       };
 
+      // v6.28 แอดมินย้ายรอบเบิก (month/year) ของใบให้ตรงรอบจริง — ไม่เปลี่ยนเลขที่ใบ/เลขรอบบิล/รายการยา/สต๊อก/เอกสาร INVS
+      const [periodDraft, setPeriodDraft] = useState(() => ({ month: Number(req?.month) || 1, year: Number(req?.year) || new Date().getFullYear() }));
+      const [isMovingPeriod, setIsMovingPeriod] = useState(false);
+      const handleMovePeriod = () => {
+        if (!isAdmin || !req) return;
+        const to = { month: Number(periodDraft.month), year: Number(periodDraft.year) };
+        if (to.month === Number(req.month) && to.year === Number(req.year)) return ctx.showToast('เดือนเดิม ไม่ต้องย้าย');
+        const clash = (ctx.appDb.requisitions || []).find(r => r.id !== req.id && !String(r.id).startsWith('HIST-') && r.status !== 'Cancelled' && String(r.hospitalId) === String(req.hospitalId) && Number(r.month) === to.month && Number(r.year) === to.year);
+        if (clash) return ctx.showToast(`ย้ายไม่ได้: ${THAI_MONTHS[to.month - 1]} ${to.year + 543} มีใบ ${clash.id} อยู่แล้ว — ย้ายใบนั้นออกก่อน`, 'error');
+        ctx.setConfirmDialog({ title: 'ย้ายรอบเบิกของใบนี้?', icon: 'fa-calendar-days', iconColor: 'text-indigo-600', confirmBtnClass: 'bg-indigo-600 hover:bg-indigo-700', confirmText: 'ย้ายรอบเบิก',
+          message: `${req.id}: ${THAI_MONTHS[Number(req.month) - 1]} ${Number(req.year) + 543} → ${THAI_MONTHS[to.month - 1]} ${to.year + 543}\nแก้เฉพาะเดือนรอบเบิก (ใช้ในรายงาน/สรุป) · ไม่เปลี่ยนเลขที่ใบ เลขรอบบิล รายการยา สต๊อก และเอกสารที่ส่ง INVS แล้ว`,
+          onConfirm: async () => {
+            setIsMovingPeriod(true);
+            try {
+              const ref = db.collection('requisitions').doc(req.id); let from = null;
+              await db.runTransaction(async (tx) => {
+                const cur = (await tx.get(ref)).data(); if (!cur) throw new Error('ไม่พบใบเบิก');
+                from = { month: Number(cur.month), year: Number(cur.year) };
+                tx.update(ref, { month: to.month, year: to.year, period_moved_from: from, period_moved_at: firebase.firestore.FieldValue.serverTimestamp(), period_moved_by_uid: ctx.currentUser.uid, period_moved_by_name: safeText(ctx.currentUser.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() });
+              });
+              await writeAuditLog(ctx.currentUser, 'REQUISITION_PERIOD_MOVE', 'requisitions', req.id, { hospital_id: req.hospitalId, from, to });
+              if (ctx.setAppDb) ctx.setAppDb(prev => ({ ...prev, requisitions: (prev.requisitions || []).map(r => String(r.id) === String(req.id) ? { ...r, month: to.month, year: to.year, period_moved_from: from } : r) }));
+              ctx.showToast(`ย้ายเป็นรอบ ${THAI_MONTHS[to.month - 1]} ${to.year + 543} แล้ว`);
+            } catch (e) { ctx.showToast('ย้ายรอบเบิกไม่สำเร็จ: ' + (e?.message || e), 'error'); }
+            finally { setIsMovingPeriod(false); }
+          } });
+      };
       const handleSaveRequisitionNumber = async () => {
         if (!isAdmin || !req) return;
         const info = getFiscalInfo(req.month, req.year);
@@ -5492,6 +5546,7 @@ const ViewReqView = ({ ctx }) => {
               {canSendInvs && !isPending && <button onClick={() => handleInvsPreflight(false)} disabled={isInvsBusy} className="bg-cyan-600 text-white border border-cyan-700 px-4 py-2 rounded-xl font-bold shadow hover:bg-cyan-700 transition disabled:opacity-50"><i className={`fa-solid ${isInvsBusy?'fa-spinner fa-spin':'fa-database'} mr-2`}></i>{isInvsBusy?'กำลังตรวจ INVS...':'ส่งเข้า INVS (ย้อนหลัง)'}</button>}
               {isAdmin && invsSent && <div className="bg-cyan-50 text-cyan-800 border border-cyan-200 px-3 py-2 rounded-xl text-xs font-black"><i className="fa-solid fa-circle-check mr-1"></i>INVS {req.invs_sub_po_no || 'SENT'}</div>}
               {isAdmin && <div className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded-xl px-2 py-1 text-xs text-indigo-800" title="Admin แก้เลขใบเบิกได้โดยไม่กระทบจำนวนยา/Stock"><span className="font-bold">เลขใบเบิก</span><input type="number" min="1" step="1" value={fiscalTermDraft} onChange={e=>setFiscalTermDraft(Math.max(1,toNonNegativeInt(e.target.value,1)))} className="w-14 h-7 border border-indigo-200 rounded bg-white text-center font-black outline-none"/><span className="font-black">/{fiscalYear}</span><button onClick={handleSaveRequisitionNumber} disabled={isSavingReqNo} className="h-7 px-2 rounded bg-indigo-600 text-white font-bold disabled:opacity-50">{isSavingReqNo?'...':'บันทึก'}</button></div>}
+              {isAdmin && <div id="req-period-box" className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-xl px-2 py-1 text-xs text-amber-900" title="ย้ายใบไปรอบเบิกที่ถูกต้อง (แก้เฉพาะเดือน/ปีของใบ)"><span className="font-bold">รอบเบิก</span><select id="req-period-month" value={periodDraft.month} onChange={e=>setPeriodDraft(p=>({ ...p, month:Number(e.target.value) }))} className="h-7 border border-amber-200 rounded bg-white">{THAI_MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}</select><select id="req-period-year" value={periodDraft.year} onChange={e=>setPeriodDraft(p=>({ ...p, year:Number(e.target.value) }))} className="h-7 border border-amber-200 rounded bg-white">{[periodDraft.year-1, periodDraft.year, periodDraft.year+1].map(y=><option key={y} value={y}>{y+543}</option>)}</select><button id="req-period-save" onClick={handleMovePeriod} disabled={isMovingPeriod || (Number(periodDraft.month)===Number(req.month) && Number(periodDraft.year)===Number(req.year))} className="h-7 px-2 rounded bg-amber-600 text-white font-bold disabled:opacity-40">{isMovingPeriod?'...':'ย้าย'}</button>{req.period_moved_from && <span className="text-[10px] text-amber-700">(ย้ายจาก {Number(req.period_moved_from.month)}/{Number(req.period_moved_from.year)+543})</span>}</div>}
               {isAdmin && canEdit && <button onClick={()=>setShowHiddenItems(v=>!v)} className={`border px-4 py-2 rounded-xl font-bold shadow-sm transition ${showHiddenItems?'bg-slate-800 text-white border-slate-800':'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'}`}><i className={`fa-solid ${showHiddenItems?'fa-eye-slash':'fa-eye'} mr-2`}></i>{showHiddenItems?'ซ่อนรายการ 0':`แสดงรายการที่ซ่อน (${hiddenItemCount})`}</button>}
               <button onClick={() => {
                 if (isPrinted) return handleTriggerPrint();
@@ -9118,6 +9173,150 @@ const AdminConfigView = ({ ctx }) => {
       );
     };
 
+    // ===================== v6.28 ตรวจไฟล์ รบ.301 =====================
+    // แยกช่วงวันที่ตัดยอด / รายการ (จ่าย) / มูลค่าจ่ายรวม จากแถวของไฟล์ (XLSX.utils.sheet_to_json header:1)
+    const RB_TH_MON = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+    const rbParseThDate = (d, mon, y) => {
+      const m0 = String(mon || '').replace(/\s/g, '');
+      let mi = RB_TH_MON.findIndex(x => m0 === x || m0 === x.replace(/\./g, '') || m0 + '.' === x);
+      if (mi < 0) mi = THAI_MONTHS.findIndex(x => m0.startsWith(x.slice(0, 3)));
+      let yy = Number(y); if (yy > 2400) yy -= 543;
+      if (mi < 0 || !(yy > 1900)) return '';
+      return `${yy}-${String(mi + 1).padStart(2, '0')}-${String(Number(d)).padStart(2, '0')}`;
+    };
+    const rb301ParseRows = (rows) => {
+      const out = { hospInfo: '', periodText: '', from: '', to: '', items: [], totalValue: null };
+      (rows || []).forEach(row => {
+        const c = (Array.isArray(row) ? row : Object.values(row)).map(v => String(v ?? '').trim()).filter(v => v !== '');
+        if (!c.length) return;
+        if (!out.hospInfo && c.some(v => v.includes('สถานบริการ'))) out.hospInfo = c.find(v => v.includes('สถานบริการ'));
+        if (!out.periodText && c.some(v => v.includes('ระหว่างวันที่'))) {
+          out.periodText = c.join(' ');
+          const m = out.periodText.match(/(\d{1,2})\s*([ก-๙\.]+)\s*(\d{4})\s*-\s*(\d{1,2})\s*([ก-๙\.]+)\s*(\d{4})/);
+          if (m) { out.from = rbParseThDate(m[1], m[2], m[3]); out.to = rbParseThDate(m[4], m[5], m[6]); }
+        }
+        if (c.some(v => v.includes('รวมมูลค่าทั้งหมด'))) { const k = c.findIndex(v => v.startsWith('มูลค่าจ่าย')); if (k >= 0 && c[k + 1]) out.totalValue = parseFloat(c[k + 1].replace(/,/g, '')); }
+        if (c.length >= 7 && /^\d+\.?$/.test(c[0])) {
+          const usage = parseFloat(String(c[6]).replace(/,/g, '')), value = parseFloat(String(c[7] || '').replace(/,/g, ''));
+          if (!isNaN(usage) && usage >= 0 && c[1] && !c[1].includes('รวม')) out.items.push({ rawName: c[1], usage, value: isNaN(value) ? null : value });
+        }
+      });
+      return out;
+    };
+    // ช่วงที่ควรเป็นของใบรอบเบิกเดือน M (ทำใบวันที่ 20–31 ของเดือน M−1): 21 ของ M−2 ถึง 20 ของ M−1
+    const rb301ExpectedWindow = (month, year) => {
+      const shift = (k) => { const d = new Date(Number(year), Number(month) - 1 + k, 1); return { y: d.getFullYear(), m: d.getMonth() + 1 }; };
+      const a = shift(-2), b = shift(-1);
+      return { from: `${a.y}-${String(a.m).padStart(2, '0')}-21`, to: `${b.y}-${String(b.m).padStart(2, '0')}-20` };
+    };
+    const rbThDate = (iso) => { const s = String(iso || ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '-'; return `${Number(s.slice(8))} ${RB_TH_MON[Number(s.slice(5, 7)) - 1]} ${Number(s.slice(0, 4)) + 543}`; };
+    // ผลตรวจช่วงวันที่: ok / wrong (ระบุรอบที่ไฟล์น่าจะเป็น) / unknown
+    const rb301PeriodCheck = (from, to, month, year) => {
+      if (!to) return { status: 'unknown', text: 'ไม่พบช่วงวันที่ในไฟล์' };
+      const exp = rb301ExpectedWindow(month, year);
+      const toYm = to.slice(0, 7), expYm = exp.to.slice(0, 7);
+      if (toYm === expYm) {
+        const fd = Number(String(from).slice(8)), td = Number(to.slice(8));
+        const odd = (from && (fd < 15 || fd > 25)) || td < 15 || td > 25;
+        return { status: odd ? 'warn' : 'ok', text: odd ? `เดือนถูก แต่วันตัดยอดไม่ใช่ 21–20 (${rbThDate(from)} – ${rbThDate(to)})` : 'ช่วงวันที่ตรงรอบเบิก', exp };
+      }
+      const d = new Date(Number(to.slice(0, 4)), Number(to.slice(5, 7)) - 1 + 1, 1);
+      return { status: 'wrong', exp, text: `ไฟล์เป็นช่วง ${rbThDate(from)} – ${rbThDate(to)} = ของรอบ ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543} (ใบนี้รอบ ${THAI_MONTHS[Number(month) - 1]} ${Number(year) + 543} ควรเป็น ${rbThDate(exp.from)} – ${rbThDate(exp.to)})` };
+    };
+    const drivePreviewUrl = (url) => { const s = String(url || ''); const m = s.match(/\/d\/([\w-]{15,})/) || s.match(/[?&]id=([\w-]{15,})/); return m ? `https://drive.google.com/file/d/${m[1]}/preview` : s; };
+    const rbBadge = (st) => st === 'ok' ? 'bg-emerald-100 text-emerald-800' : st === 'warn' ? 'bg-amber-100 text-amber-800' : st === 'wrong' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500';
+    const rb301MetaFields = (imp) => ({ rb301_period_from: safeText(imp.rbMeta.from), rb301_period_to: safeText(imp.rbMeta.to), rb301_period_text: safeText(imp.rbMeta.text).slice(0, 200), rb301_file_total_value: imp.rbMeta.totalValue ?? null, rb301_period_check: imp.rbCheck ? imp.rbCheck.status : '' });
+    const rbItemUnitValue = (it) => toNonNegativeNumber(it.price) / safePackSize(it.packSize);
+
+    // หน้าแอดมิน "ตรวจไฟล์ รบ.301": เลือกเดือน → รายการใบ · เปิดไฟล์ใน iframe ข้างตารางยอดใช้ในระบบ · ตรวจอัตโนมัติจากไฟล์ (ช่วงวันที่/ยอดต่อรายการ/มูลค่ารวม)
+    const Rb301AuditView = ({ ctx }) => {
+      const now = new Date();
+      const [month, setMonth] = useState(now.getMonth() + 1);
+      const [year, setYear] = useState(now.getFullYear());
+      const [openId, setOpenId] = useState(null);
+      const [parsed, setParsed] = useState({}); // reqId -> parse result
+      const reqs = (ctx.appDb.requisitions || []).filter(r => !String(r.id).startsWith('HIST-') && r.status !== 'Cancelled' && Number(r.month) === Number(month) && Number(r.year) === Number(year))
+        .sort((a, b) => safeText(ctx.findHospital(a.hospitalId)?.hospital_name).localeCompare(safeText(ctx.findHospital(b.hospitalId)?.hospital_name), 'th'));
+      const usageVal = (r) => (r.items || []).filter(it => String(it.type) !== '6').reduce((s, it) => s + getRb301UsageQty(it) * rbItemUnitValue(it), 0);
+      const reqVal = (r) => (r.items || []).filter(it => String(it.type) !== '6').reduce((s, it) => s + getRequisitionItemValue(it), 0);
+      const checkOf = (r) => { const p = parsed[r.id]; const from = p ? p.from : r.rb301_period_from, to = p ? p.to : r.rb301_period_to; return { ...rb301PeriodCheck(from, to, r.month, r.year), source: p ? 'ไฟล์ที่เลือก' : (to ? 'บันทึกตอนนำเข้า' : '') }; };
+      const onFile = (r, file) => {
+        if (!file) return;
+        const rd = new FileReader();
+        rd.onload = (e) => { try {
+          const wb = XLSX.read(e.target.result, { type: 'binary' });
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+          setParsed(p => ({ ...p, [r.id]: { ...rb301ParseRows(rows), fileName: file.name } })); setOpenId(r.id);
+        } catch (err) { ctx.showToast('อ่านไฟล์ไม่สำเร็จ: ' + (err?.message || err), 'error'); } };
+        rd.readAsBinaryString(file);
+      };
+      const open = reqs.find(r => r.id === openId) || (ctx.appDb.requisitions || []).find(r => r.id === openId);
+      const fmt = (v, d = 2) => v === null || v === undefined || v === '' ? '-' : Number(v).toLocaleString('th-TH', { minimumFractionDigits: d, maximumFractionDigits: d });
+      // เทียบรายบรรทัดในไฟล์กับยอดที่นำเข้าในใบ (sourceImports rawName → rawUsage)
+      const compareRows = (r, p) => {
+        const inReq = new Map();
+        (r.items || []).forEach(it => (it.sourceImports || []).forEach(src => { const k = normalizeForMatch(src.rawName); if (k) inReq.set(k, { it, raw: toNonNegativeNumber(src.rawUsage) + (inReq.get(k)?.raw || 0) }); }));
+        const skipped = new Map((r.skipped_items || []).map(s => [normalizeForMatch(s.rawName), s]));
+        return (p.items || []).filter(x => x.usage > 0).map(x => { const k = normalizeForMatch(x.rawName); const hit = inReq.get(k);
+          return { ...x, inReq: hit ? hit.raw : null, drug: hit ? hit.it : null, skipped: !hit && skipped.has(k), diff: hit ? hit.raw - x.usage : null }; })
+          .filter(x => x.inReq === null || Math.abs(x.diff) > 1e-6);
+      };
+      return (
+        <div className="space-y-4" id="rb301-audit">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-2xl font-black text-slate-800"><i className="fa-solid fa-file-circle-check text-emerald-600 mr-2"></i>ตรวจไฟล์ รบ.301</h2>
+            <div className="flex gap-2">
+              <select id="rb-month" value={month} onChange={e => { setMonth(Number(e.target.value)); setOpenId(null); }} className="border rounded-xl px-3 py-2 font-bold">{THAI_MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}</select>
+              <select id="rb-year" value={year} onChange={e => { setYear(Number(e.target.value)); setOpenId(null); }} className="border rounded-xl px-3 py-2 font-bold">{[year - 1, year, year + 1].map(y => <option key={y} value={y}>{y + 543}</option>)}</select>
+            </div>
+          </div>
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-sm text-indigo-900 space-y-1">
+            <div><b>ตรวจอัตโนมัติ</b> (ตามกฎ ไม่ได้ใช้ AI): ช่วงวันที่ตัดยอดในไฟล์ต้องเป็น 21 ของเดือน M−2 ถึง 20 ของเดือน M−1 ของใบรอบเบิกเดือน M · เทียบยอดจ่ายรายบรรทัดในไฟล์กับยอดที่นำเข้าในใบ · เทียบมูลค่าจ่ายรวมท้ายไฟล์</div>
+            <div>ใบที่นำเข้าก่อน v6.28 ไม่มีช่วงวันที่บันทึกไว้ → กด "ตรวจกับไฟล์" แล้วเลือกไฟล์ รบ.301 (ดาวน์โหลดจากปุ่ม "เปิด" ได้)</div>
+          </div>
+          <div className="bg-white border rounded-2xl overflow-auto">
+            <table className="w-full text-sm" id="rb-table"><thead className="bg-slate-100 text-xs"><tr><th className="p-2">ที่</th><th className="p-2 text-left">รพ.สต.</th><th className="p-2 text-left">เลขที่ใบ</th><th className="p-2">สถานะ</th><th className="p-2 text-right">มูลค่าเบิก</th><th className="p-2 text-right">มูลค่ายอดใช้ (รบ.301)</th><th className="p-2 text-right">ใช้ ÷ เบิก</th><th className="p-2 text-left">ช่วงวันที่ในไฟล์</th><th className="p-2"></th></tr></thead>
+              <tbody>{reqs.map((r, i) => { const ck = checkOf(r), uv = usageVal(r), dv = reqVal(r); const ratio = dv > 0 ? uv / dv : null;
+                return <tr key={r.id} className={`border-t rb-row ${openId === r.id ? 'bg-emerald-50' : ''}`} data-id={r.id}>
+                  <td className="p-2 text-center text-slate-400">{i + 1}</td><td className="p-2 font-semibold">{ctx.findHospital(r.hospitalId)?.hospital_name || r.hospitalId}</td>
+                  <td className="p-2 font-mono text-xs">{r.id}</td><td className="p-2 text-xs text-center">{r.status}</td>
+                  <td className="p-2 text-right">{fmt(dv)}</td>
+                  <td className={`p-2 text-right font-bold ${uv === 0 || (ratio !== null && (ratio > 3 || ratio < 0.2)) ? 'text-red-600' : ''}`}>{fmt(uv)}</td>
+                  <td className={`p-2 text-right ${ratio !== null && (ratio > 3 || ratio < 0.2) ? 'text-red-600 font-bold' : ''}`}>{ratio === null ? '-' : ratio.toFixed(2)}</td>
+                  <td className="p-2 text-xs"><span className={`rb-check px-2 py-0.5 rounded font-bold ${rbBadge(ck.status)}`}>{ck.status === 'ok' ? 'ตรง' : ck.status === 'warn' ? 'ตรวจ' : ck.status === 'wrong' ? 'ผิดรอบ' : 'ยังไม่ตรวจ'}</span> <span className="text-slate-600">{ck.status === 'unknown' ? '' : ck.text}</span></td>
+                  <td className="p-2 whitespace-nowrap space-x-1">
+                    {r.excel_url ? <button onClick={() => setOpenId(openId === r.id ? null : r.id)} className="rb-open px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold text-xs">{openId === r.id ? 'ปิด' : 'เปิด'}</button> : <span className="text-xs text-slate-400">ไม่มีไฟล์</span>}
+                    <label className="px-3 py-1 rounded-lg border text-xs font-bold cursor-pointer">ตรวจกับไฟล์<input type="file" accept=".xls,.xlsx" className="hidden rb-file" onChange={e => onFile(r, e.target.files[0])} /></label>
+                  </td></tr>; })}
+                {!reqs.length && <tr><td colSpan="9" className="p-6 text-center text-slate-400">ไม่มีใบเบิกรอบ {THAI_MONTHS[month - 1]} {year + 543}</td></tr>}</tbody></table>
+          </div>
+          {open && (() => { const p = parsed[open.id]; const ck = checkOf(open); const uv = usageVal(open);
+            const items = (open.items || []).filter(it => String(it.type) !== '6' && getRb301UsageQty(it) > 0).map(it => ({ it, v: getRb301UsageQty(it) * rbItemUnitValue(it) })).sort((a, b) => b.v - a.v);
+            const diffs = p ? compareRows(open, p) : [];
+            return <div className="grid lg:grid-cols-2 gap-4" id="rb-panel">
+              <div className="bg-white border rounded-2xl overflow-hidden flex flex-col">
+                <div className="p-3 border-b font-bold flex justify-between items-center"><span>ไฟล์ รบ.301 — {ctx.findHospital(open.hospitalId)?.hospital_name}</span>{open.excel_url && <a href={open.excel_url} target="_blank" rel="noopener noreferrer" className="text-xs text-emerald-700 underline">เปิดแท็บใหม่ / ดาวน์โหลด</a>}</div>
+                {open.excel_url ? <iframe id="rb-iframe" title="ไฟล์ รบ.301" src={drivePreviewUrl(open.excel_url)} className="w-full flex-1 min-h-[70vh]" /> : <div className="p-6 text-slate-400">ไม่มีไฟล์แนบ</div>}
+              </div>
+              <div className="bg-white border rounded-2xl p-3 space-y-3 overflow-auto max-h-[80vh]">
+                <div className="font-bold">ยอดใช้ในระบบ — {open.id} · รอบ {THAI_MONTHS[Number(open.month) - 1]} {Number(open.year) + 543}</div>
+                <div className={`rounded-xl p-2 text-sm ${rbBadge(ck.status)}`} id="rb-verdict"><b>ช่วงวันที่:</b> {ck.text}{ck.source ? ` (${ck.source})` : ''}{ck.exp && ck.status !== 'ok' ? '' : ''}</div>
+                {p && <div className="text-sm bg-slate-50 rounded-xl p-2 space-y-1" id="rb-file-result">
+                  <div>ไฟล์: <b>{p.fileName}</b> · {p.hospInfo}</div>
+                  <div>มูลค่าจ่ายรวมท้ายไฟล์ <b>{fmt(p.totalValue)}</b> บาท · มูลค่ายอดใช้ในระบบ <b>{fmt(uv)}</b> บาท {p.totalValue ? `(ระบบ ÷ ไฟล์ = ${(uv / p.totalValue).toFixed(2)})` : ''}</div>
+                  <div>บรรทัดที่ยอดต่างจากไฟล์/ไม่ได้นำเข้า: <b>{diffs.length}</b> รายการ</div>
+                  {diffs.length > 0 && <table className="w-full text-xs mt-1"><thead><tr className="bg-white"><th className="p-1 text-left">ชื่อในไฟล์</th><th className="p-1 text-right">จ่ายในไฟล์</th><th className="p-1 text-right">นำเข้าในใบ</th><th className="p-1 text-left">หมายเหตุ</th></tr></thead>
+                    <tbody>{diffs.slice(0, 80).map((d, k) => <tr key={k} className="border-t rb-diff"><td className="p-1">{d.rawName}</td><td className="p-1 text-right">{fmt(d.usage, 0)}</td><td className="p-1 text-right">{d.inReq === null ? '-' : fmt(d.inReq, 0)}</td><td className="p-1">{d.inReq === null ? (d.skipped ? 'ข้าม (จับคู่ยาไม่ได้)' : 'ไม่อยู่ในใบ') : 'ยอดต่าง'}</td></tr>)}</tbody></table>}
+                </div>}
+                <table className="w-full text-xs" id="rb-items"><thead className="bg-slate-100"><tr><th className="p-1.5 text-left">ยา (ระบบ)</th><th className="p-1.5 text-left">ชื่อใน รบ.301</th><th className="p-1.5 text-right">ยอดใช้</th><th className="p-1.5 text-right">ราคา/หน่วย</th><th className="p-1.5 text-right">มูลค่า</th></tr></thead>
+                  <tbody>{items.map(({ it, v }) => <tr key={it.drugId} className={`border-t ${v > uv * 0.3 && uv > 30000 ? 'bg-red-50' : ''}`}><td className="p-1.5"><b>{it.name}</b> <span className="text-slate-400 font-mono">{it.drugId}</span></td><td className="p-1.5 text-slate-500">{(it.sourceRawNames || []).join(', ')}</td><td className="p-1.5 text-right">{fmt(getRb301UsageQty(it), 0)} {it.unit}</td><td className="p-1.5 text-right">{fmt(rbItemUnitValue(it))}</td><td className="p-1.5 text-right font-bold">{fmt(v)}</td></tr>)}
+                    <tr className="border-t-2 font-black"><td className="p-1.5" colSpan="4">รวม</td><td className="p-1.5 text-right">{fmt(uv)}</td></tr></tbody></table>
+              </div>
+            </div>; })()}
+        </div>
+      );
+    };
+
     const InvsMasterSyncModal = ({ ctx, onClose }) => {
       const [busy, setBusy] = useState('');
       const [plan, setPlan] = useState(null); // { creates, updates, units, total }
@@ -9150,7 +9349,10 @@ const AdminConfigView = ({ ctx }) => {
           const units = (data.units || []).filter(u => u.unit_id && (!unitMap.has(String(u.unit_id)) || safeText(unitMap.get(String(u.unit_id)).unit_name) !== safeText(u.unit_name)));
           const curTypes = ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES;
           const types = (data.types || []).filter(t => t.type_code && safeText(t.type_name) && safeText(curTypes[t.type_code]) !== safeText(t.type_name));
-          setPlan({ creates, updates, units, types, typeColumn: data.type_column || '', total: (data.rows || []).length });
+          // v6.28 ยึด INVS เป็นหลัก: ยาในระบบที่ไม่พบใน INVS (ยังไม่ยกเลิก) — แสดงให้ตรวจ/ยกเลิกใช้เอง (ไม่ลบอัตโนมัติ)
+          const invsIds = new Set((data.rows || []).map(r => String(r.drug_id)));
+          const missing = (ctx.appDb.drugs || []).filter(d => !invsIds.has(String(d.drug_id)) && !isDrugDiscontinued(d));
+          setPlan({ creates, updates, units, types, missing, typeColumn: data.type_column || '', total: (data.rows || []).length });
           const p = {}; updates.forEach(x => { p[x.id] = true; }); creates.forEach(x => { p[x.id] = true; }); setPick(p);
           setTab(updates.length ? 'update' : 'create');
         } catch (e) { ctx.showToast('ดึงรายการยาจาก INVS ไม่สำเร็จ: ' + (e?.message || e), 'error'); }
@@ -9213,6 +9415,10 @@ const AdminConfigView = ({ ctx }) => {
                 <button onClick={() => setTab('create')} className={`text-left rounded-xl p-3 border ${tab === 'create' ? 'border-indigo-400 bg-indigo-50' : 'bg-white'}`}><div className="text-xs text-slate-500">ยาใหม่ (ยังไม่มีในระบบ)</div><b className="text-lg">{plan.creates.length}</b></button>
                 <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-500">หน่วยนับใหม่/เปลี่ยนชื่อ · ประเภทใหม่</div><b className="text-lg">{plan.units.length} · {(plan.types || []).length}</b>{plan.units.length > 0 && <div className="text-[11px] text-slate-500 mt-1 max-h-16 overflow-auto">{plan.units.slice(0, 8).map(u => `${unitName(u.unit_id) !== u.unit_name ? unitName(u.unit_id) + '→' : ''}${u.unit_name}`).join(' · ')}</div>}</div>
               </div>
+              {(plan.missing || []).length > 0 && <details className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-sm" id="invs-missing">
+                <summary className="font-bold text-amber-900 cursor-pointer">ยาในระบบที่ไม่พบใน INVS {plan.missing.length} รายการ — รหัสไม่ตรง INVS (ตรวจ/ตั้งเป็นยกเลิกใช้ในหน้าจัดการฐานข้อมูล)</summary>
+                <div className="max-h-48 overflow-auto mt-2"><table className="w-full text-xs"><tbody>{plan.missing.map(d => <tr key={d.drug_id} className="border-t"><td className="p-1 font-mono">{d.drug_id}</td><td className="p-1">{d.drug_name}</td><td className="p-1 text-slate-500">{(ctx.appDb.drugTypes || DEFAULT_DRUG_TYPES)[d.type] || d.type}</td></tr>)}</tbody></table></div>
+              </details>}
               <div className="overflow-auto max-h-[50vh] border rounded-xl">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-100 text-xs sticky top-0"><tr>
@@ -9331,12 +9537,59 @@ const AdminConfigView = ({ ctx }) => {
     };
 
     // พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์ (ฝั่งแอดมิน) — ใช้ตัวสร้างฟอร์มเดียวกับหน้าหน่วยงานใน shared.js
+        // v6.28 ชื่อ ผอ. = ผู้สั่งจ่าย (config/signers) — แอดมินเท่านั้น
+    const DirectorModal = ({ cfg, currentUser, showToast, onSaved, onClose }) => {
+      const [name, setName] = useState(safeText(cfg?.director_name)), [pos, setPos] = useState(safeText(cfg?.director_position) || 'ผู้อำนวยการโรงพยาบาลสวี');
+      const [busy, setBusy] = useState(false);
+      const save = async () => {
+        if (!name.trim()) { showToast('กรุณาระบุชื่อ ผอ.', 'error'); return; }
+        setBusy(true);
+        try {
+          const data = { director_name: name.trim(), director_position: pos.trim(), updated_by_name: safeText(currentUser?.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() };
+          await db.collection('config').doc('signers').set(data, { merge: true });
+          onSaved({ ...(cfg || {}), ...data }); showToast('บันทึกชื่อ ผอ. แล้ว'); onClose();
+        } catch (e) { showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); }
+        finally { setBusy(false); }
+      };
+      return (
+        <div id="director-modal" className="fixed inset-0 z-[90] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="font-extrabold text-lg mb-1"><i className="fa-solid fa-signature text-teal-600 mr-2"></i>ผู้สั่งจ่าย (ผอ.)</h3>
+            <p className="text-xs text-slate-500 mb-4">ใส่เป็น "ผู้สั่งจ่าย" ในใบเบิกหน่วยงาน/ห้องยาเสมอ (แก้ในใบได้)</p>
+            <label className="text-xs font-bold text-slate-600">ชื่อ-สกุล</label>
+            <input id="director-name" value={name} onChange={e => setName(e.target.value)} className="w-full p-2.5 border rounded-lg mb-3" />
+            <label className="text-xs font-bold text-slate-600">ตำแหน่ง</label>
+            <input id="director-position" value={pos} onChange={e => setPos(e.target.value)} className="w-full p-2.5 border rounded-lg mb-4" />
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-lg border font-bold text-slate-600">ไว้ทีหลัง</button>
+              <button id="director-save" disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-teal-600 text-white font-bold disabled:opacity-50">บันทึก</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     const AdminFormPrintModal = ({ ctx, req, items, allReqs, onClose, onSaved }) => {
       const [formNo, setFormNo] = useState(() => internalFormNoFor(req, allReqs || [req]));
       const [formDate, setFormDate] = useState(() => safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at));
       // v6.6 ผู้ลงนาม 4 จุด — ใบนี้ → ใบก่อนของหน่วยงานเดียวกัน → ผู้สร้าง/ผู้อนุมัติ
       const [signers, setSigners] = useState(() => internalSignersFor(req, ((allReqs || []).filter(r => r.id !== req.id && r.deptId === req.deptId && Array.isArray(r.sign_people))
         .sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people));
+      // v6.28 ค่าประจำ: ผู้เบิก = หัวหน้าหน่วยงาน · ผู้สั่งจ่าย = ผอ. (config/signers) — ไม่มีชื่อ ผอ. = เด้งให้กรอก
+      const [signersCfg, setSignersCfg] = useState(null), [dirModal, setDirModal] = useState(false);
+      const applySignerDefaults = (cfg) => {
+        if (Array.isArray(req.sign_people) && req.sign_people.length) return;
+        const dept = (ctx.appDb?.depts || []).find(d => String(d.dept_id || d.id) === String(req.deptId));
+        const prev = ((allReqs || []).filter(r => r.id !== req.id && r.deptId === req.deptId && Array.isArray(r.sign_people)).sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people;
+        setSigners(internalSignersFor(req, prev, signerDefaultsFor(dept, cfg)));
+      };
+      useEffect(() => {
+        db.collection('config').doc('signers').get().then(sn => {
+          const c = sn.exists ? sn.data() : {};
+          setSignersCfg(c); applySignerDefaults(c);
+          if (!safeText(c.director_name)) setDirModal(true);
+        }).catch(() => setSignersCfg({}));
+      }, []);
       const [busy, setBusy] = useState(false);
       const doPrint = async () => {
         setBusy(true);
@@ -9366,6 +9619,7 @@ const AdminConfigView = ({ ctx }) => {
       };
       return (
         <Modal isOpen onClose={onClose} title="พิมพ์ใบเบิกวัสดุ/เวชภัณฑ์" maxWidth="max-w-xl">
+          {dirModal && <DirectorModal cfg={signersCfg} currentUser={ctx.currentUser} showToast={ctx.showToast} onSaved={(c) => { setSignersCfg(c); applySignerDefaults(c); }} onClose={() => setDirModal(false)} />}
           <div className="space-y-4">
             <label className="block"><span className="text-sm font-bold text-slate-600">เลขที่</span>
               <input id="admin-form-no" value={formNo} onChange={e => setFormNo(e.target.value)} className="mt-1 w-full p-2.5 border border-slate-300 rounded-xl font-mono" /></label>
@@ -10256,6 +10510,7 @@ const AdminConfigView = ({ ctx }) => {
             cover_days: Math.max(1, toNonNegativeInt(fd.cover_days, INTERNAL_DEFAULT_COVER_DAYS)),
             round_days: Math.max(1, toNonNegativeInt(fd.round_days, 30)),
             min_order_value: toNonNegativeNumber(fd.min_order_value, 100),
+            head_name: safeText(fd.head_name), head_position: safeText(fd.head_position),
             active: fd.active === 'on', updated_at: firebase.firestore.FieldValue.serverTimestamp()
           };
           const batch = db.batch();
@@ -10347,6 +10602,10 @@ const AdminConfigView = ({ ctx }) => {
               <form onSubmit={save} className="space-y-4">
                 <label className="block"><span className="text-sm font-bold text-slate-600">รหัส (A-Z, 0-9, _ -)</span><input name="dept_id" defaultValue={edit.dept_id || ''} disabled={!edit.isNew} required={edit.isNew} placeholder="เช่น PHARM-OPD, WARD-MED" className="w-full p-3 border rounded-xl mt-1 font-mono disabled:bg-slate-100" /></label>
                 <label className="block"><span className="text-sm font-bold text-slate-600">ชื่อ</span><input name="dept_name" defaultValue={edit.dept_name || ''} required className="w-full p-3 border rounded-xl mt-1" /></label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block"><span className="text-sm font-bold text-slate-600">หัวหน้าหน่วยงาน (ผู้เบิก)</span><input id="dept-form-head-name" name="head_name" defaultValue={edit.head_name || ''} className="w-full p-3 border rounded-xl mt-1" /></label>
+                  <label className="block"><span className="text-sm font-bold text-slate-600">ตำแหน่ง</span><input id="dept-form-head-position" name="head_position" defaultValue={edit.head_position || ''} className="w-full p-3 border rounded-xl mt-1" /></label>
+                </div>
                 <label className="block"><span className="text-sm font-bold text-slate-600">ประเภท</span>
                   <select name="kind" defaultValue={edit.kind || 'dept'} className="w-full p-3 border rounded-xl mt-1"><option value="dept">หน่วยงาน (คีย์เบิกตามต้องการ)</option><option value="pharmacy">ห้องยา (เบิกตามยอดใช้ HOSxP)</option></select></label>
                 <div className="grid grid-cols-2 gap-3">
@@ -12132,6 +12391,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentUser?.role === 'admin' && <button onClick={() => requestView('ncds_mapping')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='ncds_mapping'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-link w-6 text-center mr-2"></i> จับคู่ยา NCDs</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('substock_sync')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='substock_sync'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-warehouse w-6 text-center mr-2"></i> คลังย่อย รพ.สต. → INVS</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('research_export')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='research_export'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-file-zipper w-6 text-center mr-2"></i> ส่งออกข้อมูลวิจัย</button>}
+              {currentUser?.role === 'admin' && <button onClick={() => requestView('rb301_audit')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='rb301_audit'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-file-circle-check w-6 text-center mr-2"></i> ตรวจไฟล์ รบ.301</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('stock_survey')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='stock_survey'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-clipboard-list w-6 text-center mr-2"></i> สำรวจคงคลัง</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('mr_pool')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='mr_pool'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-solid fa-boxes-stacked w-6 text-center mr-2"></i> กองMR</button>}
               {currentUser?.role === 'admin' && <button onClick={() => requestView('line_console')} className={`w-full text-left p-4 rounded-xl font-bold transition flex items-center ${currentView==='line_console'?'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50':'hover:bg-slate-800 text-slate-300'}`}><i className="fa-brands fa-line w-6 text-center mr-2"></i> LINE Console</button>}
@@ -12167,6 +12427,7 @@ const AdminConfigView = ({ ctx }) => {
               {currentView === 'line_console' && currentUser?.role === 'admin' && <LineConsoleView ctx={ctx} />}
               {currentView === 'mr_pool' && currentUser?.role === 'admin' && <MrPoolView ctx={ctx} />}
               {currentView === 'stock_survey' && currentUser?.role === 'admin' && <StockSurveyView ctx={ctx} />}
+              {currentView === 'rb301_audit' && currentUser?.role === 'admin' && <Rb301AuditView ctx={ctx} />}
               {currentView === 'research_export' && currentUser?.role === 'admin' && <ResearchExportView ctx={ctx} />}
               {currentView === 'substock_sync' && currentUser?.role === 'admin' && <SubstockSyncView ctx={ctx} />}
               {currentView === 'count_status' && currentUser?.role === 'admin' && <StockCountStatusView ctx={ctx} />}

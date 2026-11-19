@@ -4,7 +4,7 @@ const res=[]; const check=(n,c,x)=>res.push((c?'PASS ':'FAIL ')+n+(x?' — '+x:'
 fs.writeFileSync(path.join(DIR,'seed.js'),'window.__SEED='+JSON.stringify({user:{uid:'u1'},collections:{
   master_drugs:{D1:{drug_id:'D1',drug_name:'Syringe Disposable 5 ml',unit_id:'U1',type:'2',price:100,pack_size:100,old_code:'013'},D2:{drug_id:'D2',drug_name:'Tube Hematocrit',unit_id:'U1',type:'2',price:50,pack_size:1}},
   master_unit:{U1:{unit_id:'U1',unit_name:'ชิ้น'}},config:{},master_hospitals:{},
-  master_depts:{IPD:{dept_id:'IPD',dept_name:'IPD ตบ.',kind:'dept'}},
+  master_depts:{IPD:{dept_id:'IPD',dept_name:'IPD ตบ.',kind:'dept',head_name:'หัวหน้า IPD'}},
   req_rounds:{R1:{id:'R1',round_no:3,round_date:'2026-11-02',fiscal_year:2570,scope:'internal'}},
   users:{u1:{name:'เสาวลักษณ์',role:'dept',dept_id:'IPD',email:'u@x'}}}})+';');
 (async()=>{

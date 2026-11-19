@@ -1,4 +1,4 @@
-# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.27.0 · Bridge v2.17.0)
+# Sawee Rxfill — ระบบเบิกยา รพ.สวี (v6.30.0 · Bridge v2.17.0)
 
 ผู้ใช้เป็นเภสัชกร รพ.สวี สื่อสารภาษาไทย ตอบเป็นภาษาไทย
 **ไฟล์ที่ต้องติดตั้งนอก GitHub/Vercel** (Bridge PHP, firestore.rules ฯลฯ) ให้ส่งแยกเป็นไฟล์แนบ (SendUserFile) ทุกครั้งที่แก้ พร้อมบอกตำแหน่งที่ต้องวาง
@@ -284,3 +284,13 @@
 - เมนูแอดมิน "สำรวจคงคลัง" (`StockSurveyView`, app.html): ดึง `invs_lots` (คลังจ่ายค่าเริ่มต้น) ทุกยาที่ไม่ยกเลิก · เลือกประเภท (localStorage `rxfill_survey_types`) · เรียง ตำแหน่ง/ชื่อ/รหัส (`surveySorter`, localStorage `rxfill_survey_sort`) · ซ่อนคงคลัง 0 (ติ๊กรวมได้)
 - `buildStockSurveySlipHtml` slip 80 มม. ยาวตามเนื้อหา: ตำแหน่ง · ชื่อ · รหัส(old_code) · คงเหลือหน่วยใหญ่ · ทุก lot (EXP, จำนวน, ช่องนับ) · "นับได้ ......" · ผู้สำรวจ/ผู้ตรวจสอบ — อ่านอย่างเดียว ไม่บันทึกผล
 - tests/v629.js
+
+## v6.30 รายการใบเบิก · ตรวจ รบ.301 · ย้ายรอบเบิก · INVS sync · ผู้ลงนามประจำ
+- แดชบอร์ดแอดมิน: ค้นหา `#req-search` (เลขใบ/รพ.สต./รอบบิล/เดือน/เลข INVS) + แบ่งหน้า 20 ใบ `#req-pager` ดูได้ครบทุก record
+- เมนู "ตรวจไฟล์ รบ.301" (`Rb301AuditView`): ตรวจช่วง export ตามกฎ (รอบ M = 21 ของ M−2 ถึง 20 ของ M−1, `rb301PeriodCheck`) — เป็นกฎตายตัว ไม่ใช่ AI · iframe Drive preview ข้างค่าในระบบ · เลือกไฟล์ในเครื่องเพื่อเทียบยอด (เบราว์เซอร์อ่านไฟล์จาก Drive ตรงไม่ได้) · import เก็บ `rb301_period_from/to/text`, `rb301_file_total_value`, `rb301_period_check` + เตือนตอนส่งถ้าช่วงผิด
+- ViewReqView แอดมิน `#req-period-box` ย้ายใบไปเดือน/ปีรอบเบิกที่ถูก (กันชนใบซ้ำ, `period_moved_from`, audit REQUISITION_PERIOD_MOVE)
+- InvsMasterSyncModal: `#invs-missing` ยาใน VMI ที่ไม่พบใน INVS
+- ผู้ลงนามใบหน่วยงาน/ห้องยา: ผู้เบิก = `master_depts.head_name/head_position` · ผู้สั่งจ่าย = ผอ. `config/signers` {director_name, director_position} (`signerDefaultsFor` + `internalSignersFor(req, prev, defaults)`) ค่าที่บันทึกในใบชนะเสมอ แก้ได้
+  - หน่วยงานไม่มีหัวหน้า → `DeptHeadModal` ตอนเข้า (ปิดได้ต่อ session) + ปุ่มเมนู "หัวหน้าหน่วยงาน" · แอดมินไม่มีชื่อ ผอ. → `DirectorModal` (internal.html และตอนพิมพ์ใบใน app.html) · ฟอร์มหน่วยงานของแอดมินมีช่องหัวหน้า
+  - rules v6.28: หน่วยงานแก้ master_depts ของตัวเองได้เฉพาะ head_* + updated_at
+- tests/v630.js

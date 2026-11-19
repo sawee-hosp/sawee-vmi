@@ -11,7 +11,7 @@
  * ถ้ามีหลายไฟล์ของ รพ.สต./รอบเดียวกัน (อัปโหลดซ้ำ) ใช้ไฟล์ล่าสุด และบอกจำนวนไฟล์ซ้ำ
  */
 const RB_FOLDER_ID = '1LgEsSla3hskQ7WFoiOETI95yuTb2TK4j'; // โฟลเดอร์ที่ระบบอัปโหลด รบ.301
-const RB_FROM = { y: 2026, m: 8 };   // รอบเบิก ส.ค. 2569
+const RB_FROM = { y: 2026, m: 7 };   // รวมไฟล์ชื่อ _7_2026 (= รอบ ส.ค. 2569 ก่อนย้ายเดือนใบ ก.ค.→ส.ค.)
 const RB_TO = { y: 2026, m: 11 };    // ถึงรอบ พ.ย. 2569
 
 const TH_MON = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
@@ -23,7 +23,8 @@ function runRb301Summary() {
     const f = it.next();
     const m = f.getName().match(/^Rxfill_(h\d+)_(\d{1,2})_(\d{4})\.xlsx?$/i);
     if (!m) continue;
-    const mm = Number(m[2]), yy = Number(m[3]);
+    let mm = Number(m[2]), yy = Number(m[3]);
+    if (yy === 2026 && mm === 7) mm = 8; // ใบรอบแรกถูกย้ายจาก ก.ค. → ส.ค. แต่ชื่อไฟล์ยังเป็น _7_
     const k = yy * 100 + mm;
     if (k < RB_FROM.y * 100 + RB_FROM.m || k > RB_TO.y * 100 + RB_TO.m) continue;
     files.push({ file: f, hosp: m[1].toLowerCase(), month: mm, year: yy, created: f.getDateCreated() });

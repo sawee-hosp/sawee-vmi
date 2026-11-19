@@ -1388,6 +1388,7 @@
 
       return (
         <div className="space-y-8 animate-fade-in w-full">
+          {isAdmin && <DirectorSettingButton ctx={ctx} autoPrompt />}
           <div className="flex flex-col md:flex-row justify-between items-start md:items-end bg-white p-6 rounded-2xl shadow-sm border border-slate-100 gap-4 w-full">
             <div>
               <h2 className="text-3xl font-extrabold text-slate-800">ภาพรวมระบบเติมยา VMI</h2>
@@ -3744,7 +3745,7 @@ return ctx.editReqId || savedNewIdRef.current || buildRequisitionId(hospId, curr
          }
          ctx.setConfirmDialog({
             title: excelFile && importData.rbCheck?.status === 'wrong' ? '⚠ ไฟล์ รบ.301 อาจผิดรอบ — ยืนยันส่ง?' : 'ยืนยันการส่งใบเบิก?',
-            message: (excelFile && importData.rbCheck && importData.rbCheck.status !== 'ok' ? importData.rbCheck.text + '\n\n' : '') + 'กรุณาตรวจสอบข้อมูลให้ครบถ้วน ยืนยันการส่งข้อมูลเข้าระบบหรือไม่?',
+            message: (excelFile && importData.rbCheck && importData.rbCheck.status !== 'ok' ? importData.rbCheck.text + '\n(ส่งได้ — ใบจะถูกทำเครื่องหมาย "รอแอดมินตรวจ" ไฟล์ รบ.301)\n\n' : '') + 'กรุณาตรวจสอบข้อมูลให้ครบถ้วน ยืนยันการส่งข้อมูลเข้าระบบหรือไม่?',
             icon: 'fa-paper-plane',
             confirmText: 'ส่งใบเบิก',
             onConfirm: () => {
@@ -9225,10 +9226,24 @@ const AdminConfigView = ({ ctx }) => {
     };
     const drivePreviewUrl = (url) => { const s = String(url || ''); const m = s.match(/\/d\/([\w-]{15,})/) || s.match(/[?&]id=([\w-]{15,})/); return m ? `https://drive.google.com/file/d/${m[1]}/preview` : s; };
     const rbBadge = (st) => st === 'ok' ? 'bg-emerald-100 text-emerald-800' : st === 'warn' ? 'bg-amber-100 text-amber-800' : st === 'wrong' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500';
-    const rb301MetaFields = (imp) => ({ rb301_period_from: safeText(imp.rbMeta.from), rb301_period_to: safeText(imp.rbMeta.to), rb301_period_text: safeText(imp.rbMeta.text).slice(0, 200), rb301_file_total_value: imp.rbMeta.totalValue ?? null, rb301_period_check: imp.rbCheck ? imp.rbCheck.status : '' });
+    const rb301MetaFields = (imp) => ({ rb301_period_from: safeText(imp.rbMeta.from), rb301_period_to: safeText(imp.rbMeta.to), rb301_period_text: safeText(imp.rbMeta.text).slice(0, 200), rb301_file_total_value: imp.rbMeta.totalValue ?? null, rb301_period_check: imp.rbCheck ? imp.rbCheck.status : '', rb301_review: imp.rbCheck && imp.rbCheck.status !== 'ok' ? 'pending' : '' });
     const rbItemUnitValue = (it) => toNonNegativeNumber(it.price) / safePackSize(it.packSize);
 
     // หน้าแอดมิน "ตรวจไฟล์ รบ.301": เลือกเดือน → รายการใบ · เปิดไฟล์ใน iframe ข้างตารางยอดใช้ในระบบ · ตรวจอัตโนมัติจากไฟล์ (ช่วงวันที่/ยอดต่อรายการ/มูลค่ารวม)
+    // v6.30 ตั้งชื่อ ผอ. (ผู้สั่งจ่าย) จาก app.html — ปุ่ม + เด้งเมื่อยังไม่มี (ครั้งเดียวต่อ session)
+    const DirectorSettingButton = ({ ctx, autoPrompt }) => {
+      const [cfg, setCfg] = useState(null), [show, setShow] = useState(false);
+      useEffect(() => { db.collection('config').doc('signers').get().then(sn => {
+        const c = sn.exists ? sn.data() : {}; setCfg(c);
+        let seen = false; try { seen = sessionStorage.getItem('rxfill_director_prompt') === '1'; } catch (e) { /* ignore */ }
+        if (autoPrompt && !safeText(c.director_name) && !seen) setShow(true);
+      }).catch(() => setCfg({})); }, []);
+      const close = () => { try { sessionStorage.setItem('rxfill_director_prompt', '1'); } catch (e) { /* ignore */ } setShow(false); };
+      return <>
+        {!autoPrompt && <button id="director-setting-btn" onClick={() => setShow(true)} className="bg-white border px-4 py-2 rounded-xl font-bold text-slate-700"><i className="fa-solid fa-signature mr-1"></i> ผู้สั่งจ่าย (ผอ.){cfg && safeText(cfg.director_name) ? ': ' + cfg.director_name : ' — ยังไม่ระบุ'}</button>}
+        {show && <DirectorModal cfg={cfg} currentUser={ctx.currentUser} showToast={ctx.showToast} onSaved={setCfg} onClose={close} />}
+      </>;
+    };
     const Rb301AuditView = ({ ctx }) => {
       const now = new Date();
       const [month, setMonth] = useState(now.getMonth() + 1);
@@ -9249,6 +9264,14 @@ const AdminConfigView = ({ ctx }) => {
           setParsed(p => ({ ...p, [r.id]: { ...rb301ParseRows(rows), fileName: file.name } })); setOpenId(r.id);
         } catch (err) { ctx.showToast('อ่านไฟล์ไม่สำเร็จ: ' + (err?.message || err), 'error'); } };
         rd.readAsBinaryString(file);
+      };
+      const markReviewed = async (r) => {
+        try {
+          const data = { rb301_review: 'approved', rb301_reviewed_at: firebase.firestore.FieldValue.serverTimestamp(), rb301_reviewed_by_name: safeText(ctx.currentUser?.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() };
+          await db.collection('requisitions').doc(r.id).update(data);
+          ctx.setAppDb(prev => ({ ...prev, requisitions: (prev.requisitions || []).map(x => x.id === r.id ? { ...x, ...data } : x) }));
+          ctx.showToast('บันทึกว่าตรวจไฟล์ รบ.301 แล้ว');
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); }
       };
       const open = reqs.find(r => r.id === openId) || (ctx.appDb.requisitions || []).find(r => r.id === openId);
       const fmt = (v, d = 2) => v === null || v === undefined || v === '' ? '-' : Number(v).toLocaleString('th-TH', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -9285,6 +9308,8 @@ const AdminConfigView = ({ ctx }) => {
                   <td className={`p-2 text-right ${ratio !== null && (ratio > 3 || ratio < 0.2) ? 'text-red-600 font-bold' : ''}`}>{ratio === null ? '-' : ratio.toFixed(2)}</td>
                   <td className="p-2 text-xs"><span className={`rb-check px-2 py-0.5 rounded font-bold ${rbBadge(ck.status)}`}>{ck.status === 'ok' ? 'ตรง' : ck.status === 'warn' ? 'ตรวจ' : ck.status === 'wrong' ? 'ผิดรอบ' : 'ยังไม่ตรวจ'}</span> <span className="text-slate-600">{ck.status === 'unknown' ? '' : ck.text}</span></td>
                   <td className="p-2 whitespace-nowrap space-x-1">
+                    {r.rb301_review === 'pending' && <button onClick={() => markReviewed(r)} className="rb-review px-3 py-1 rounded-lg bg-amber-500 text-white font-bold text-xs" title="ช่วงวันที่ไม่ตรงรอบ — ส่งได้แต่รอแอดมินตรวจ">รอแอดมินตรวจ → ตรวจแล้ว</button>}
+                    {r.rb301_review === 'approved' && <span className="text-[11px] text-emerald-700 font-bold">✔ แอดมินตรวจแล้ว</span>}
                     {r.excel_url ? <button onClick={() => setOpenId(openId === r.id ? null : r.id)} className="rb-open px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold text-xs">{openId === r.id ? 'ปิด' : 'เปิด'}</button> : <span className="text-xs text-slate-400">ไม่มีไฟล์</span>}
                     <label className="px-3 py-1 rounded-lg border text-xs font-bold cursor-pointer">ตรวจกับไฟล์<input type="file" accept=".xls,.xlsx" className="hidden rb-file" onChange={e => onFile(r, e.target.files[0])} /></label>
                   </td></tr>; })}
@@ -9300,7 +9325,9 @@ const AdminConfigView = ({ ctx }) => {
               </div>
               <div className="bg-white border rounded-2xl p-3 space-y-3 overflow-auto max-h-[80vh]">
                 <div className="font-bold">ยอดใช้ในระบบ — {open.id} · รอบ {THAI_MONTHS[Number(open.month) - 1]} {Number(open.year) + 543}</div>
-                <div className={`rounded-xl p-2 text-sm ${rbBadge(ck.status)}`} id="rb-verdict"><b>ช่วงวันที่:</b> {ck.text}{ck.source ? ` (${ck.source})` : ''}{ck.exp && ck.status !== 'ok' ? '' : ''}</div>
+                <div className={`rounded-xl p-2 text-sm ${rbBadge(ck.status)}`} id="rb-verdict"><b>ช่วงวันที่:</b> {ck.text}{ck.source ? ` (${ck.source})` : ''}{ck.status === 'unknown' && !p ? ' — ใบนี้นำเข้าก่อนมีระบบตรวจ จึงไม่ได้บันทึกช่วงวันที่ไว้ กด "ตรวจกับไฟล์" แล้วเลือกไฟล์' : ''}</div>
+                <div className="text-xs bg-slate-50 rounded-xl p-2" id="rb-diag">รายการในใบ <b>{(open.items || []).length}</b> · มียอดใช้ รบ.301 <b>{(open.items || []).filter(it => getRb301UsageQty(it) > 0).length}</b> · มีที่มาจากไฟล์ (sourceImports) <b>{(open.items || []).filter(it => (it.sourceImports || []).length).length}</b> · ข้าม/จับคู่ไม่ได้ <b>{(open.skipped_items || []).length}</b>
+                  {uv === 0 && <div className="text-red-600 font-bold mt-1">{(open.items || []).some(it => (it.sourceImports || []).length) ? 'มีการนำเข้าไฟล์ แต่ยอดใช้เป็น 0 — อาจถูกแก้ยอดภายหลัง' : 'ไม่มีรายการใดมาจากไฟล์ — ไฟล์ถูกแนบไว้ แต่ยอดใช้ไม่ได้ถูกนำเข้าในใบ (เช่น แนบไฟล์หลังสร้างใบ / สร้างใบโดยไม่ประมวลไฟล์)'}</div>}</div>
                 {p && <div className="text-sm bg-slate-50 rounded-xl p-2 space-y-1" id="rb-file-result">
                   <div>ไฟล์: <b>{p.fileName}</b> · {p.hospInfo}</div>
                   <div>มูลค่าจ่ายรวมท้ายไฟล์ <b>{fmt(p.totalValue)}</b> บาท · มูลค่ายอดใช้ในระบบ <b>{fmt(uv)}</b> บาท {p.totalValue ? `(ระบบ ÷ ไฟล์ = ${(uv / p.totalValue).toFixed(2)})` : ''}</div>
@@ -10535,6 +10562,7 @@ const AdminConfigView = ({ ctx }) => {
               <button onClick={fetchInvsDepts} disabled={invsBusy} className="bg-cyan-600 text-white px-4 py-2 rounded-xl font-bold shadow disabled:opacity-50"><i className={`fa-solid ${invsBusy ? 'fa-spinner fa-spin' : 'fa-rotate'} mr-1`}></i> ดึงหน่วยงานจาก INVS</button>
               <button onClick={() => invsFileRef.current?.click()} className="bg-white border px-4 py-2 rounded-xl font-bold text-slate-700"><i className="fa-solid fa-file-excel mr-1"></i> นำเข้าไฟล์ dept_id</button>
               <input ref={invsFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={e => importInvsFile(e.target.files?.[0])} />
+              <DirectorSettingButton ctx={ctx} />
               <button onClick={() => setEdit({ isNew: true, kind: 'dept', active: true, cover_days: INTERNAL_DEFAULT_COVER_DAYS })} className="bg-emerald-600 text-white px-5 py-2 rounded-xl font-bold shadow"><i className="fa-solid fa-plus mr-1"></i> เพิ่มเอง</button>
             </div>
           </div>

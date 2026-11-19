@@ -54,11 +54,11 @@
   <div id="root"></div>
 
   <!-- shared utilities: Firebase init, constants, helpers (NO JSX) -->
-  <script src="shared.js?v=6.27.0"></script>
+  <script src="shared.js?v=6.30.0"></script>
   <!-- กันไฟล์ shared.js เก่าค้าง cache: ถ้าเวอร์ชันไม่ตรง แสดงแถบเตือนแทนการพังเงียบ -->
   <script>
     (function () {
-      var need = '6.27.0';
+      var need = '6.30.0';
       var got = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '(ไม่พบ shared.js)';
       if (got === need) return;
       var show = function () {
@@ -433,7 +433,7 @@
       const [formDate, setFormDate] = useState(() => safeText(req.form_date) || tsToYmd(req.submitted_at || req.created_at));
       // v6.6 ผู้ลงนาม 4 จุด — ใบนี้ → ใบก่อนของหน่วยงาน → ผู้สร้าง/ผู้อนุมัติ
       const [signers, setSigners] = useState(() => internalSignersFor(req, (ctx.reqs.filter(r => r.id !== req.id && Array.isArray(r.sign_people))
-        .sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people));
+        .sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people, ctx.signerDefaults));
       const [busy, setBusy] = useState(false);
       // v6.9 วันที่ในใบ: ผู้เบิกแก้ไม่ได้ (ล็อก) · แอดมินแก้ได้จนกว่าจะส่ง INVS
       const dateLocked = !ctx.isAdmin || !!req.invs_sub_po_no;
@@ -1323,7 +1323,7 @@ ORDER BY d.name`;
       const toggleHideType = (t) => setHideTypes(prev => { const next = prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]; try { localStorage.setItem('rxfill_ph_hide_types', JSON.stringify(next)); } catch (e) { /* ignore */ } return next; });
       // v6.6 ผู้ลงนาม 4 จุดท้ายใบ — บันทึกไปกับใบ (sign_people)
       const [signers, setSigners] = useState(() => internalSignersFor(editReq || { created_by_name: safeText(ctx.currentUser?.name), created_by_position: safeText(ctx.currentUser?.position) },
-        (ctx.reqs.filter(r => r.kind === 'pharmacy' && r.id !== editReq?.id && Array.isArray(r.sign_people)).sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people));
+        (ctx.reqs.filter(r => r.kind === 'pharmacy' && r.id !== editReq?.id && Array.isArray(r.sign_people)).sort((a, b) => tsToMillis(b.updated_at) - tsToMillis(a.updated_at))[0] || {}).sign_people, ctx.signerDefaults));
       const [showUnmatched, setShowUnmatched] = useState(false);
       const [showEstimate, setShowEstimate] = useState(false); // v6.4 พิมพ์ประมาณการ (ไม่ส่ง VMI)
       const [roundTarget, setRoundTarget] = useState(true);     // ปัด Target Stock เป็นจำนวนเต็มหน่วยบรรจุ
@@ -2721,6 +2721,73 @@ ORDER BY d.name`;
     };
 
     // ===== App =====
+    // v6.28 หัวหน้าหน่วยงาน (ผู้เบิกในใบ) — หน่วยงานแก้ของตัวเอง / แอดมินแก้ได้ทุกหน่วย
+    const DeptHeadModal = ({ ctx, dept, onClose }) => {
+      const [name, setName] = useState(safeText(dept.head_name)), [pos, setPos] = useState(safeText(dept.head_position));
+      const [busy, setBusy] = useState(false);
+      const save = async () => {
+        if (!name.trim()) { ctx.showToast('กรุณาระบุชื่อหัวหน้าหน่วยงาน', 'error'); return; }
+        setBusy(true);
+        try {
+          await db.collection('master_depts').doc(String(dept.id || dept.dept_id)).update({
+            head_name: name.trim(), head_position: pos.trim(), head_updated_at: firebase.firestore.FieldValue.serverTimestamp(),
+            head_updated_by_name: safeText(ctx.currentUser?.name), updated_at: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          await ctx.reloadMasters();
+          ctx.showToast('บันทึกหัวหน้าหน่วยงานแล้ว — จะใส่เป็น "ผู้เบิก" ในใบเบิกใหม่');
+          onClose();
+        } catch (e) { ctx.showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); }
+        finally { setBusy(false); }
+      };
+      return (
+        <div id="dept-head-modal" className="fixed inset-0 z-[90] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="font-extrabold text-lg mb-1"><i className="fa-solid fa-user-tie text-teal-600 mr-2"></i>หัวหน้าหน่วยงาน · {dept.dept_name}</h3>
+            <p className="text-xs text-slate-500 mb-4">ชื่อนี้จะใส่เป็น "ผู้เบิก" ในใบเบิกเสมอ (แก้ในใบแต่ละใบได้)</p>
+            <label className="text-xs font-bold text-slate-600">ชื่อ-สกุล</label>
+            <input id="dept-head-name" value={name} onChange={e => setName(e.target.value)} className="w-full p-2.5 border rounded-lg mb-3" />
+            <label className="text-xs font-bold text-slate-600">ตำแหน่ง</label>
+            <input id="dept-head-position" value={pos} onChange={e => setPos(e.target.value)} placeholder="เช่น หัวหน้าหอผู้ป่วยใน" className="w-full p-2.5 border rounded-lg mb-4" />
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-lg border font-bold text-slate-600">ไว้ทีหลัง</button>
+              <button id="dept-head-save" disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-teal-600 text-white font-bold disabled:opacity-50">บันทึก</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+    // v6.28 ชื่อ ผอ. = ผู้สั่งจ่าย (config/signers) — แอดมินเท่านั้น
+    const DirectorModal = ({ cfg, currentUser, showToast, onSaved, onClose }) => {
+      const [name, setName] = useState(safeText(cfg?.director_name)), [pos, setPos] = useState(safeText(cfg?.director_position) || 'ผู้อำนวยการโรงพยาบาลสวี');
+      const [busy, setBusy] = useState(false);
+      const save = async () => {
+        if (!name.trim()) { showToast('กรุณาระบุชื่อ ผอ.', 'error'); return; }
+        setBusy(true);
+        try {
+          const data = { director_name: name.trim(), director_position: pos.trim(), updated_by_name: safeText(currentUser?.name), updated_at: firebase.firestore.FieldValue.serverTimestamp() };
+          await db.collection('config').doc('signers').set(data, { merge: true });
+          onSaved({ ...(cfg || {}), ...data }); showToast('บันทึกชื่อ ผอ. แล้ว'); onClose();
+        } catch (e) { showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error'); }
+        finally { setBusy(false); }
+      };
+      return (
+        <div id="director-modal" className="fixed inset-0 z-[90] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="font-extrabold text-lg mb-1"><i className="fa-solid fa-signature text-teal-600 mr-2"></i>ผู้สั่งจ่าย (ผอ.)</h3>
+            <p className="text-xs text-slate-500 mb-4">ใส่เป็น "ผู้สั่งจ่าย" ในใบเบิกหน่วยงาน/ห้องยาเสมอ (แก้ในใบได้)</p>
+            <label className="text-xs font-bold text-slate-600">ชื่อ-สกุล</label>
+            <input id="director-name" value={name} onChange={e => setName(e.target.value)} className="w-full p-2.5 border rounded-lg mb-3" />
+            <label className="text-xs font-bold text-slate-600">ตำแหน่ง</label>
+            <input id="director-position" value={pos} onChange={e => setPos(e.target.value)} className="w-full p-2.5 border rounded-lg mb-4" />
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="px-4 py-2 rounded-lg border font-bold text-slate-600">ไว้ทีหลัง</button>
+              <button id="director-save" disabled={busy} onClick={save} className="px-4 py-2 rounded-lg bg-teal-600 text-white font-bold disabled:opacity-50">บันทึก</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     const App = () => {
       const [toast, setToast] = useState(null);
       const [confirmDialog, setConfirmDialog] = useState(null);
@@ -2814,6 +2881,18 @@ ORDER BY d.name`;
       useEffect(() => { if (deptId) { reload(deptId); setView('history'); setEditReq(null); setNewRound(undefined); } }, [deptId]);
       useEffect(() => { if (view !== 'new') setNewRound(undefined); }, [view]);
 
+      // v6.28 ชื่อ ผอ. (ผู้สั่งจ่าย) + modal หัวหน้าหน่วยงาน
+      const [signersCfg, setSignersCfg] = useState(null);
+      const [headModal, setHeadModal] = useState(false), [dirModal, setDirModal] = useState(false);
+      useEffect(() => { db.collection('config').doc('signers').get().then(sn => setSignersCfg(sn.exists ? sn.data() : {})).catch(() => setSignersCfg({})); }, []);
+      useEffect(() => {
+        if (!currentUser || !signersCfg) return;
+        if (isAdmin) { if (!safeText(signersCfg.director_name)) setDirModal(true); return; }
+        const dp = masters.depts.find(d => d.dept_id === deptId);
+        let seen = false; try { seen = sessionStorage.getItem('rxfill_head_prompt_' + deptId) === '1'; } catch (e) { /* ignore */ }
+        if (dp && !safeText(dp.head_name) && !seen) setHeadModal(true);
+      }, [currentUser, signersCfg, deptId, masters.depts]);
+
       useEffect(() => { db.collection('config').doc('drug_types').get().then(sn => setDrugTypes(sn.exists ? sn.data() : null)).catch(() => {}); }, []);
 
       const drugById = useMemo(() => new Map(masters.drugs.map(d => [String(d.drug_id), d])), [masters.drugs]);
@@ -2828,6 +2907,7 @@ ORDER BY d.name`;
         currentUser, isAdmin, dept, reqs, stock, urgents, predispense,
         drugs: masters.drugs, drugById, unitName: (d) => d ? (unitById.get(String(d.unit_id))?.unit_name || d.unit_id || '') : '',
         showToast, setConfirmDialog, reload: () => reload(), reloadMasters, drugTypes,
+        signersCfg, signerDefaults: signerDefaultsFor(dept, signersCfg),
         rounds: roundsFor(masters.rounds, 'internal'),
         pharmLots, pharmMeta: new Map(pharmMetaList.filter(m => m.initialized !== false).map(m => [String(m.drug_id), m])),
         pharmLotsByDrug: pharmLots.reduce((m, l) => { const k = String(l.drug_id); if (!m.has(k)) m.set(k, []); m.get(k).push(l); return m; }, new Map())
@@ -2845,6 +2925,8 @@ ORDER BY d.name`;
 
       return (
         <>
+          {headModal && dept && <DeptHeadModal ctx={ctx} dept={dept} onClose={() => { try { sessionStorage.setItem('rxfill_head_prompt_' + dept.dept_id, '1'); } catch (e) { /* ignore */ } setHeadModal(false); }} />}
+          {dirModal && isAdmin && <DirectorModal cfg={signersCfg} currentUser={currentUser} showToast={showToast} onSaved={(c) => setSignersCfg(c)} onClose={() => setDirModal(false)} />}
           <div className="no-print flex flex-col md:flex-row min-h-screen">
             <aside className="md:w-64 bg-slate-900 text-white md:h-screen md:sticky md:top-0 flex md:flex-col shrink-0">
               <div className="p-4 md:p-6 flex items-center gap-3 md:border-b border-slate-800 shrink-0">
@@ -2871,6 +2953,8 @@ ORDER BY d.name`;
                 {kind === 'pharmacy' && <NavBtn id="stock" icon="fa-boxes-stacked" label="สต็อกห้องยา" />}
                 {kind === 'pharmacy' && <NavBtn id="estimate" icon="fa-chart-column" label="ประมาณการใช้ยา" />}
                 {kind === 'pharmacy' && <NavBtn id="lots" icon="fa-layer-group" label="คลังห้องยา (lot)" />}
+                {dept && <button id="dept-head-btn" onClick={() => setHeadModal(true)} className="shrink-0 text-left px-4 py-3 rounded-xl font-bold text-slate-300 hover:bg-slate-800 flex items-center gap-3"><i className="fa-solid fa-user-tie w-5 text-center"></i><span>หัวหน้าหน่วยงาน</span></button>}
+                {isAdmin && <button id="director-btn" onClick={() => setDirModal(true)} className="shrink-0 text-left px-4 py-3 rounded-xl font-bold text-slate-300 hover:bg-slate-800 flex items-center gap-3"><i className="fa-solid fa-signature w-5 text-center"></i><span>ชื่อ ผอ. (ผู้สั่งจ่าย)</span></button>}
                 {kind === 'pharmacy' && <NavBtn id="trace" icon="fa-magnifying-glass-location" label="ย้อนรอย lot (Trace)" />}
                 {isAdmin && <a href="app.html" className="shrink-0 px-4 py-3 rounded-xl font-bold text-slate-300 hover:bg-slate-800 flex items-center gap-3"><i className="fa-solid fa-arrow-left w-5 text-center"></i><span>กลับหน้าแอดมิน</span></a>}
               </nav>

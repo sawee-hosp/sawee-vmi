@@ -29,7 +29,7 @@ const THAI_MONTHS = ["มกราคม","กุมภาพันธ์","ม�
 const DEFAULT_DRUG_TYPES = { '1': 'ยา', '3': 'สมุนไพร', '6': 'วัคซีน', '25': 'ยาสำหรับโรคเรื้อรัง (NCDs)', '32': 'เวชภัณฑ์ทางการแพทย์' };
 
 const APP_SCHEMA_VERSION = 18;
-const APP_VERSION = '6.27.0';
+const APP_VERSION = '6.30.0';
 // Local INVS Bridge: รันผ่าน XAMPP บนเครื่อง Admin ที่เชื่อมฐาน INVS ได้
 const INVS_BRIDGE_URL = 'http://127.0.0.1/SaweeRefill/invs_api.php';
 const MAX_BATCH_WRITES = 400;
@@ -1228,15 +1228,26 @@ const deptSentencePrefix = (name) => {
 
 // v6.6 ผู้ลงนามท้ายใบเบิกห้องยา/หน่วยงาน 4 จุด — แก้ชื่อ/ตำแหน่งได้ จำไว้ในใบ (sign_people) วันที่เว้นว่างให้เขียน
 const INTERNAL_SIGN_ROLES = ['ผู้เบิก', 'ผู้สั่งจ่าย', 'ผู้รับของ', 'ผู้จ่าย'];
-// ลำดับค่าเริ่มต้น: ค่าที่บันทึกในใบนี้ → ค่าจากใบก่อนของหน่วยงาน (prev) → ผู้สร้าง/ผู้อนุมัติ
-const internalSignersFor = (req, prev) => {
+// ลำดับค่าเริ่มต้น: ค่าที่บันทึกในใบนี้ → (v6.28) ค่าประจำ: ผู้เบิก = หัวหน้าหน่วยงาน, ผู้สั่งจ่าย = ผอ. → ค่าจากใบก่อนของหน่วยงาน (prev) → ผู้สร้าง/ผู้อนุมัติ
+// defaults: { requester: {name, position}, approver: {name, position} }
+// v6.28 ค่าประจำผู้ลงนาม: ผู้เบิก = หัวหน้าหน่วยงาน (master_depts.head_*) · ผู้สั่งจ่าย = ผอ. (config/signers)
+const signerDefaultsFor = (dept, cfg) => {
+  const d = dept || {}, c = cfg || {};
+  return {
+    requester: { name: safeText(d.head_name), position: safeText(d.head_position) },
+    approver: { name: safeText(c.director_name), position: safeText(c.director_position) || 'ผู้อำนวยการโรงพยาบาลสวี' }
+  };
+};
+const internalSignersFor = (req, prev, defaults) => {
   const r = req || {};
+  const D = defaults || {};
   const pick = function (v) { return Array.isArray(v) && v.length ? v : null; };
   const saved = pick(r.sign_people), before = pick(prev);
   return INTERNAL_SIGN_ROLES.map(function (role, i) {
     const d = i === 0 ? { name: r.created_by_name, position: r.created_by_position } : i === 3 ? { name: r.approved_by_name, position: '' } : {};
     const b = before && before[i] ? before[i] : {};
-    const src = saved ? (saved[i] || {}) : { name: safeText(b.name) || safeText(d.name), position: safeText(b.position) || safeText(d.position) };
+    const fixed = i === 0 ? (D.requester || {}) : i === 1 ? (D.approver || {}) : {};
+    const src = saved ? (saved[i] || {}) : safeText(fixed.name) ? { name: fixed.name, position: fixed.position } : { name: safeText(b.name) || safeText(d.name), position: safeText(b.position) || safeText(d.position) };
     return { role: role, name: safeText(src.name).slice(0, 120), position: safeText(src.position).slice(0, 120) };
   });
 };

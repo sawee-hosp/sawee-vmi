@@ -1,5 +1,5 @@
 rules_version = '2';
-// Sawee Rxfill Firestore Rules v6.27 (กองMR · หน่วยสะดวกห้องยา) · v6.22 (ใบหน่วยงานพิมพ์แล้วล็อกยอด) · v6.17 (pick_slips slip จัดยา) · v6.16 (จ่ายล่วงหน้า รับแล้ว) · v6.14 (คลังห้องยาแยก lot) · v6.9 (LINE แจ้งเตือน · เบิกยาด่วน · แก้ Lot/EXP) · v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
+// Sawee Rxfill Firestore Rules v6.28 (หัวหน้าหน่วยงาน master_depts.head_*) · v6.27 (กองMR · หน่วยสะดวกห้องยา) · v6.22 (ใบหน่วยงานพิมพ์แล้วล็อกยอด) · v6.17 (pick_slips slip จัดยา) · v6.16 (จ่ายล่วงหน้า รับแล้ว) · v6.14 (คลังห้องยาแยก lot) · v6.9 (LINE แจ้งเตือน · เบิกยาด่วน · แก้ Lot/EXP) · v6.8 (LINE link) · v6.6.4 — v6.5 + ผู้ลงนามท้ายใบ (sign_people ภายใน / sign_names รพ.สต.) แก้ได้ทุกสถานะ
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -429,6 +429,10 @@ service cloud.firestore {
     match /master_depts/{docId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
+      // v6.28 หน่วยงานระบุหัวหน้าหน่วยงาน (ผู้เบิกในใบ) ของตัวเองได้เท่านั้น
+      allow update: if ownsDept(docId)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['head_name', 'head_position', 'head_updated_at', 'head_updated_by_name', 'updated_at']);
     }
 
     // ใบเบิกภายใน: ผู้ใช้สร้างเป็น Pending → admin ตรวจ/อนุมัติ/ส่ง INVS ตามลำดับคิว

@@ -53,6 +53,8 @@ const inputVals=(p)=>p.evaluate(()=>[...document.querySelectorAll('input')].map(
     const t=await p.innerText('body'); check('search by hospital name', t.includes('REQ-2026-11-007') && !t.includes('REQ-2026-11-008'));
     const r=await p.evaluate(()=>[rb301PeriodCheck('2026-07-21','2026-08-20',9,2026).status, rb301PeriodCheck('2026-07-21','2026-08-20',8,2026).status]);
     check('period check: ก.ย. ok / ส.ค. wrong', r[0]==='ok' && r[1]==='wrong', r.join(','));
+    check('director prompt on admin dashboard', await p.isVisible('#director-modal'));
+    await p.click('#director-modal button:has-text("ไว้ทีหลัง")');
     check('app: no errors', !errs.length, errs.join(' | '));
   }
   console.log(res.join('\n')); await b.close();

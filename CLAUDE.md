@@ -293,4 +293,6 @@
 - ผู้ลงนามใบหน่วยงาน/ห้องยา: ผู้เบิก = `master_depts.head_name/head_position` · ผู้สั่งจ่าย = ผอ. `config/signers` {director_name, director_position} (`signerDefaultsFor` + `internalSignersFor(req, prev, defaults)`) ค่าที่บันทึกในใบชนะเสมอ แก้ได้
   - หน่วยงานไม่มีหัวหน้า → `DeptHeadModal` ตอนเข้า (ปิดได้ต่อ session) + ปุ่มเมนู "หัวหน้าหน่วยงาน" · แอดมินไม่มีชื่อ ผอ. → `DirectorModal` (internal.html และตอนพิมพ์ใบใน app.html) · ฟอร์มหน่วยงานของแอดมินมีช่องหัวหน้า
   - rules v6.28: หน่วยงานแก้ master_depts ของตัวเองได้เฉพาะ head_* + updated_at
+- ช่วงวันที่ รบ.301 ผิด/ไม่แน่ใจ = **ส่งได้ ไม่ล็อก** → ใบเก็บ `rb301_review:'pending'` → หน้าตรวจไฟล์ปุ่ม "รอแอดมินตรวจ → ตรวจแล้ว" (`approved`, rb301_reviewed_*) · แผง `#rb-diag` บอกสาเหตุยอดใช้ 0 (ไม่มีรายการจาก sourceImports = แนบไฟล์แต่ไม่ได้นำเข้า)
+- ชื่อ ผอ. ใน app.html: `DirectorSettingButton` ปุ่มในหน้า หน่วยงาน/ห้องยา (จัดการฐานข้อมูล) + เด้งบนแดชบอร์ดแอดมินเมื่อยังไม่มี (ครั้งเดียวต่อ session)
 - tests/v630.js

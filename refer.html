@@ -53,6 +53,7 @@ a{color:var(--accent)}
 .btn-primary:disabled{background:#E9C9B2;box-shadow:none;cursor:not-allowed}
 .login-card .btn-primary{width:100%}
 #login-err{color:var(--warn);font-size:13px;margin-top:10px}
+#login-err.ok{color:var(--ok)}
 
 header{background:var(--surface);border-bottom:1px solid var(--border);
   padding:0 18px;min-height:54px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
@@ -276,6 +277,7 @@ tbody tr:hover{background:#FAFCFA}
     <input type="password" id="password" autocomplete="current-password">
     <button class="btn-primary" id="btn-login">เข้าสู่ระบบ</button>
     <div id="login-err"></div>
+    <p class="sub" style="margin-top:12px;text-align:right;margin-bottom:0"><a href="#" id="lnk-forgot">ลืมรหัสผ่าน?</a></p>
     <p class="sub" style="margin-top:18px;text-align:center">
       ยังไม่มีบัญชี? <a href="#" id="lnk-reg">ลงทะเบียนเจ้าหน้าที่ รพ.สต.</a></p>
   </div>
@@ -794,7 +796,8 @@ tbody tr:hover{background:#FAFCFA}
 
 <script type="module">
 import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged }
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged,
+         sendPasswordResetEmail }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 import { getFirestore, collection, doc, getDoc as _getDoc, getDocs as _getDocs, addDoc as _addDoc, setDoc as _setDoc,
   deleteDoc as _deleteDoc, updateDoc as _updateDoc, query, where, orderBy, limit, serverTimestamp,
@@ -1079,12 +1082,33 @@ $('btn-reg').addEventListener('click', async ()=>{
   }
 });
 $('btn-login').addEventListener('click', async ()=>{
-  $('login-err').textContent=''; $('btn-login').disabled=true;
+  $('login-err').className=''; $('login-err').textContent=''; $('btn-login').disabled=true;
   try{ await signInWithEmailAndPassword(auth, $('email').value.trim(), $('password').value); }
   catch(e){ $('login-err').textContent='อีเมลหรือรหัสผ่านไม่ถูกต้อง'; }
   $('btn-login').disabled=false;
 });
 $('password').addEventListener('keydown', e=>{ if(e.key==='Enter') $('btn-login').click(); });
+/* ลืมรหัสผ่าน — Firebase ส่งลิงก์ตั้งรหัสใหม่ไปที่อีเมล (แม่แบบอีเมลแก้ได้ใน Firebase Console > Authentication > Templates) */
+$('lnk-forgot').addEventListener('click', async e=>{
+  e.preventDefault();
+  const err = $('login-err'); err.className=''; err.textContent='';
+  const email = $('email').value.trim();
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ err.textContent='กรอกอีเมลที่ใช้เข้าระบบก่อน แล้วกด "ลืมรหัสผ่าน?" อีกครั้ง'; $('email').focus(); return; }
+  if(!confirm('ส่งลิงก์ตั้งรหัสผ่านใหม่ไปที่\n'+email+' ?')) return;
+  const a = $('lnk-forgot'); a.style.pointerEvents='none';
+  auth.languageCode = 'th';
+  try{
+    await sendPasswordResetEmail(auth, email, {url: location.origin + location.pathname});
+    err.className='ok'; err.textContent='ถ้าอีเมลนี้มีบัญชีในระบบ จะได้รับลิงก์ตั้งรหัสผ่านใหม่ภายในไม่กี่นาที (ตรวจในกล่องจดหมายขยะด้วย)';
+  }catch(x){
+    err.textContent = x.code==='auth/too-many-requests' ? 'ขอบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่'
+      : x.code==='auth/invalid-email' ? 'รูปแบบอีเมลไม่ถูกต้อง'
+      : x.code==='auth/unauthorized-continue-uri' ? 'ส่งลิงก์ไม่ได้: โดเมนนี้ยังไม่อยู่ใน Authorized domains ของ Firebase'
+      : x.code==='auth/user-not-found' ? 'ถ้าอีเมลนี้มีบัญชีในระบบ จะได้รับลิงก์ตั้งรหัสผ่านใหม่ภายในไม่กี่นาที'
+      : 'ส่งลิงก์ไม่สำเร็จ ('+(x.code||x.message)+')';
+    if(x.code==='auth/user-not-found') err.className='ok';
+  }finally{ a.style.pointerEvents=''; }
+});
 $('btn-logout').addEventListener('click', async ()=>{ await audit('logout'); signOut(auth); });
 
 /* ================= Sync ทันที (admin) =================

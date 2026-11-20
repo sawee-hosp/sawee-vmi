@@ -1098,7 +1098,9 @@ $('lnk-forgot').addEventListener('click', async e=>{
   const a = $('lnk-forgot'); a.style.pointerEvents='none';
   auth.languageCode = 'th';
   try{
-    await sendPasswordResetEmail(auth, email, {url: location.origin + location.pathname});
+    // ปุ่ม "กลับไปหน้าระบบ" ในอีเมลต้องใช้โดเมนที่อยู่ใน Authorized domains — ถ้าไม่อยู่ ส่งแบบไม่มีปุ่มนั้นแทน
+    try{ await sendPasswordResetEmail(auth, email, {url: location.origin + location.pathname}); }
+    catch(x){ if(x.code!=='auth/unauthorized-continue-uri') throw x; await sendPasswordResetEmail(auth, email); }
     err.className='ok'; err.textContent='ถ้าอีเมลนี้มีบัญชีในระบบ จะได้รับลิงก์ตั้งรหัสผ่านใหม่ภายในไม่กี่นาที (ตรวจในกล่องจดหมายขยะด้วย)';
   }catch(x){
     err.textContent = x.code==='auth/too-many-requests' ? 'ขอบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่'

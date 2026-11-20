@@ -3,6 +3,7 @@
  * อ่านอย่างเดียว ไม่แก้ไฟล์ต้นฉบับ / ไม่เขียน Firestore
  *
  * วิธีใช้: script.google.com → New project → วางโค้ดนี้ → เลือก runRb301Research → Run → Allow
+ *          ไฟล์เยอะ: รอบแรกอ่านได้ ~4.5 นาที แล้วตั้งเวลารันต่อเองทุก 1 นาทีจนครบ (ดูความคืบหน้าที่เมนู Executions)
  *          ผลเป็น Google Sheet ใหม่ "ข้อมูลวิจัย รบ.301 ..." ใน My Drive (ลิงก์อยู่ใน Execution log)
  *
  * การซ่อมแซม (ไม่เชื่อชื่อไฟล์ ใช้เนื้อหาในไฟล์แทน)
@@ -25,8 +26,12 @@ const RR_MON = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.'
 const DAY = 86400000;
 
 function runRb301Research() {
-  // 1) อ่านทุกไฟล์
+  // 1) อ่านทุกไฟล์ — ทยอยอ่านและเก็บผลไว้ในโฟลเดอร์ rb301_cache (Apps Script จำกัด 6 นาที/ครั้ง)
+  //    ถ้ายังไม่ครบ สคริปต์ตั้งเวลารันต่อเองอีก 1 นาที จนครบแล้วจึงสร้าง Sheet ผลลัพธ์
+  const t0 = Date.now();
+  const cache = rrCacheFolder_();
   const files = [];
+  let pending = 0;
   const it = DriveApp.getFolderById(RR_FOLDER_ID).getFiles();
   while (it.hasNext()) {
     const f = it.next();
@@ -35,9 +40,25 @@ function runRb301Research() {
     let nm = Number(m[2]), ny = Number(m[3]);
     if (ny === 2026 && nm === 7) nm = 8; // ใบรอบแรกย้าย ก.ค. → ส.ค. แต่ชื่อไฟล์ยังเป็น _7_
     const rec = { file: f, name: f.getName(), nameHosp: m[1].toLowerCase(), nameRound: ny + '-' + ('0' + nm).slice(-2), created: f.getDateCreated() };
-    try { Object.assign(rec, rrParse_(rrReadRows_(f))); } catch (e) { rec.error = e.message.slice(0, 150); }
+    const cname = f.getId() + '_' + f.getLastUpdated().getTime() + '.json';
+    const hit = cache.getFilesByName(cname);
+    let parsed = null;
+    if (hit.hasNext()) parsed = JSON.parse(hit.next().getBlob().getDataAsString());
+    else if (Date.now() - t0 < 270000) {
+      try { parsed = rrParse_(rrReadRows_(f)); } catch (e) { parsed = { error: e.message.slice(0, 150), items: [] }; }
+      cache.createFile(cname, JSON.stringify(parsed), 'application/json');
+    } else { pending++; continue; }
+    if (parsed.from) parsed.from = new Date(parsed.from);
+    if (parsed.to) parsed.to = new Date(parsed.to);
+    Object.assign(rec, parsed);
     files.push(rec);
   }
+  if (pending) {
+    rrScheduleNext_();
+    Logger.log('อ่านแล้ว ' + files.length + ' ไฟล์ · เหลือ ' + pending + ' ไฟล์ — ตั้งเวลารันต่อเองอีก 1 นาที (ไม่ต้องกดอะไร รอดูผลใน Executions)');
+    return;
+  }
+  rrClearTriggers_();
   // 2) ระบุ รพ.สต. + รอบ จากเนื้อหาไฟล์
   files.forEach(r => {
     if (r.error) return;
@@ -157,6 +178,20 @@ function runRb301Research() {
   ]);
   Logger.log('เสร็จ: ' + ss.getUrl() + ' (' + files.length + ' ไฟล์)');
 }
+
+function rrCacheFolder_() {
+  const it = DriveApp.getFoldersByName('rb301_cache');
+  return it.hasNext() ? it.next() : DriveApp.createFolder('rb301_cache');
+}
+function rrClearTriggers_() {
+  ScriptApp.getProjectTriggers().forEach(t => { if (t.getHandlerFunction() === 'runRb301Research') ScriptApp.deleteTrigger(t); });
+}
+function rrScheduleNext_() {
+  rrClearTriggers_();
+  ScriptApp.newTrigger('runRb301Research').timeBased().after(60 * 1000).create();
+}
+// ล้างผลอ่านไฟล์ที่เก็บไว้ (ใช้เมื่อต้องการอ่านใหม่ทั้งหมด)
+function resetRb301Cache() { rrCacheFolder_().setTrashed(true); rrClearTriggers_(); }
 
 function rrReadRows_(file) {
   const res = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + file.getId() + '/copy', {

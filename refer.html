@@ -1111,7 +1111,7 @@ $('lnk-forgot').addEventListener('click', async e=>{
     if(x.code==='auth/user-not-found') err.className='ok';
   }finally{ a.style.pointerEvents=''; }
 });
-$('btn-logout').addEventListener('click', async ()=>{ await audit('logout'); signOut(auth); });
+$('btn-logout').addEventListener('click', async ()=>{ await audit('logout'); if(LIST_UNSUB){ LIST_UNSUB(); LIST_UNSUB=null; LIST_KEY=null; } signOut(auth); });
 
 /* ================= Sync ทันที (admin) =================
    หน้าเว็บอยู่บน GitHub Pages สั่งรัน push.php ในเครื่อง รพ. ตรงๆ ไม่ได้
@@ -1458,6 +1458,7 @@ async function loadRpst(){
 
 /* ================= LIST ================= */
 let LIST_FULL = false;
+let LIST_UNSUB = null, LIST_KEY = null;
 async function loadList(opt={}){
   $('tb-list').innerHTML = '<tr><td colspan="7" class="loading">กำลังโหลด...</td></tr>';
   const scope = isRpst() ? myHcode() : VIEW_HCODE;
@@ -1471,11 +1472,27 @@ async function loadList(opt={}){
       ? query(collection(db,'referrals'), where('hcode','==',scope), limit(3000))
       : query(collection(db,'referrals'), limit(3000));
     LIST_FULL = !(since && !scope);
-    const s = await getDocs(q1);
-    LIST = s.docs.map(d=>({id:d.id, ...d.data()}))
-                 .sort((a,b)=>String(b.refer_date||'').localeCompare(String(a.refer_date||'')));
-    buildClinicOptions();
-    renderList();
+    // ฟังแบบ real-time: ครั้งแรกอ่านเท่าเดิม หลังจากนั้นเสียโควตาเฉพาะเอกสารที่เปลี่ยน (pusher ส่งเคสใหม่ = ขึ้นเองไม่ต้องรีเฟรช)
+    // query เดิมยังฟังอยู่ = ไม่สมัครใหม่ (เดิมทุกครั้งที่เรียก loadList อ่านทั้งชุดซ้ำ)
+    const key = (since||'') + '|' + (scope||'');
+    if(LIST_UNSUB && LIST_KEY === key){ buildClinicOptions(); renderList(); return; }
+    if(LIST_UNSUB){ LIST_UNSUB(); LIST_UNSUB = null; }
+    LIST_KEY = key;
+    await new Promise(resolve=>{
+      let first = true, t = null;
+      const paint = () => { buildClinicOptions(); renderList(); };
+      LIST_UNSUB = onSnapshot(q1, s=>{
+        LIST = s.docs.map(d=>({id:d.id, ...d.data()}))
+                     .sort((a,b)=>String(b.refer_date||'').localeCompare(String(a.refer_date||'')));
+        if(first){ first = false; paint(); resolve(); }
+        else { clearTimeout(t); t = setTimeout(paint, 400); }   // รวมการเปลี่ยนที่มาติดๆ กันเป็นรอบเดียว
+      }, e=>{
+        LIST_UNSUB = null; LIST_KEY = null;
+        if(first){ first = false;
+          $('tb-list').innerHTML = `<tr><td colspan="7" class="empty">โหลดไม่สำเร็จ: ${e.code==='resource-exhausted'?'โควตาฐานข้อมูลวันนี้เต็ม — ใช้ได้อีกครั้งประมาณ '+fsResetText()+' น.':esc(e.message)}</td></tr>`;
+          resolve(); }
+      });
+    });
     // audit view_list ถูกเอาออกเพื่อประหยัดโควตา
   }catch(e){
     $('tb-list').innerHTML = `<tr><td colspan="7" class="empty">โหลดไม่สำเร็จ: ${e.code==='resource-exhausted'?'โควตาฐานข้อมูลวันนี้เต็ม — ใช้ได้อีกครั้งประมาณ '+fsResetText()+' น.':esc(e.message)}</td></tr>`;

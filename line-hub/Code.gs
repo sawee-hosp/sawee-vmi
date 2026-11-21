@@ -22,6 +22,8 @@
  *                 (ไม่ต้องใส่เครื่องหมาย " ครอบ — ถ้าเผลอใส่ โค้ดจะตัดออกให้)
  *      ไฟล์ JSON ต้องมาจากโปรเจกต์ sawee-refer: Firebase Console → Project settings → Service accounts
  *        → Generate new private key
+ *      (ไม่บังคับ) ADMIN_LINE_IDS = LINE userId ของ admin คั่นด้วย , → แจ้งเตือนเมื่อเครื่อง pusher ออฟไลน์
+ *                  PUSHER_ALERT_MIN = กี่นาทีถึงถือว่าออฟไลน์ (ค่าเริ่มต้น 15)
  *   3. เลือกฟังก์ชัน setup แล้วกด Run (ครั้งแรกจะขออนุญาต → Allow) — ตั้งตัวตั้งเวลาทุก 1 นาทีให้เอง
  *   4. เลือกฟังก์ชัน selfTest แล้ว Run → ดูใน Execution log ว่าต่อ Firestore และ LINE ได้ + โควตาที่เหลือ
  *   5. Deploy → New deployment → Web app · Execute as: Me · Who has access: Anyone → คัดลอก URL
@@ -70,6 +72,34 @@ function setup() {
 }
 function tick() {
   withLock_(() => { processPending_(); remindTomorrow_(); return {}; });
+  try { watchdog_(); } catch (x) { Logger.log('watchdog: ' + (x.message || x)); }
+}
+
+/* ===================== เฝ้าเครื่อง pusher =====================
+ * sync_worker.php เขียน sync_control/watcher.last_seen ทุก 1 นาที
+ * เงียบเกิน PUSHER_ALERT_MIN นาที (ค่าเริ่มต้น 15) → push LINE หา admin ครั้งเดียว · กลับมาออนไลน์ → แจ้งอีกครั้ง
+ * ผู้รับ = Script Property ADMIN_LINE_IDS (LINE userId คั่นด้วย , ) — ดู userId ได้จาก line_links ของตัวเอง
+ *   หรือ LINE Developers > Basic settings > Your user ID (ของเจ้าของ channel) */
+function watchdog_() {
+  const props = PropertiesService.getScriptProperties();
+  const ids = prop_('ADMIN_LINE_IDS').split(/[,\s]+/).filter(x => /^U[0-9a-f]{32}$/.test(x));
+  if (!ids.length) return;
+  if (+Utilities.formatDate(new Date(), CFG.tz, 'm') % 5) return;          // ตรวจทุก 5 นาที ประหยัดการอ่าน Firestore
+  const w = fsGet_('sync_control/watcher');
+  const seen = w && w.data.last_seen ? String(w.data.last_seen) : '';
+  const t = seen ? Utilities.parseDate(seen, CFG.tz, 'yyyy-MM-dd HH:mm:ss').getTime() : 0;
+  const mins = t ? Math.round((Date.now() - t) / 60e3) : null;
+  const limit = +(prop_('PUSHER_ALERT_MIN') || 15);
+  const alerted = props.getProperty('WD_ALERTED') === '1';
+  const say = text => ids.forEach(u => push_(u, [{ type: 'text', text: text }]));
+  if ((mins === null || mins >= limit) && !alerted) {
+    say('⚠️ เครื่อง pusher (ระบบส่งต่อ) ออฟไลน์' + (mins === null ? '' : ' ' + mins + ' นาที') +
+        '\nข้อมูลส่งต่อใหม่จะไม่เข้าระบบจนกว่าเครื่องจะกลับมา\nตรวจ: เครื่องเปิดอยู่ไหม / service SaweeReferWorker ทำงานไหม');
+    props.setProperty('WD_ALERTED', '1');
+  } else if (mins !== null && mins < limit && alerted) {
+    say('✅ เครื่อง pusher กลับมาออนไลน์แล้ว (' + seen + ')');
+    props.deleteProperty('WD_ALERTED');
+  }
 }
 function selfTest() {
   // 1) ตรวจค่า service account ก่อน — บอกได้ว่าผิดตรงไหนโดยไม่แสดง key
